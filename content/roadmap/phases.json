@@ -1,0 +1,1186 @@
+[
+ {
+  "id": "p1",
+  "num": "01",
+  "title": "Networking & HTTP Fundamentals",
+  "color": "#5C8FFF",
+  "est": "1–2 weeks",
+  "badge": "Foundation",
+  "badgeType": "acc",
+  "pri": "Never skip — everything sits on top of this",
+  "sections": [
+   {
+    "t": "Network models & core protocols",
+    "tops": [
+     "OSI model — 7 layers and each layer's responsibility",
+     "TCP/IP model — 4 layers and mapping to OSI",
+     "IP addressing — IPv4, IPv6, CIDR, subnetting, NAT",
+     "TCP — 3-way handshake (SYN → SYN-ACK → ACK)",
+     "TCP — 4-way teardown (FIN → FIN-ACK → FIN → ACK)",
+     "TCP flow control — sliding window protocol",
+     "TCP congestion control — slow start, AIMD, CUBIC",
+     "UDP — connectionless, no ordering, no guarantee, use cases",
+     "DNS resolution — recursive vs iterative, root → TLD → authoritative",
+     "DNS record types — A, AAAA, CNAME, MX, TXT, NS, PTR, SOA",
+     "DNS TTL — caching behavior, propagation delay",
+     "Latency sources — propagation, transmission, queuing, processing",
+     "Bandwidth vs throughput — why they differ in practice",
+     "RTT (Round Trip Time) and its compounding effect on performance"
+    ]
+   },
+   {
+    "t": "HTTP versions & HTTPS",
+    "tops": [
+     "HTTP/1.0 — new connection per request",
+     "HTTP/1.1 — persistent connections, pipelining, keep-alive, Head-of-Line blocking",
+     "HTTP/2 — multiplexing streams, header compression (HPACK), server push, binary framing",
+     "HTTP/3 — QUIC over UDP, 0-RTT connection, built-in TLS 1.3, no TCP HoL blocking",
+     "HTTPS — TLS handshake flow: ClientHello → ServerHello → Certificate → Key Exchange → Finished",
+     "TLS 1.2 vs TLS 1.3 — fewer round trips, no RSA key exchange (forward secrecy)",
+     "Mutual TLS (mTLS) — both client and server authenticate with certificates",
+     "Certificate chains — root CA → intermediate CA → leaf certificate",
+     "HTTP methods — GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS and idempotency of each",
+     "HTTP status codes — 200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504",
+     "HTTP caching headers — Cache-Control, ETag, Last-Modified, If-None-Match, Vary",
+     "CORS — same-origin policy, preflight OPTIONS, Access-Control-Allow-* headers",
+     "Cookies — HttpOnly, Secure, SameSite (Strict/Lax/None), session vs persistent",
+     "Content negotiation — Accept, Content-Type, Accept-Encoding"
+    ]
+   },
+   {
+    "t": "APIs & real-time communication",
+    "tops": [
+     "REST — 6 constraints: stateless, uniform interface, cacheable, layered, client-server, code on demand",
+     "REST idempotency — GET/PUT/DELETE idempotent, POST not; why it matters for retries",
+     "GraphQL — schema, queries, mutations, subscriptions, N+1 problem, DataLoader batching solution",
+     "gRPC — Protocol Buffers, unary/server-streaming/client-streaming/bidirectional streaming",
+     "gRPC vs REST — binary vs text, schema contract, streaming, use cases for each",
+     "WebSockets — full-duplex, ws:// upgrade from HTTP, heartbeat ping-pong, reconnection",
+     "Server-Sent Events (SSE) — one-way server push over HTTP, auto-reconnect, use cases",
+     "Long polling — client holds connection until server has data, fallback for older clients",
+     "Webhooks — event-driven callbacks, retry policy, HMAC signature verification",
+     "API versioning strategies — URL path (/v1/), query param, header, content negotiation",
+     "Idempotency keys — safe retries for payments and mutations",
+     "WebRTC — peer-to-peer video/audio, STUN (IP discovery), TURN (relay), ICE negotiation"
+    ]
+   },
+   {
+    "t": "Proxies, CDN & gateways",
+    "tops": [
+     "Forward proxy — client-side, hides client identity, corporate firewalls",
+     "Reverse proxy — server-side, hides server topology (Nginx, HAProxy)",
+     "API gateway — routing, auth enforcement, rate limiting, request aggregation, protocol translation",
+     "CDN — PoPs (Points of Presence), edge nodes, origin server, pull vs push model",
+     "CDN cache invalidation — TTL expiry, immediate purge, cache-busting via URL versioning",
+     "CDN for dynamic content — ESI (Edge Side Includes), Lambda@Edge, Cloudflare Workers",
+     "GeoDNS — route users to nearest datacenter based on client IP",
+     "Anycast routing — same IP announced from multiple locations, routed to nearest"
+    ]
+   }
+  ],
+  "note": "Know the full request lifecycle cold: DNS lookup → TCP handshake → TLS handshake → HTTP request → server processing → HTTP response → browser render. Draw this on a whiteboard from memory.",
+  "lessons": [
+   "request-lifecycle",
+   "api-design",
+   "realtime",
+   "proxies-cdn"
+  ]
+ },
+ {
+  "id": "p2",
+  "num": "02",
+  "title": "Database Internals — SQL",
+  "color": "#23C97E",
+  "est": "2 weeks",
+  "badge": "Core",
+  "badgeType": "core",
+  "pri": "Every design involves a database decision",
+  "sections": [
+   {
+    "t": "ACID & transactions",
+    "tops": [
+     "Atomicity — all operations in a transaction succeed or all roll back",
+     "Consistency — DB moves from one valid state to another, constraints always satisfied",
+     "Isolation — concurrent transactions don't see each other's intermediate state",
+     "Durability — committed data survives crashes (WAL-based)",
+     "BEGIN, COMMIT, ROLLBACK, SAVEPOINT — transaction control",
+     "Read Uncommitted — dirty reads allowed, fastest but rarely useful",
+     "Read Committed — no dirty reads, default in PostgreSQL and Oracle",
+     "Repeatable Read — same row read twice gives same result within transaction (MySQL default)",
+     "Serializable — strictest, prevents all anomalies including phantoms (SSI in PostgreSQL)",
+     "Dirty read — reading uncommitted data from a concurrent transaction",
+     "Non-repeatable read — same row returns different value on second read in same transaction",
+     "Phantom read — same range query returns different set of rows in same transaction",
+     "Lost update — two transactions read-modify-write the same row, one overwrites the other",
+     "Write skew — two transactions read overlapping data and make conflicting writes (e.g., on-call scheduling)"
+    ]
+   },
+   {
+    "t": "Locking & concurrency control",
+    "tops": [
+     "Shared lock (S) — multiple readers can hold simultaneously",
+     "Exclusive lock (X) — single writer holds, blocks all readers and writers",
+     "Intention locks (IS, IX, SIX) — hierarchical locking for efficiency",
+     "Two-Phase Locking (2PL) — growing phase (acquire only), shrinking phase (release only)",
+     "Strict 2PL — hold all exclusive locks until commit/abort (prevents cascading aborts)",
+     "Deadlock — circular wait: T1 holds A waits B, T2 holds B waits A",
+     "Deadlock detection — wait-for graph cycle detection",
+     "Deadlock prevention — lock ordering (always acquire in same order), timeout + retry",
+     "Deadlock resolution — abort the youngest transaction (wound-wait scheme)",
+     "MVCC — Multi-Version Concurrency Control: readers don't block writers, writers don't block readers",
+     "MVCC in PostgreSQL — each row has xmin/xmax visibility markers",
+     "Optimistic locking — read with version, update with WHERE version=N, check affected rows",
+     "Pessimistic locking — SELECT FOR UPDATE (acquires row-level lock)",
+     "SELECT FOR UPDATE SKIP LOCKED — queue-like pattern for job workers",
+     "Predicate locks — Serializable Snapshot Isolation (SSI) in PostgreSQL 9.1+"
+    ]
+   },
+   {
+    "t": "Indexing & query optimization",
+    "tops": [
+     "B+ tree index — leaf nodes contain data/row pointers linked in sorted order, O(log N) seek + range",
+     "Hash index — O(1) exact match, no range queries, used in Hash join, pg_trgm GIN",
+     "Composite index — column order matters: WHERE a=1 AND b=2 uses (a,b) but not (b,a) for a-only query",
+     "Covering index — index includes all queried columns, avoids table heap lookup (index-only scan)",
+     "Partial index — index on subset of rows with WHERE clause (e.g. WHERE status='active')",
+     "Expression / functional index — index on LOWER(email), EXTRACT(year FROM created_at)",
+     "Index selectivity — high cardinality = high selectivity = more useful index",
+     "Clustered index (InnoDB) vs heap storage (PostgreSQL) — physical row ordering differs",
+     "EXPLAIN / EXPLAIN ANALYZE — read execution plans: seq scan vs index scan vs bitmap",
+     "Query planner statistics — ANALYZE command, pg_statistic, histograms",
+     "N+1 query problem — fetch N parents then 1 query per parent; fix with JOIN or DataLoader batching",
+     "JOIN types — INNER, LEFT OUTER, RIGHT OUTER, FULL OUTER, CROSS, SELF JOIN",
+     "Window functions — ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, SUM/AVG OVER PARTITION",
+     "CTEs (Common Table Expressions) — WITH clause, readability, recursive CTEs for tree traversal",
+     "Lateral joins — correlated subquery in FROM clause, row-by-row evaluation"
+    ]
+   },
+   {
+    "t": "Schema design & operations",
+    "tops": [
+     "1NF — atomic values, no repeating groups",
+     "2NF — full functional dependency on entire primary key (no partial dependency)",
+     "3NF — no transitive dependency (non-key → non-key)",
+     "BCNF — every determinant is a candidate key",
+     "Denormalization — intentional redundancy to speed up reads, accept write overhead",
+     "Online schema changes — gh-ost (GitHub), pt-online-schema-change (Percona), pg_repack",
+     "Expand-contract pattern — add new column nullable → backfill → add constraint → drop old",
+     "Connection pooling — PgBouncer (transaction mode), HikariCP (JVM), Sequelize pool (Node)",
+     "PostgreSQL-specific — VACUUM, autovacuum, TOAST (for large values), pg_stat_activity",
+     "JSONB in PostgreSQL — binary JSON, GIN indexable, operators @>, ?, #>>",
+     "Full-text search in PostgreSQL — tsvector, tsquery, GIN index, ts_rank",
+     "Write-Ahead Log (WAL) — every change written to log before applied, enables crash recovery and replication",
+     "Checkpointing — periodically flush dirty pages to disk, bound WAL replay on restart"
+    ]
+   }
+  ],
+  "note": "Know isolation levels cold. Classic interview trap: \"two users book the last seat simultaneously — how do you prevent double booking?\" → SELECT FOR UPDATE (pessimistic) vs optimistic locking + version check.",
+  "lessons": [
+   "sql-transactions",
+   "indexing"
+  ]
+ },
+ {
+  "id": "p3",
+  "num": "03",
+  "title": "Database Scaling & NoSQL",
+  "color": "#4ADBA8",
+  "est": "2 weeks",
+  "badge": "Critical",
+  "badgeType": "crit",
+  "pri": "Every large-scale design depends on the right DB choice",
+  "sections": [
+   {
+    "t": "Replication",
+    "tops": [
+     "Read replicas — offload read traffic, replicate asynchronously from primary",
+     "Replication lag — async replica may be seconds behind; affects read-your-writes",
+     "Synchronous replication — write not confirmed until replica acks (low lag, higher latency)",
+     "Semi-synchronous replication — at least one replica must ack (MySQL)",
+     "Single-leader replication — all writes go to leader, replicated to followers",
+     "Multi-leader replication — writes to any datacenter, conflicts must be resolved",
+     "Leaderless replication — Dynamo style (Cassandra, Riak), any node accepts writes",
+     "Conflict resolution — last-write-wins (LWW), merge functions, custom CRDT",
+     "Replication factor — number of replicas (typically 3 for fault tolerance)",
+     "Read-your-writes consistency — user always sees their own writes, route writes and reads to same node",
+     "Monotonic reads — user never reads older data after reading newer data"
+    ]
+   },
+   {
+    "t": "Sharding strategies",
+    "tops": [
+     "Horizontal sharding — distribute rows of a table across multiple DB instances",
+     "Vertical partitioning — split different tables into different DBs by domain",
+     "Range-based sharding — shard by key range (user_id 1–1M on shard 1), easy range queries but hotspots",
+     "Hash-based sharding — hash(key) % N, even distribution, range queries hard",
+     "Consistent hashing for sharding — only K/N keys migrate when adding/removing nodes",
+     "Directory-based sharding — lookup service maps key to shard, flexible but single point of failure",
+     "Resharding — data migration challenge, double-write period, consistent hashing minimizes movement",
+     "Hot spots — celebrity rows, popular keys hitting same shard; solution: add random suffix",
+     "Cross-shard queries — scatter-gather (fan out to all shards), expensive, avoid in hot paths",
+     "Cross-shard transactions — two-phase commit risk, prefer Saga pattern instead",
+     "Shard key selection — high cardinality, even distribution, matches query pattern"
+    ]
+   },
+   {
+    "t": "NoSQL databases",
+    "tops": [
+     "MongoDB — documents, collections, BSON, replica sets, sharding (mongos + config servers)",
+     "MongoDB shard key selection — cardinality, write distribution, query isolation",
+     "MongoDB aggregation pipeline — $match, $group, $sort, $lookup, $project, $unwind",
+     "MongoDB transactions — multi-document ACID since v4.0 (distributed since v4.2)",
+     "Redis data structures — string, list, hash, set, sorted set, stream, HyperLogLog, bitmap, geo",
+     "Redis persistence — RDB (point-in-time snapshot) vs AOF (append-only log, fsync: always/everysec/no)",
+     "Redis Sentinel — HA: monitors master, auto-failover to replica on failure",
+     "Redis Cluster — shards data across 16384 hash slots, each node owns a range",
+     "Redis Streams — persistent ordered log with consumer groups (Kafka-lite)",
+     "Distributed lock with Redlock — acquire lock on N/2+1 nodes with short TTL, quorum-based safety",
+     "Cassandra data model — keyspace, table, partition key (distributes data), clustering key (orders within partition)",
+     "Cassandra write path — commit log → memtable → SSTable flush (LSM tree)",
+     "Cassandra read path — bloom filter check → SSTable cache → data files (from multiple SSTables)",
+     "Cassandra consistency levels — ONE, QUORUM, ALL, LOCAL_QUORUM, LOCAL_ONE",
+     "Cassandra gossip protocol — peer-to-peer O(log N) node state propagation",
+     "Cassandra hinted handoff — store writes for down nodes, replay when node recovers",
+     "Cassandra read repair — detect and fix stale replicas on read path",
+     "Cassandra anti-entropy — periodic Merkle tree comparison between replicas",
+     "Cassandra compaction — SizeTiered (write-heavy), Leveled (read-heavy), TWCS (time-series)",
+     "Cassandra tombstones — deleted data marked with timestamp, GC after gc_grace_seconds",
+     "DynamoDB — AWS managed, key-value + document, single-table design pattern",
+     "DynamoDB partition key + sort key, GSI (Global Secondary Index), LSI (Local)",
+     "DynamoDB hot partition — high-cardinality partition key is essential; write sharding for counters",
+     "Graph DB (Neo4j) — nodes, relationships, properties, Cypher query language",
+     "Time-series DB — InfluxDB, TimescaleDB (Postgres extension), Prometheus TSDB"
+    ]
+   },
+   {
+    "t": "NewSQL & cloud databases",
+    "tops": [
+     "Google Spanner — globally distributed, external consistency, TrueTime (GPS + atomic clocks)",
+     "TrueTime — returns [earliest, latest] time interval, commit wait ensures monotonicity",
+     "CockroachDB — distributed Postgres-compatible, Raft consensus per range",
+     "TiDB — MySQL-compatible, separates compute (TiDB) from storage (TiKV with Raft)",
+     "YugabyteDB — PostgreSQL-compatible distributed SQL, uses DocDB storage engine",
+     "Aurora — MySQL/Postgres-compatible, shared distributed storage (6-way replication across 3 AZs)",
+     "Columnar storage — Parquet, ORC, Apache Arrow — for analytics, 10–100× faster than row stores",
+     "Column-oriented query execution — predicate pushdown, vectorized processing, compression",
+     "B-tree vs LSM-tree — B-tree: read-optimized (database indexes); LSM: write-optimized (Cassandra, RocksDB)",
+     "Write amplification in LSM trees — compaction rewrites data multiple times",
+     "Read amplification mitigated — bloom filter per SSTable level avoids unnecessary disk seeks"
+    ]
+   }
+  ],
+  "note": "For every design: \"Which database and why?\" Practice the decision matrix: user profiles → PostgreSQL; social graph → Cassandra or Neo4j; session cache → Redis; time-series → InfluxDB/TimescaleDB; full-text search → Elasticsearch.",
+  "lessons": [
+   "choosing-db",
+   "replication",
+   "sharding",
+   "consistent-hashing"
+  ]
+ },
+ {
+  "id": "p4",
+  "num": "04",
+  "title": "Caching — Every Layer",
+  "color": "#F59E0B",
+  "est": "1 week",
+  "badge": "High",
+  "badgeType": "high",
+  "pri": "Comes up in 80%+ of system design questions",
+  "sections": [
+   {
+    "t": "Caching strategies",
+    "tops": [
+     "Cache-aside (lazy loading) — app checks cache, fetches DB on miss, populates cache",
+     "Read-through — cache layer fetches from DB on miss transparently to application",
+     "Write-through — write to cache and DB synchronously; reads always hit cache",
+     "Write-behind (write-back) — write to cache only, async flush to DB later; risk of data loss",
+     "Refresh-ahead — cache proactively refreshes keys before they expire based on access patterns",
+     "Negative caching — cache \"not found\" result with short TTL to prevent DB hammering on missing keys",
+     "Cache warming / pre-warming — populate cache before traffic spike (cold start problem)",
+     "Cache busting — append content hash to URLs to force new cache entries on deploy"
+    ]
+   },
+   {
+    "t": "Eviction policies & expiry",
+    "tops": [
+     "LRU — Least Recently Used: evict the least recently accessed item (most common default)",
+     "LFU — Least Frequently Used: evict item with fewest accesses in time window",
+     "MRU — Most Recently Used: evict most recently accessed (good for sequential scans)",
+     "ARC — Adaptive Replacement Cache: dynamically balances LRU and LFU based on workload",
+     "TTL (Time To Live) — key expires after fixed duration, lazy deletion on access",
+     "Active expiry — background thread scans for expired keys (Redis probabilistic scan)",
+     "Redis maxmemory-policy — allkeys-lru, volatile-lru, allkeys-random, noeviction",
+     "Staggered TTLs — add small random jitter to TTL to prevent cache avalanche"
+    ]
+   },
+   {
+    "t": "Cache failure modes & solutions",
+    "tops": [
+     "Cache stampede / thundering herd — mass cache miss triggers simultaneous DB requests",
+     "Mutex lock to prevent stampede — only one request fetches, others wait and read populated cache",
+     "Probabilistic early re-expiration (PER) — randomly refresh before TTL expires to prevent stampede",
+     "Hot key problem — single key overwhelms one Redis node (e.g., celebrity tweet)",
+     "Hot key solution — local in-process L1 cache (Caffeine/Guava) + L2 Redis; key replication to N slots",
+     "Cache penetration — query for non-existent key repeatedly bypasses cache and hammers DB",
+     "Bloom filter for cache penetration — reject requests for keys known not to exist",
+     "Cache avalanche — mass TTL expiry at the same time causes thundering herd on DB",
+     "Staggered TTL + circuit breaker to handle cache avalanche",
+     "Cache consistency — dual write problem: cache + DB atomicity impossible without distributed transaction",
+     "Event-driven cache invalidation — use CDC (Debezium → Kafka) to invalidate on DB change"
+    ]
+   },
+   {
+    "t": "Caching layers & tools",
+    "tops": [
+     "Client-side cache — browser cache, service worker, localStorage (for static assets)",
+     "In-process cache — Caffeine (JVM), Guava Cache, Node.js Map/LRU cache",
+     "Distributed cache — Redis, Memcached, Apache Ignite",
+     "Memcached vs Redis — Memcached: multi-threaded, pure cache; Redis: rich data types, persistence, Lua",
+     "Two-level cache architecture — L1 in-process (nanoseconds) + L2 Redis (microseconds)",
+     "CDN edge cache — CloudFront, Fastly, Cloudflare cache static and semi-static content",
+     "Reverse proxy cache — Nginx proxy_cache, Varnish Cache for HTTP response caching",
+     "Database query result cache — application-level, careful with invalidation",
+     "Redis Cluster for horizontal cache scaling — 16384 hash slots, add nodes to expand",
+     "Cache sizing estimation — working set size (hottest 20% of data), benchmark hit rate target >95%",
+     "Cache eviction monitoring — track eviction rate; high eviction means cache is too small"
+    ]
+   }
+  ],
+  "note": "The thundering herd, cache stampede, and cache penetration are classic interview follow-up questions. Know the exact solutions for each: mutex lock / PER, bloom filter, staggered TTLs.",
+  "lessons": [
+   "caching-patterns",
+   "caching-problems"
+  ]
+ },
+ {
+  "id": "p5",
+  "num": "05",
+  "title": "Scalability, Load Balancing & Infrastructure",
+  "color": "#38BDF8",
+  "est": "1–2 weeks",
+  "badge": "Core",
+  "badgeType": "core",
+  "pri": "Applies to every system you will ever design",
+  "sections": [
+   {
+    "t": "Scalability fundamentals",
+    "tops": [
+     "Vertical scaling — bigger machine (more CPU, RAM, faster disk); simple but has hard limits and is expensive",
+     "Horizontal scaling — more machines; requires stateless design and coordination layer",
+     "Stateless services — no local state, any instance can serve any request; scale with load balancer",
+     "Stateful services — session affinity or external state store required",
+     "Distributed session — store sessions in Redis with TTL, enables stateless web servers",
+     "JWT for stateless auth — token carries identity, no server-side session store needed",
+     "Twelve-factor app — config in env, statelessness, logs as streams, disposability",
+     "Back-of-envelope estimation — QPS, storage, bandwidth, memory: always show arithmetic",
+     "QPS estimation — DAU × actions_per_day / 86400 seconds",
+     "Storage estimation — rows/day × row_size × retention_days × replication_factor",
+     "Bandwidth estimation — peak_QPS × average_response_size × peak_multiplier (×3–5)",
+     "Amdahl's Law — serial fraction limits maximum speedup: max = 1 / (S + (1-S)/N)",
+     "Little's Law — L = λW: avg items in system = arrival rate × avg time in system"
+    ]
+   },
+   {
+    "t": "Load balancing",
+    "tops": [
+     "Round robin — equal distribution ignoring server load or capacity",
+     "Weighted round robin — proportional to server CPU/memory/capacity",
+     "Least connections — route to server with fewest active connections (best for variable request duration)",
+     "IP hash — same client IP always routes to same server (sticky sessions without cookies)",
+     "Random with power of two choices — pick 2 random servers, route to least loaded (better than random)",
+     "Layer 4 LB — operates on TCP/UDP, fast, no HTTP awareness, no SSL termination",
+     "Layer 7 LB — operates on HTTP, content-aware routing, SSL termination, rewrites",
+     "DNS load balancing — multiple A records for same domain, TTL-based, no health checks",
+     "GSLB — Global Server Load Balancing, routes users to closest healthy datacenter",
+     "AWS ALB (L7) vs NLB (L4) vs Classic LB — ALB for HTTP/WebSocket, NLB for ultra-low latency TCP",
+     "Health checks — active (periodic HTTP probe) vs passive (monitor real traffic error rates)",
+     "Connection draining — grace period to complete in-flight requests before removing instance",
+     "Slow-start mode — gradually ramp up traffic to newly added instances to warm caches"
+    ]
+   },
+   {
+    "t": "Auto-scaling & compute",
+    "tops": [
+     "Reactive auto-scaling — scale based on current CPU%, memory%, request count, queue depth",
+     "Predictive auto-scaling — pre-scale based on historical patterns (Black Friday, match kicks off)",
+     "AWS Auto Scaling Groups — min/desired/max, scale-out fast, scale-in slow (cooldown)",
+     "Kubernetes HPA — Horizontal Pod Autoscaler based on CPU/memory or custom metrics",
+     "Kubernetes VPA — Vertical Pod Autoscaler: right-sizes CPU/memory requests automatically",
+     "KEDA — Kubernetes Event-Driven Autoscaling: scale on Kafka lag, SQS queue depth, etc.",
+     "Spot / preemptible instances — 70–90% cheaper with 2-min interruption notice; use for stateless batch",
+     "Serverless auto-scaling — Lambda scales to thousands of concurrent executions automatically",
+     "Scale-to-zero — Lambda, Cloud Run: no instances running when no traffic (cold start tradeoff)"
+    ]
+   },
+   {
+    "t": "Containers & Kubernetes",
+    "tops": [
+     "Docker — image layers, Dockerfile best practices (multi-stage build, minimal base image)",
+     "Container vs VM — process isolation vs full OS, millisecond vs second startup time",
+     "Kubernetes control plane — API server (gateway), scheduler (pod placement), controller manager, etcd (cluster state)",
+     "Kubernetes worker nodes — kubelet (runs pods), kube-proxy (network rules), container runtime (containerd)",
+     "Pod, Deployment, Service (ClusterIP/NodePort/LoadBalancer), Ingress, ConfigMap, Secret, PVC",
+     "Rolling update — replace pods gradually; rollback on failure",
+     "StatefulSet — stable network identity, ordered deployment (Kafka, Cassandra, databases)",
+     "DaemonSet — one pod per node (log collectors, node-level monitoring, Istio sidecar)",
+     "Kubernetes resource requests vs limits — request = scheduling guarantee, limit = throttle ceiling",
+     "Node affinity, taints and tolerations — control which pods run on which nodes",
+     "Service mesh (Istio/Linkerd) — sidecar Envoy proxy, mTLS between services, traffic management, observability",
+     "Helm — Kubernetes package manager, templated manifests, release management"
+    ]
+   }
+  ],
+  "note": "Always show your back-of-envelope math before jumping to architecture. \"Given 10M DAU with 5 actions per day, that's ~578 QPS average, so design for 3K QPS peak.\" This shows engineering maturity.",
+  "lessons": [
+   "estimation",
+   "load-balancing",
+   "blob-storage",
+   "containers-cloud"
+  ]
+ },
+ {
+  "id": "p6",
+  "num": "06",
+  "title": "Distributed Systems Fundamentals",
+  "color": "#F06B6B",
+  "est": "3 weeks",
+  "badge": "Critical — SDE-2 differentiator",
+  "badgeType": "crit",
+  "pri": "This is where SDE-2 interviews are WON or LOST",
+  "sections": [
+   {
+    "t": "Core theorems & consistency models",
+    "tops": [
+     "CAP theorem — Consistency, Availability, Partition Tolerance: only 2 guaranteed when partition occurs",
+     "CP systems — prioritize consistency over availability during partition (ZooKeeper, HBase, etcd)",
+     "AP systems — prioritize availability over consistency during partition (Cassandra, DynamoDB, CouchDB)",
+     "PACELC — when no Partition: tradeoff between Latency and Consistency (extends CAP)",
+     "BASE — Basically Available, Soft state, Eventually consistent (NoSQL philosophy)",
+     "Linearizability — strongest: operation appears atomic at a single point in time, most recent write always visible",
+     "Sequential consistency — operations appear in program order but no global real-time guarantee",
+     "Causal consistency — causally related operations ordered, concurrent operations may differ",
+     "Read-your-writes — you always see your own writes (weaker than linearizability)",
+     "Monotonic reads — reads never go backwards in time (you never see older data after seeing newer)",
+     "Eventual consistency — given no new writes, all replicas converge to same value eventually",
+     "Strong eventual consistency — concurrent updates resolve deterministically without coordination (CRDTs)"
+    ]
+   },
+   {
+    "t": "Consensus algorithms & leader election",
+    "tops": [
+     "Raft — leader election (randomized timeout, first to get majority votes), log replication, safety",
+     "Raft leader election — each node has random election timeout; first to expire sends RequestVote",
+     "Raft log replication — leader appends entry, replicates to majority, only then commits",
+     "Raft safety property — at most one leader per term, committed entries are never lost",
+     "Paxos — prepare/promise phase → accept/accepted phase (conceptual, harder to implement than Raft)",
+     "Multi-Paxos — designate stable leader to avoid repeated prepare phase",
+     "Zookeeper Atomic Broadcast (ZAB) — Zookeeper's proprietary consensus protocol",
+     "etcd — Raft-based distributed KV store, used by Kubernetes for all cluster state",
+     "Zookeeper — Apache, used for leader election (ephemeral znodes), distributed locks, config",
+     "Leader election with Zookeeper — create sequential ephemeral znode, watch predecessor",
+     "Epoch numbers / terms — monotonically increasing, stale leaders reject writes with old epoch",
+     "Fencing tokens — monotonically increasing token for storage writes, prevents stale leader writes",
+     "Split-brain — two nodes both think they are leader; prevent with fencing tokens + quorum"
+    ]
+   },
+   {
+    "t": "Clocks, ordering & time",
+    "tops": [
+     "Physical clocks — NTP synchronization, drift up to 100ms between nodes",
+     "Clock skew — two machines have different wall clock times, cannot use for ordering events",
+     "Lamport timestamps — logical clocks: increment on send, max(local,received)+1 on receive, establish happens-before",
+     "Vector clocks — per-node counters: detect causality and concurrency, identify conflicting writes",
+     "Version vectors — detect divergence during replica synchronization",
+     "Hybrid Logical Clocks (HLC) — combine physical + logical: max(physical, last_hlc) + 1",
+     "Google TrueTime — GPS + atomic clocks, returns [earliest, latest] uncertainty interval (~7ms)",
+     "Commit wait (Spanner) — wait out TrueTime uncertainty before returning commit timestamp",
+     "Happens-before (→) — a→b means a causally precedes b; defines partial order of events",
+     "Total order vs partial order — total: every pair comparable; partial: concurrent events possible",
+     "Monotonic clock — use for measuring elapsed time; wall clock for human-readable timestamps"
+    ]
+   },
+   {
+    "t": "Replication, failure detection & recovery",
+    "tops": [
+     "Quorum reads/writes — N replicas, write to W, read from R; W+R>N ensures overlap and consistency",
+     "Common quorum config — N=3, W=2, R=2: tolerates 1 failure, consistent reads",
+     "Gossip protocol — epidemic broadcast: each node periodically exchanges state with random peers, O(log N) convergence",
+     "Phi accrual failure detector — adaptive: outputs suspicion value φ, not binary up/down judgment",
+     "Read repair — detect stale replica during read, return latest to client, async update stale replica",
+     "Anti-entropy repair — Merkle tree comparison between nodes, repair differences in background",
+     "Hinted handoff — store writes for unavailable nodes locally, replay when node recovers",
+     "CRDTs — Conflict-free Replicated Data Types: G-counter, PN-counter, LWW-Register, OR-Set, 2P-Set",
+     "At-most-once delivery — fire and forget, may lose messages (UDP, basic HTTP without retry)",
+     "At-least-once delivery — retry until ack; messages may be duplicated, require idempotent consumers",
+     "Exactly-once semantics — hardest: Kafka transactions + idempotent producer + consumer isolation",
+     "Idempotency key pattern — include unique key in request; server deduplicates and returns same result",
+     "Distributed locks — Redis Redlock (quorum on N instances), Zookeeper ephemeral node, etcd lease",
+     "Distributed transactions — 2PC (coordinator blocks on failure), Saga (compensating transactions)",
+     "Two-phase commit — Phase 1: prepare (all vote), Phase 2: commit (if all yes) / abort (if any no)",
+     "Two-phase commit blocking problem — if coordinator crashes after prepare, cohorts wait forever",
+     "Saga pattern — sequence of local transactions with compensating transactions on failure",
+     "Saga choreography — services react to events published by previous service (loose coupling)",
+     "Saga orchestration — central saga orchestrator explicitly calls each service (easier to monitor)",
+     "Exponential backoff + jitter — prevent retry storms: wait = min(cap, base × 2^attempt) + rand(0, base)"
+    ]
+   }
+  ],
+  "note": "Read DDIA (Kleppmann) Chapters 5–9 cover-to-cover before your interview. This phase is the biggest differentiator. Know Raft consensus, vector clocks, quorum NWR formula, and Saga pattern in depth.",
+  "lessons": [
+   "cap-consistency",
+   "consensus-locks",
+   "ids-clocks",
+   "distributed-transactions"
+  ]
+ },
+ {
+  "id": "p7",
+  "num": "07",
+  "title": "Messaging & Event-Driven Architecture",
+  "color": "#A78BFA",
+  "est": "1–2 weeks",
+  "badge": "High",
+  "badgeType": "high",
+  "pri": "Modern distributed systems are event-driven",
+  "sections": [
+   {
+    "t": "Messaging fundamentals",
+    "tops": [
+     "Point-to-point queue — one message consumed by exactly one consumer (work queue pattern)",
+     "Publish-subscribe topic — one message delivered to all subscribed consumers",
+     "Pull consumer model — consumer polls for messages (Kafka, SQS); consumer controls pace",
+     "Push consumer model — broker pushes to consumer (RabbitMQ); simpler but broker must manage rate",
+     "Message durability — persisted to disk (Kafka, SQS) vs in-memory (RabbitMQ default)",
+     "Message ordering — FIFO within partition (Kafka), not across partitions; SQS FIFO queues for order",
+     "Dead letter queue (DLQ) — messages that fail after N retries go here for inspection",
+     "Poison pill message — causes consumer to crash; detect with retry count, send to DLQ",
+     "Message deduplication — use idempotency key; consumer maintains processed-IDs set (inbox table)",
+     "Backpressure — slow consumer signals producer to slow down; Kafka: consumer controls offset commit rate",
+     "Fan-out pattern — one event triggers multiple independent consumers (order placed → payment + inventory + email)",
+     "Competing consumers — multiple workers on same queue share load, each message processed once",
+     "Message schema evolution — Avro/Protobuf compatibility modes: backward (reader handles old schema), forward (reader handles new schema), full"
+    ]
+   },
+   {
+    "t": "Apache Kafka deep dive",
+    "tops": [
+     "Topic — named logical stream of records",
+     "Partition — unit of parallelism; messages ordered within partition, not across",
+     "Offset — position of message within partition; unique and monotonically increasing",
+     "Consumer group — each partition consumed by exactly one consumer in group; parallelism = partition count",
+     "Producer acks — acks=0 (fire and forget), acks=1 (leader only), acks=all (all ISR must ack)",
+     "ISR (In-Sync Replicas) — set of replicas fully caught up to leader; min.insync.replicas threshold",
+     "Exactly-once semantics — enable.idempotence=true + transactional.id + consumer isolation=read_committed",
+     "Consumer lag — latest_offset - committed_offset per partition; monitor to detect slow consumers",
+     "Compacted topics — retain only latest value per key; used for changelogs, Kafka as database",
+     "Kafka Streams — stream processing library: stateful transformations with RocksDB local state stores",
+     "Kafka Connect — source connectors (DB → Kafka) and sink connectors (Kafka → DB/S3)",
+     "Schema Registry — Avro/Protobuf schema storage, compatibility enforcement on produce/consume",
+     "Kafka transactions — atomic multi-partition produce + offset commit",
+     "Retention — by time (retention.ms) or size (retention.bytes), not by consumer acknowledgement",
+     "Log compaction — background thread merges segments, keeps latest value per key"
+    ]
+   },
+   {
+    "t": "Other messaging systems",
+    "tops": [
+     "RabbitMQ — exchanges (direct, fanout, topic, headers), bindings, routing keys, queues",
+     "RabbitMQ vs Kafka — traditional message broker vs distributed log; RabbitMQ: complex routing; Kafka: replay, high throughput",
+     "AWS SQS Standard — at-least-once, best-effort ordering, up to 256KB, infinite scale",
+     "AWS SQS FIFO — exactly-once processing, ordered within message group, 300 TPS (3000 with batching)",
+     "AWS SNS — pub/sub fan-out to SQS, Lambda, HTTP, email, SMS; no replay",
+     "AWS Kinesis Data Streams — real-time, 1MB/s per shard, 7-day retention, replay capable",
+     "Google Cloud Pub/Sub — managed pub/sub, at-least-once, ordering per ordering-key, push or pull",
+     "Apache Pulsar — tiered storage (offload to S3), geo-replication, multi-tenancy, unified queue+stream",
+     "NATS — ultra-lightweight, sub-millisecond latency, JetStream for persistence"
+    ]
+   },
+   {
+    "t": "Event-driven patterns",
+    "tops": [
+     "Event sourcing — append-only log of domain events is source of truth; current state = replay of events",
+     "Event store — immutable, ordered, replayable; projections rebuild read models",
+     "CQRS — Command Query Responsibility Segregation: separate write model (commands) from read model (queries)",
+     "CQRS read models — optimized for query patterns, updated asynchronously via events",
+     "Outbox pattern — write event to outbox table in same DB transaction as domain change; relay process publishes to MQ",
+     "Inbox pattern — idempotent consumer with inbox table to deduplicate duplicate deliveries",
+     "Change Data Capture (CDC) — Debezium reads DB write-ahead log → publishes to Kafka; zero-impact on DB",
+     "Saga choreography vs orchestration — choreography: loose coupling, hard to trace; orchestration: central control, easier to monitor",
+     "Event versioning and upcasting — handle schema changes by transforming old events to new schema on read",
+     "Temporal coupling problem — synchronous chains; fix with async events to decouple services"
+    ]
+   }
+  ],
+  "note": "The Outbox pattern is essential for atomic database write + message publish. Without it, you risk publishing an event for a transaction that later rolled back, or missing events for committed transactions.",
+  "lessons": [
+   "queues-delivery",
+   "kafka",
+   "event-patterns"
+  ]
+ },
+ {
+  "id": "p8",
+  "num": "08",
+  "title": "Microservices & Architecture Patterns",
+  "color": "#34D399",
+  "est": "2 weeks",
+  "badge": "Core",
+  "badgeType": "core",
+  "pri": "Core for SDE-2 role design discussions",
+  "sections": [
+   {
+    "t": "Service architecture & DDD",
+    "tops": [
+     "Monolith — single deployable unit; simple to start, becomes bottleneck as team grows",
+     "Modular monolith — well-structured monolith with clear module boundaries; intermediate step",
+     "Microservices — small, independently deployable services; each owns its data and API",
+     "Microservices trade-offs — independent scaling, independent deploy, team autonomy vs network latency, distributed transactions, operational complexity",
+     "Domain-Driven Design (DDD) — model software around business domain",
+     "Bounded context — explicit boundary within which a domain model applies (defines service boundary)",
+     "Aggregate root — consistency boundary: all changes go through root entity",
+     "Domain events — things that happened in the domain; trigger side effects in other bounded contexts",
+     "Ubiquitous language — shared vocabulary between engineers and domain experts within bounded context",
+     "Strangler fig pattern — incrementally migrate monolith: route traffic to new service, deprecate old endpoint",
+     "Anti-corruption layer — translation layer between old and new domain models",
+     "Shared kernel — small, carefully managed shared domain model between two contexts",
+     "Database per service — each service owns its DB; prevents tight coupling through shared schema",
+     "Shared database antipattern — multiple services sharing one DB creates deployment and schema coupling"
+    ]
+   },
+   {
+    "t": "Service communication & resilience",
+    "tops": [
+     "Synchronous (REST, gRPC) — immediate response; temporal coupling: caller blocks, dependency failures cascade",
+     "Asynchronous (events, queues) — decoupled in time; harder to trace, but more resilient",
+     "Service discovery — how services find each other's network location dynamically",
+     "Client-side discovery — service queries registry (Eureka), load balances itself",
+     "Server-side discovery — load balancer queries registry (AWS ALB + ECS, Kubernetes Service)",
+     "Service registry — Consul (with health checks), Eureka, Kubernetes DNS (CoreDNS)",
+     "Circuit breaker pattern — closed (normal) → open (fail fast after threshold) → half-open (test recovery)",
+     "Hystrix (deprecated) / Resilience4j (Java) / Polly (.NET) — circuit breaker implementations",
+     "Retry with exponential backoff + jitter — avoid thundering herd on retry storms",
+     "Timeout — always set explicit timeouts; cascading timeouts cause full-stack slowdowns",
+     "Bulkhead pattern — separate thread pools/connection pools per dependency; one slow dep can't exhaust all threads",
+     "Fallback — return cached/default response when dependency fails (graceful degradation)",
+     "Idempotent APIs — safe to retry; critical for distributed systems where retries are unavoidable",
+     "Sidecar pattern — inject cross-cutting concerns (proxy, logging, mTLS) as sidecar container",
+     "Ambassador pattern — outbound proxy that adds retry/timeout/circuit-breaker to legacy services",
+     "Health endpoints — /health (is process running?), /ready (can accept traffic?), /live (Kubernetes liveness)"
+    ]
+   },
+   {
+    "t": "API design & gateway patterns",
+    "tops": [
+     "API gateway — single entry point: routing, auth enforcement, rate limiting, SSL termination, request aggregation",
+     "Backend for Frontend (BFF) — separate API layer per client type (iOS, Android, web, third-party)",
+     "API composition — gateway aggregates multiple downstream service calls into one response",
+     "Pagination — offset-based (simple, inconsistent with concurrent mutations) vs cursor-based (consistent, scales)",
+     "Filtering, sorting, field selection (sparse fieldsets) in REST API design",
+     "GraphQL federation — compose multiple subgraph schemas into unified API (Apollo Federation)",
+     "Rate limiting at gateway — token bucket per API key/user, per endpoint; return 429 with Retry-After header",
+     "OAuth 2.0 authorization code + PKCE — for SPA and mobile (prevents authorization code interception)",
+     "OAuth 2.0 client credentials — for server-to-server, no user involved",
+     "OpenID Connect (OIDC) — authentication layer on top of OAuth 2.0: ID token (JWT) carries user identity",
+     "JWT structure — header (alg, typ) + payload (sub, iss, aud, exp, iat) + signature (HMAC-SHA256 or RS256)",
+     "JWT validation — verify signature, check exp, iss, aud claims; short expiry + refresh token rotation",
+     "API contract testing — Pact (consumer-driven contracts): consumer defines expectations, provider verifies",
+     "OpenAPI / Swagger specification — machine-readable API contract, enables code generation"
+    ]
+   },
+   {
+    "t": "Deployment & release patterns",
+    "tops": [
+     "Blue-green deployment — two identical environments; instant cutover by switching load balancer target",
+     "Canary release — route 1–5% of traffic to new version, monitor error rate, gradually increase",
+     "Feature flags — decouple code deploy from feature release; enable per user/segment",
+     "A/B testing — route users to variants statistically, measure conversion/engagement",
+     "Rolling deployment — incrementally replace pods/instances with new version (Kubernetes default)",
+     "Immutable infrastructure — never patch running instances; replace with new image from scratch",
+     "GitOps — Git as source of truth for desired state; ArgoCD/Flux reconciles cluster to match",
+     "CI/CD pipeline — source → build → unit test → integration test → security scan → artifact → staging → production",
+     "Expand-contract (parallel change) — add new field, backfill, then remove old field across two deploys",
+     "Database migration strategy in zero-downtime deploy — never use ALTER that locks table on production"
+    ]
+   }
+  ],
+  "note": "Know circuit breaker states (closed/open/half-open) and the difference between choreography (events, loose coupling) vs orchestration (saga orchestrator, easier to trace). Both come up in every microservices discussion.",
+  "lessons": [
+   "microservices",
+   "resilience",
+   "deployments"
+  ]
+ },
+ {
+  "id": "p9",
+  "num": "09",
+  "title": "Cloud, Security & DevOps",
+  "color": "#FB8C4F",
+  "est": "1 week",
+  "badge": "High",
+  "badgeType": "high",
+  "pri": "Expected at SDE-2 — shows production maturity",
+  "sections": [
+   {
+    "t": "Cloud services (AWS-focused)",
+    "tops": [
+     "EC2 — VMs, instance types (compute/memory/storage-optimized), placement groups, AMI",
+     "Lambda — serverless functions, event-driven, 15-min max, 10GB max memory, pay per GB-second",
+     "ECS — Docker container orchestration, Fargate (serverless) vs EC2 launch type",
+     "EKS — managed Kubernetes, control plane managed by AWS",
+     "S3 — object storage: bucket + key model, 5TB max object, strong consistency since 2021",
+     "S3 features — versioning, lifecycle policies, presigned URLs (time-limited access), multipart upload, replication, S3 Select",
+     "EBS — block storage attached to EC2, like a hard drive; one AZ, snapshot to S3",
+     "EFS — managed NFS, shared file system across multiple EC2 instances in same region",
+     "RDS — managed relational DB: PostgreSQL, MySQL, Oracle, SQL Server; Multi-AZ for HA",
+     "Aurora — MySQL/Postgres-compatible, 6-way storage replication across 3 AZs, auto-scaling storage",
+     "DynamoDB — fully managed NoSQL, single-digit ms latency, automatic sharding",
+     "ElastiCache — managed Redis or Memcached in VPC",
+     "SQS / SNS / Kinesis / MSK — managed messaging; MSK = managed Kafka",
+     "VPC — isolated virtual network; public subnets (internet-facing), private subnets (internal)",
+     "Security Groups — stateful firewall at instance level; NACLs — stateless at subnet level",
+     "Route53 — DNS with health checks, routing policies: simple, weighted, latency, failover, geolocation",
+     "CloudFront — CDN, Lambda@Edge for edge compute, TLS termination, WAF integration",
+     "IAM — identity and access management: users, groups, roles, policies, least privilege",
+     "KMS — key management service: envelope encryption, key rotation, CloudTrail audit",
+     "CloudWatch — metrics, logs, alarms, dashboards; X-Ray for distributed tracing"
+    ]
+   },
+   {
+    "t": "Serverless & infrastructure as code",
+    "tops": [
+     "Lambda cold starts — JVM/Python faster than Java; reduce with provisioned concurrency, SnapStart",
+     "Lambda concurrency — reserved concurrency (cap), provisioned concurrency (pre-warmed)",
+     "Lambda + SQS — reserved concurrency = backpressure; SQS retains messages, Lambda scales",
+     "Step Functions — stateful serverless workflows: sequential, parallel, wait, retry, catch",
+     "EventBridge — serverless event bus: route events from AWS services and SaaS to Lambda/SQS",
+     "Terraform — declarative IaC: resources, providers, state file (lock with S3 + DynamoDB)",
+     "Terraform plan/apply workflow — preview changes before applying; destroy with care",
+     "CloudFormation — AWS-native IaC: stacks, change sets, drift detection",
+     "Ansible — configuration management: agentless, idempotent YAML playbooks",
+     "Container registry — ECR (AWS), Docker Hub, GCR, Harbor (self-hosted)",
+     "GitOps with ArgoCD — desired state in Git, ArgoCD reconciles cluster continuously",
+     "CI/CD stages — build → unit test → integration test → security scan → artifact publish → deploy to staging → smoke test → promote to production"
+    ]
+   },
+   {
+    "t": "Security fundamentals",
+    "tops": [
+     "Authentication vs authorization — who are you (authn) vs what can you do (authz)",
+     "OAuth 2.0 authorization code flow + PKCE — for SPA/mobile: code_verifier + code_challenge prevent interception",
+     "OAuth 2.0 client credentials flow — service-to-service, no user context",
+     "JWT validation — verify signature (RS256 public key), check exp, iss, aud; never skip validation",
+     "Refresh token rotation — issue new refresh token on every use; revoke old one (prevents token theft)",
+     "Token storage — httpOnly+Secure cookies (XSS-resistant) vs localStorage (XSS risk)",
+     "API keys — rotate regularly, hash before storage (like passwords), scope by service",
+     "mTLS — both client and server present X.509 certificates; used for service-to-service auth in production",
+     "Encryption at rest — AES-256, transparent encryption (TDE), or field-level encryption",
+     "Encryption in transit — TLS 1.2/1.3 everywhere; enforce in security groups / policies",
+     "Secret management — HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager; never hardcode secrets",
+     "OWASP Top 10 — SQL injection, XSS, SSRF, broken access control, insecure deserialization — know each",
+     "SSRF — Server-Side Request Forgery: prevent by validating/blocking internal IP ranges in outbound requests",
+     "SQL injection — always parameterized queries, never string concatenation for SQL",
+     "DDoS mitigation — rate limiting (WAF), CDN absorption, IP reputation lists, Anycast",
+     "Zero-trust architecture — never trust, always verify; microsegmentation, device health checks",
+     "Principle of least privilege — every service/user gets minimum permissions needed",
+     "Audit logging — immutable log: who accessed what, when, from where; ship to SIEM",
+     "GDPR / PII handling — data minimization, right to erasure, encryption, data subject rights",
+     "Data masking and tokenization — protect PII in non-production environments"
+    ]
+   }
+  ],
+  "note": "Even if not a DevOps engineer, SDE-2 interviews at product companies expect you to know how your service deploys, how it's monitored, and how it handles auth. Know IAM roles, JWT validation, and CI/CD pipeline stages.",
+  "lessons": [
+   "containers-cloud",
+   "auth-security"
+  ]
+ },
+ {
+  "id": "p10",
+  "num": "10",
+  "title": "Advanced Data Structures Used in Systems",
+  "color": "#818CF8",
+  "est": "1 week",
+  "badge": "High — Differentiator",
+  "badgeType": "high",
+  "pri": "Shows depth — interviewers reward knowing the \"why\"",
+  "sections": [
+   {
+    "t": "Probabilistic & approximate structures",
+    "tops": [
+     "Bloom filter — space-efficient probabilistic set: no false negatives, tunable false positive rate",
+     "Bloom filter FP rate — (1 − e^(−kn/m))^k where k=hash functions, n=items, m=bits",
+     "Bloom filter use cases — Cassandra SSTable key lookup, Redis key existence, DB query cache penetration",
+     "Counting Bloom filter — allows deletions by using counters instead of bits",
+     "Cuckoo filter — more space-efficient than Bloom for same FP rate, supports deletions, better cache locality",
+     "HyperLogLog — cardinality estimation: count distinct values with ~1.5% error using O(m) space",
+     "HyperLogLog in Redis — PFADD (add), PFCOUNT (estimate), PFMERGE (combine); used for daily active users",
+     "Count-Min Sketch — frequency estimation in data streams: O(ε,δ) space, approximate top-K",
+     "MinHash — estimate Jaccard similarity between sets; used for near-duplicate detection",
+     "Locality-Sensitive Hashing (LSH) — hash similar items to same bucket; approximate nearest neighbor"
+    ]
+   },
+   {
+    "t": "Hashing & distribution",
+    "tops": [
+     "Consistent hashing — arrange nodes on ring; key maps to next clockwise node; only K/N keys remap on node change",
+     "Virtual nodes (vnodes) — each physical node owns N virtual positions on ring; better load balance",
+     "Consistent hashing math — with V vnodes per node, variance of load = O(1/V); common: V=150",
+     "Rendezvous hashing (HRW) — score = hash(key + node), assign to highest score; O(1) per lookup",
+     "Jump consistent hash — O(1) space, deterministic, minimal disruption; used in Guava",
+     "Geohash — encode (lat, lng) to base32 string; proximity = shared prefix; grid cells of varying size",
+     "Geohash edge cases — cells near the poles, cells on the prime meridian; requires neighbor search",
+     "Quadtree — recursively subdivide 2D space into 4 quadrants; density-adaptive; used in Uber, Twitter",
+     "R-tree — spatial index for rectangles and polygons; used in PostGIS, MySQL Spatial, SQLite R*Tree",
+     "Google S2 — spherical geometry using Hilbert curve; uniform cell sizes at each level; used by Uber, Foursquare",
+     "Uber H3 — hexagonal hierarchical grid; constant area per cell; better for analytics than quadtree"
+    ]
+   },
+   {
+    "t": "Indexing & lookup structures",
+    "tops": [
+     "B+ tree — all data in leaf nodes linked in sorted order; O(log N) search + efficient range scans; used in all RDBMS",
+     "LSM tree — MemTable → immutable SSTable → leveled compaction; write-optimized; used in Cassandra, RocksDB, LevelDB",
+     "LSM read path — check bloom filter (each level) → check SSTable index → read data block; amortized O(log^2 N)",
+     "Skip list — probabilistic balanced structure; O(log N) average search/insert; used in Redis sorted sets",
+     "Trie (prefix tree) — O(m) lookup by prefix where m = key length; used in autocomplete, IP routing",
+     "Compressed trie (Patricia/Radix tree) — merge single-child nodes; O(m) space instead of O(m²)",
+     "Inverted index — term → postings list (docID, frequency, position offsets); foundation of all search engines",
+     "Term dictionary — sorted list of all terms; binary search or trie for lookup; stored in SSTable-like format",
+     "Merkle tree — hash tree: leaf = hash(data), parent = hash(children); detect inconsistencies between replicas",
+     "Merkle tree in Cassandra — compare replicas without transferring all data; send tree hashes instead",
+     "Segment tree — range query (sum, min, max) in O(log N) with O(N) space; used in real-time analytics",
+     "Fenwick tree (Binary Indexed Tree) — range sum in O(log N) with simpler implementation than segment tree"
+    ]
+   },
+   {
+    "t": "Unique ID generation",
+    "tops": [
+     "UUID v4 — 128-bit random; globally unique with 2^122 possibilities; not sortable, no ordering",
+     "UUID v7 (new standard) — 48-bit Unix timestamp ms + 74-bit random; sortable, monotone within ms",
+     "ULID — 48-bit timestamp + 80-bit random; lexicographically sortable; URL-safe base32 encoding",
+     "Twitter Snowflake ID — 64-bit: 1 sign bit + 41 timestamp (ms, 69yr range) + 10 machine ID + 12 sequence (4096 IDs/ms)",
+     "Snowflake clock skew problem — if system clock goes back, ID generation pauses or errors",
+     "Instagram shard ID — 41-bit epoch ms + 13-bit shard ID + 10-bit sequence; generated in PostgreSQL",
+     "NanoID — URL-safe alphabet, configurable length, cryptographically random, similar collision prob to UUID",
+     "Ticket server (Flickr-style) — centralized DB auto-increment; simple but single point of failure",
+     "Monotonic IDs — crucial for sort order in databases and for Kafka partition ordering; avoid UUID as PK"
+    ]
+   }
+  ],
+  "note": "Bloom filter and consistent hashing come up in almost every large-scale design. Know the false positive rate formula for Bloom filters. Know why virtual nodes solve the uneven distribution problem in consistent hashing.",
+  "lessons": [
+   "probabilistic",
+   "consistent-hashing",
+   "ids-clocks",
+   "indexing"
+  ]
+ },
+ {
+  "id": "p11",
+  "num": "11",
+  "title": "Search, Analytics & Real-Time Systems",
+  "color": "#F472B6",
+  "est": "2 weeks",
+  "badge": "High",
+  "badgeType": "high",
+  "pri": "Frequently asked at product companies (Google, Meta, LinkedIn)",
+  "sections": [
+   {
+    "t": "Search engine internals",
+    "tops": [
+     "Web crawler — BFS URL frontier with priority queue; politeness: per-domain rate limit, robots.txt, crawl-delay",
+     "URL deduplication — canonical URL normalization + Bloom filter to avoid recrawling",
+     "Inverted index construction — tokenize → normalize → build term→postings list mapping",
+     "Postings list — docID + term frequency + position offsets; sorted by docID for merge operations",
+     "TF-IDF — term frequency (how often term appears in doc) × inverse document frequency (log(N/df))",
+     "BM25 — improved TF-IDF: saturates term frequency, normalizes by document length; default in Elasticsearch",
+     "Tokenization — split text on whitespace and punctuation; language-specific tokenizers (ICU, MeCab for Japanese)",
+     "Stemming — reduce words to root form (running → run); Porter, Snowball stemmers",
+     "Lemmatization — context-aware stemming (better → good); computationally heavier than stemming",
+     "Stop words — filter high-frequency words (the, a, is) to reduce index size",
+     "Elasticsearch cluster — master node (cluster state), data nodes (store/query shards), coordinating nodes",
+     "Elasticsearch shard — Lucene index; primary + replica; max ~50GB per shard for performance",
+     "Elasticsearch queries — match (full-text), term (exact), bool (must/should/must_not/filter), range, fuzzy, phrase, nested",
+     "Elasticsearch aggregations — terms (counts), date_histogram, stats, percentiles, nested agg",
+     "Autocomplete — edge n-gram analyzer (index), completion suggester (FST-based, very fast)",
+     "Spell correction — edit distance (Levenshtein), phonetic matching (Soundex, Metaphone)",
+     "Faceted search — aggregations + post_filter; show category/price/brand counts alongside results",
+     "Search relevance tuning — field boosting (title^3), function_score (recency), learning to rank",
+     "Index lifecycle management (ILM) — hot → warm → cold → delete phases for time-series indices"
+    ]
+   },
+   {
+    "t": "Vector & semantic search",
+    "tops": [
+     "Dense vector embeddings — neural encoder maps text/image to fixed-dim float vector in semantic space",
+     "Semantic search — find similar meaning, not exact keyword match; handles synonyms, paraphrases",
+     "Approximate Nearest Neighbor (ANN) — find K most similar vectors without exhaustive search",
+     "HNSW — Hierarchical Navigable Small World: graph-based ANN, O(log N) query, best recall/speed tradeoff",
+     "FAISS — Meta's ANN library: IVF (inverted file index) + PQ (product quantization for compression)",
+     "Vector databases — Pinecone, Weaviate, Milvus, Qdrant, pgvector (Postgres extension)",
+     "Hybrid search — BM25 keyword + dense vector; combine with Reciprocal Rank Fusion (RRF)",
+     "Embedding models — text-embedding-3-small (OpenAI), BERT, BGE, E5, Cohere Embed",
+     "RAG (Retrieval-Augmented Generation) — vector search retrieves context, LLM generates answer",
+     "Re-ranking — cross-encoder (slower, higher quality) re-ranks top-K ANN results for final list"
+    ]
+   },
+   {
+    "t": "Analytics & data pipelines",
+    "tops": [
+     "OLTP vs OLAP — row-oriented (many small writes) vs columnar (analytical aggregations)",
+     "Star schema — fact table (events) + dimension tables (who, what, when, where); Kimball model",
+     "Snowflake schema — normalized dimensions; reduces redundancy but more JOINs",
+     "Columnar storage — Parquet, ORC: compress and encode columns together; 10–100× faster for analytics",
+     "Data warehouse — Snowflake (cloud-native), BigQuery (serverless), Redshift (columnar, AWS)",
+     "Data lake — raw files in S3/GCS, queried via Athena/Presto on-demand; flexible but no ACID",
+     "Lakehouse — ACID transactions on data lake; Delta Lake, Apache Iceberg, Apache Hudi",
+     "Batch processing — Apache Spark: RDD, DataFrame, Spark SQL, lazy evaluation, Catalyst optimizer",
+     "Stream processing — Apache Flink: event time vs processing time, watermarks, stateful operators, exactly-once",
+     "Kafka Streams — lightweight stream processing: stateful with embedded RocksDB, runs inside application",
+     "Lambda architecture — batch layer (Spark, correctness) + speed layer (Flink, low latency) + serving layer",
+     "Kappa architecture — stream-only using Kafka as event log; reprocess historical data by replaying from offset 0",
+     "ELT vs ETL — load raw first then transform (ELT with dbt) vs transform before loading (ETL with SSIS/Informatica)",
+     "Apache Airflow — workflow orchestration: DAGs, schedulers, workers, metadata DB; define pipelines as code",
+     "CDC with Debezium — reads DB WAL (binary log) → publishes change events to Kafka; zero impact on source DB",
+     "ClickHouse — columnar OLAP engine, 100–1000× faster than MySQL for aggregations, real-time ingestion",
+     "Apache Druid — real-time OLAP: ingest from Kafka, sub-second queries, time-series optimized",
+     "Presto / Trino — federated SQL query engine: query S3, Hive, Cassandra, MySQL with single SQL"
+    ]
+   },
+   {
+    "t": "Real-time systems",
+    "tops": [
+     "WebSocket upgrade — HTTP Upgrade header (101 Switching Protocols), then full-duplex ws:// protocol",
+     "WebSocket scalability — fan-out via Redis Pub/Sub across multiple WebSocket server instances",
+     "Server-Sent Events — HTTP streaming, server pushes events, client auto-reconnects; simpler than WebSocket",
+     "Long polling — client holds connection (30s timeout) until event; reconnects immediately after response",
+     "Real-time presence system — heartbeat every 30s with TTL=60s in Redis; expire = offline; publish change via Pub/Sub",
+     "Live leaderboard — Redis sorted set: ZADD adds score, ZRANGE gets rank, ZRANK gets position; push via WebSocket",
+     "Real-time collaborative editing — OT (Operational Transformation, Google Docs) vs CRDT (conflict-free, Figma, Notion)",
+     "Online gaming — authoritative server model, UDP for state updates, client-side prediction + reconciliation",
+     "Real-time location tracking — GPS → WebSocket → geospatial index (Redis GEO or Quadtree) → nearby query",
+     "Live streaming — RTMP ingest → transcode (FFmpeg) → HLS segmentation → CDN origin → edge → viewer",
+     "Adaptive bitrate streaming — HLS/DASH: multiple quality levels; client switches based on bandwidth",
+     "Real-time counters at scale — Redis INCR + async batch flush to DB every N seconds; eventual consistency"
+    ]
+   }
+  ],
+  "note": "For search design: always cover the crawl → build inverted index → serve pipeline. For real-time: explain exactly how a message from User A reaches User B's browser — WebSocket → backend → Redis Pub/Sub → user's server → WebSocket → browser.",
+  "lessons": [
+   "search",
+   "geo",
+   "data-pipelines",
+   "realtime"
+  ]
+ },
+ {
+  "id": "p12",
+  "num": "12",
+  "title": "Reliability, Observability, Performance & Security",
+  "color": "#94A3B8",
+  "est": "1–2 weeks",
+  "badge": "Core",
+  "badgeType": "core",
+  "pri": "Expected at SDE-2 — production maturity signal",
+  "sections": [
+   {
+    "t": "Reliability & availability",
+    "tops": [
+     "SLA — Service Level Agreement: contractual uptime commitment (e.g., 99.9% uptime per month)",
+     "SLO — Service Level Objective: internal target (e.g., p99 latency < 200ms, error rate < 0.1%)",
+     "SLI — Service Level Indicator: the actual measured metric (e.g., % of requests completing < 200ms)",
+     "Error budget — 1 − SLO: how much downtime/error is acceptable in a period (99.9% → 43 min/month)",
+     "Error budget burn rate — rate at which budget is consumed; fast burn = imminent SLO violation",
+     "99% = 87.6 hr/yr, 99.9% = 8.7 hr/yr, 99.99% = 52 min/yr, 99.999% = 5.2 min/yr",
+     "MTTR — Mean Time to Recovery: key reliability metric; minimize with runbooks + automation",
+     "MTBF — Mean Time Between Failures; maximize with fault isolation and redundancy",
+     "RTO — Recovery Time Objective: max acceptable downtime (DR planning)",
+     "RPO — Recovery Point Objective: max acceptable data loss (backup frequency)",
+     "Multi-AZ deployment — replicate across availability zones for HA within a region",
+     "Multi-region deployment — replicate across regions for DR; active-active vs active-passive",
+     "Active-active failover — both regions serve traffic; complex consistency, zero downtime",
+     "Active-passive failover — primary serves all traffic; secondary on standby; DNS failover",
+     "Chaos engineering — intentionally inject failures: kill random pods (Chaos Monkey), Gremlin",
+     "Game days — scheduled chaos: simulate region outage, practice incident response with real team",
+     "Graceful degradation — serve reduced functionality when dependency fails (disable recommendations, show cached data)",
+     "Bulkhead isolation — separate thread pools and connection pools per downstream dependency"
+    ]
+   },
+   {
+    "t": "Observability — logs, metrics, traces",
+    "tops": [
+     "Three pillars of observability — logs (what happened), metrics (how much), traces (how long and where)",
+     "Four golden signals (Google SRE) — latency, traffic (RPS), errors (rate), saturation (utilization)",
+     "RED method — Rate (requests/sec), Errors (rate), Duration (latency distribution)",
+     "USE method — Utilization, Saturation, Errors per resource (CPU, memory, disk, network)",
+     "Structured logging — JSON format: include trace_id, span_id, request_id, user_id, service_name",
+     "Log levels — TRACE (verbose), DEBUG, INFO (business events), WARN (recoverable), ERROR (needs action), FATAL",
+     "Log aggregation — Fluentd/Logstash collect → Elasticsearch store → Kibana visualize (ELK/EFK)",
+     "Prometheus data model — time series labeled by key-value pairs; pull-based scraping",
+     "Prometheus metric types — Counter (monotone: total_requests), Gauge (current: active_connections), Histogram (latency buckets), Summary",
+     "PromQL queries — rate(http_requests_total[5m]), histogram_quantile(0.99, ...), topk(5, ...)",
+     "Grafana — connect to Prometheus/CloudWatch/InfluxDB; build dashboards, set alert thresholds",
+     "Distributed tracing — trace = end-to-end request; span = single operation with start/end/metadata",
+     "OpenTelemetry — vendor-neutral SDK for traces, metrics, logs; single integration for all backends",
+     "W3C TraceContext — traceparent and tracestate headers for cross-service trace propagation",
+     "Jaeger / Zipkin — open-source distributed tracing backends; Tempo (Grafana), X-Ray (AWS)",
+     "APM tools — Datadog, New Relic, Dynatrace: trace + metrics + logs in one platform",
+     "Alerting best practices — alert on SLO burn rate, not raw metrics; PagerDuty + runbooks for every alert",
+     "P50/P99/P99.9 latency — mean misleads; tail latency (P99.9) matters at scale (1 in 1000 requests)",
+     "Tail latency mitigation — hedged requests: send duplicate to second server if first exceeds threshold, use first response",
+     "On-call best practices — runbooks, escalation policy, post-mortems, blameless culture, rotation fairness"
+    ]
+   },
+   {
+    "t": "Performance optimization",
+    "tops": [
+     "Profiling — CPU flame graphs (async-profiler, py-spy), heap dumps, I/O tracing (strace, perf)",
+     "Flame graph — visualize hot code paths; identify unexpected CPU consumers in production",
+     "Load testing — k6, Locust, Apache JMeter, wrk; always test in staging environment first",
+     "Stress testing — find breaking point (max RPS before error rate spikes)",
+     "Soak testing — sustained load for hours; catch memory leaks, connection pool exhaustion",
+     "Spike testing — sudden 10× traffic increase; test auto-scaling and DB connection pool behavior",
+     "Little's Law in practice — L = λW: if p99 latency increases, L (queue depth) grows; fix by reducing W or λ",
+     "Connection pool sizing — formula: pool = (cores × 2) + effective_spindle_count; too large → context switch overhead",
+     "Thread pool sizing — I/O-bound: threads = (1 + wait_time/service_time) × cores; CPU-bound: threads ≈ cores",
+     "Async I/O and non-blocking — event loop (Node.js, Netty, asyncio): single thread handles thousands of I/O connections",
+     "N+1 query — detect via slow query log or ORM verbose mode; fix with JOIN, eager loading, or DataLoader",
+     "Batch APIs — reduce round trips: fetch 100 items in one request vs 100 individual requests (10× improvement)",
+     "Compression — Snappy (fastest, moderate ratio), LZ4 (balanced), gzip (best ratio, slower), Zstandard (best of both)",
+     "Efficient serialization — Protocol Buffers 3–10× smaller than JSON; Avro for Kafka schemas; MessagePack for binary JSON",
+     "GC tuning (JVM) — G1GC for balanced latency; ZGC for sub-ms GC pauses; tune heap: not too small (frequent GC), not too large (long GC)",
+     "Database connection exhaustion — symptom: timeout waiting for connection; fix: pool size + circuit breaker upstream"
+    ]
+   },
+   {
+    "t": "Cost optimization & efficiency",
+    "tops": [
+     "Right-sizing compute — use CloudWatch metrics to identify over-provisioned instances",
+     "Spot / preemptible instances — 70–90% savings; design stateless workers that handle 2-min shutdown notice",
+     "Reserved instances vs savings plans — 1–3 year commitment for 30–60% discount on baseline capacity",
+     "S3 storage tiering — Standard → Standard-IA → Glacier Instant → Glacier Flexible → Deep Archive",
+     "Lifecycle policies — auto-transition objects to cheaper tier after 30/90/365 days",
+     "Data transfer costs — same-AZ is free; cross-AZ costs $0.01/GB; cross-region higher; CDN reduces egress",
+     "Caching ROI — every cache hit saves a DB query; measure cache hit rate, aim for >95% for hot paths",
+     "Compression reduces bandwidth and storage — 3–10× reduction for JSON/text data",
+     "Auto-scaling to zero — Lambda, Cloud Run, ECS Fargate: no cost when no traffic (ideal for batch workloads)",
+     "Database read replicas cost tradeoff — cheaper than sharding; only add when primary is read-saturated"
+    ]
+   }
+  ],
+  "note": "Know the four golden signals (latency, traffic, errors, saturation). For every service you design, specify: what SLO would you set? What would you alert on? How would you debug a latency spike at 3am? This shows production engineering maturity.",
+  "lessons": [
+   "observability-reliability",
+   "resilience"
+  ]
+ },
+ {
+  "id": "p13",
+  "num": "13",
+  "title": "Fintech & Banking Systems",
+  "color": "#34D399",
+  "est": "1–2 weeks",
+  "badge": "Bank roles",
+  "badgeType": "crit",
+  "pri": "Visa, JPMorgan, Morgan Stanley, Goldman: expect payment/ledger/trading flavoured designs",
+  "lessons": [
+   "payments-fundamentals",
+   "ledger-reconciliation",
+   "low-latency-trading"
+  ],
+  "note": "Money rules: integers in paise, idempotency at every hop, timeout ≠ failure, double-entry append-only ledger, outbox for events, daily reconciliation, tokenize card data.",
+  "sections": [
+   {
+    "t": "Payment flows",
+    "tops": [
+     "Card payment parties — cardholder, merchant, acquirer/PSP, card network, issuer",
+     "Authorization vs capture vs settlement — hold now, claim later, move money in batch",
+     "UPI flow — payer PSP → NPCI → remitter bank → beneficiary bank",
+     "Payment state machine — CREATED → PROCESSING → AUTHORIZED/FAILED/UNKNOWN → CAPTURED → SETTLED/REFUNDED",
+     "Refunds, reversals & chargebacks — undoing money movement safely",
+     "PSP webhooks & status polling — resolving UNKNOWN payments"
+    ]
+   },
+   {
+    "t": "Money correctness",
+    "tops": [
+     "Representing money — integer minor units or BigDecimal, never float",
+     "Idempotency at every hop — client→API, API→PSP, consumers, webhooks",
+     "Double-entry ledger — every transaction has balanced debits and credits",
+     "Ledger immutability — append-only entries, fix with reversing entries",
+     "Reconciliation — match internal records with bank/PSP settlement files",
+     "Exactly-once money movement — at-least-once + idempotency + state guards + reconciliation",
+     "Hot accounts — sub-accounts and batching for high-write ledger accounts"
+    ]
+   },
+   {
+    "t": "Compliance & risk",
+    "tops": [
+     "PCI-DSS & tokenization — keep card numbers out of most systems",
+     "Fraud & risk checks — rules, velocity limits, ML scoring in the payment path",
+     "RBI data localisation & audit trails — data stays in India, immutable logs"
+    ]
+   },
+   {
+    "t": "Trading systems",
+    "tops": [
+     "Order book & matching engine — price-time priority, single-threaded per symbol",
+     "Low-latency techniques — LMAX Disruptor, GC avoidance, kernel bypass",
+     "Market data fan-out — multicast, conflation, sequence numbers"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "p14",
+  "num": "14",
+  "title": "Low-Level Design (OOD) in Java",
+  "color": "#C084FC",
+  "est": "1–2 weeks",
+  "badge": "LLD round",
+  "badgeType": "high",
+  "pri": "Machine-coding / LLD rounds at banks and Bangalore product companies",
+  "lessons": [
+   "oop-solid",
+   "design-patterns",
+   "lld-approach-concurrency",
+   "lld-parking-lot",
+   "lld-lru-cache",
+   "lld-splitwise",
+   "lld-movie-booking",
+   "lld-rate-limiter",
+   "lld-atm"
+  ],
+  "note": "Clarify → entities → class diagram → interfaces → code the core flow → extend with patterns → concurrency & edge cases. Keep it runnable.",
+  "sections": [
+   {
+    "t": "OOP & principles",
+    "tops": [
+     "Four pillars — encapsulation, abstraction, inheritance, polymorphism",
+     "SOLID principles — SRP, OCP, LSP, ISP, DIP",
+     "Composition over inheritance — has-a beats deep hierarchies"
+    ]
+   },
+   {
+    "t": "Design patterns",
+    "tops": [
+     "Creational — Singleton, Factory, Builder",
+     "Strategy pattern — swap algorithms at runtime",
+     "Observer pattern — notify subscribers of changes",
+     "State pattern — behaviour changes with lifecycle state",
+     "Decorator & Adapter — wrap to add behaviour or translate interfaces",
+     "Chain of Responsibility — pass requests along handlers"
+    ]
+   },
+   {
+    "t": "Machine coding & concurrency",
+    "tops": [
+     "Machine-coding approach — requirements, entities, classes, code, tests in 90 minutes",
+     "Java concurrency toolkit — locks, atomics, ConcurrentHashMap, executors",
+     "Thread-safe singleton — holder idiom, enum, double-checked locking",
+     "Per-resource locking — CAS on the resource instead of one global lock"
+    ]
+   }
+  ]
+ }
+]

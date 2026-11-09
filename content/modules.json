@@ -1,0 +1,14 @@
+[
+  {"id":"playbook","num":"00","title":"Interview Playbook","color":"#5C8FFF","blurb":"How the round works, what SDE2 is graded on, and estimation maths."},
+  {"id":"network","num":"01","title":"Networking & APIs","color":"#38BDF8","blurb":"What happens on the wire, plus designing clean APIs and real-time channels."},
+  {"id":"data","num":"02","title":"Databases & Data Scaling","color":"#23C97E","blurb":"SQL internals, indexing, picking a database, replication, sharding."},
+  {"id":"cache","num":"03","title":"Caching","color":"#F59E0B","blurb":"Cache patterns, eviction, and the failure modes interviewers love."},
+  {"id":"infra","num":"04","title":"Scalability & Infrastructure","color":"#FB923C","blurb":"Load balancing, stateless services, blob storage, containers & cloud."},
+  {"id":"dist","num":"05","title":"Distributed Systems","color":"#A78BFA","blurb":"CAP, consistency, consensus, IDs, distributed transactions."},
+  {"id":"msg","num":"06","title":"Messaging & Events","color":"#F472B6","blurb":"Queues, Kafka, delivery guarantees, event sourcing, CQRS, CDC."},
+  {"id":"micro","num":"07","title":"Microservices & Resilience","color":"#2DD4BF","blurb":"Service boundaries, retries, circuit breakers, safe deployments."},
+  {"id":"ops","num":"08","title":"Security & Reliability","color":"#F87171","blurb":"Auth, encryption, observability, SLOs, disaster recovery."},
+  {"id":"special","num":"09","title":"Specialised Building Blocks","color":"#FACC15","blurb":"Search, geo-indexing, probabilistic data structures, data pipelines."},
+  {"id":"fintech","num":"10","title":"Fintech & Banking Systems","color":"#34D399","blurb":"Payments, ledgers, reconciliation, low-latency trading. Most relevant for Visa / JPM / MS / GS."},
+  {"id":"lld","num":"11","title":"Low-Level Design (OOD)","color":"#C084FC","blurb":"OOP, SOLID, design patterns, Java concurrency, and how to run the machine-coding round."}
+]

@@ -1,0 +1,22 @@
+{
+  "name": "sysdesign-manual",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Day-by-day system design companion for SDE-2 interviews (Next.js)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "npx serve out",
+    "check": "node -e \"import('./lib/content.mjs').then(m=>{const c=m.loadContent();console.log('OK:',c.items.length,'days,',c.cards.length,'flashcards')})\""
+  },
+  "dependencies": {
+    "marked": "12.0.2",
+    "mermaid": "10.9.1",
+    "next": "14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "overrides": {
+    "dompurify": "3.0.9"
+  }
+}
