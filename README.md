@@ -26,7 +26,7 @@ npm run dev        # http://localhost:3000
    - Node version: taken from `.node-version` (20)
 4. Click Deploy. Every push redeploys automatically.
 
-Stop `npm run dev` before building locally (both use `.next/` on Windows). To deploy without Git: run `npm run build`, then `npx wrangler pages deploy out --project-name sysdesign-manual`. You can also drag the `out/` folder into the Cloudflare Pages dashboard (Upload assets).
+Stop `npm run dev` before building locally (both use `.next/` on Windows). To deploy without Git: run `npm run build`, then `npx wrangler pages deploy out --project-name abyudayx`. You can also drag the `out/` folder into the Cloudflare Pages dashboard (Upload assets).
 
 ## Editing content
 
