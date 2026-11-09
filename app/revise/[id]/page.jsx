@@ -19,7 +19,9 @@ export default function Page({ params }) {
   if (!p) notFound();
   const md = p.sections.map(s => `## ${s.t}\n\n` + s.topics.filter(t => t.deep).map(t => {
     const part = (name, label) => { const b = deepSection(t.deep, name); return b ? `**${label}**\n\n${b}\n\n` : ''; };
-    return `### ${t.short}\n\n[Full deep dive →](/topic/${t.id}/)\n\n` + part('Cheat sheet', '⚡ Cheat sheet') + part('Problems & fixes', '🛠 Problems & fixes') + part('Interview questions', '🎯 Interview questions');
+    const must = deepSection(t.deep, 'Must know') ? part('Must know', '★ Must know') : part('Cheat sheet', '⚡ Cheat sheet');
+    return `### ${t.short}\n\n[Full deep dive →](/topic/${t.id}/)\n\n` + must + part('Numbers to quote', '# Numbers to quote') + part('Common mistakes', '⚠ Common mistakes')
+      + part('Problems & fixes', '🛠 Problems & fixes') + part('Interview questions', '🎯 Interview questions');
   }).join('\n')).join('\n');
   const { html } = renderPage(md);
   const ready = p.sections.reduce((a, s) => a + s.topics.filter(t => t.deep).length, 0);
@@ -31,7 +33,7 @@ export default function Page({ params }) {
         <header className="item-head">
           <div className="eyebrow pc" style={{ '--pc': p.color }}><Link href={`/phase/${p.id}/`}>PHASE {p.num} · {p.title}</Link></div>
           <h1>Revision sheet</h1>
-          <p className="sum">Cheat sheets, common problems with their fixes, and scenario interview questions for every topic in this phase. Read it the night before an interview. Open a question to check your answer. {ready < total && `(${ready}/${total} topics written so far.)`}</p>
+          <p className="sum">Must-know points, numbers to quote, common mistakes, problems with their fixes, and scenario interview questions for every topic in this phase. Read it the night before an interview. Open a question to check your answer. {ready < total && `(${ready}/${total} topics written so far.)`}</p>
         </header>
         <div className="revise"><Prose html={html} /></div>
       </article>

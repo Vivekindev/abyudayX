@@ -3,6 +3,20 @@
 ### REST — 6 constraints: stateless, uniform interface, cacheable, layered, client-server, code on demand
 REST (Representational State Transfer, Roy Fielding, 2000) is an **architectural style**, not a protocol. An API is "RESTful" when it follows a set of constraints that make it scalable, cacheable and evolvable. Most real APIs follow some of them, and interviewers mostly care about **statelessness, resources, correct methods/status codes and cacheability**.
 
+#### Intuition
+A well-run library: every book has a fixed shelf address (URL), there's a small set of actions everyone understands (borrow, return, renew = HTTP methods), and any librarian at any desk can help you because your library card carries everything they need (stateless).
+
+#### Must know
+- REST is an **architectural style**, not a protocol.
+- The three that matter in interviews: **stateless** (any server can serve any request), **cacheable** (responses say if they can be cached), **uniform interface** (resource URLs + standard methods + status codes).
+- Nouns in URLs, verbs as methods, plural collections, `201 + Location` on create.
+- Cursor pagination and idempotency keys on writes are expected.
+
+#### Common mistakes
+- Verbs in URLs (`/getUserOrders`, `/createOrder`).
+- In-memory server sessions, which break horizontal scaling.
+- Splitting one atomic business action into several client calls (debit, then credit).
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -65,8 +79,29 @@ Model the transfer as a resource: `POST /transfers` with `{fromAccountId, toAcco
 #### Interview angle
 > "The API is stateless REST over HTTPS: resource URLs, proper methods and status codes, cursor pagination and idempotency keys on writes. That lets the service scale horizontally behind a load balancer and lets the CDN cache public reads."
 
+#### Sources
+- [Fielding's dissertation, ch. 5: REST](https://ics.uci.edu/~fielding/pubs/dissertation/rest_arch_style.htm) — Roy Fielding
+- [Microsoft REST API guidelines](https://github.com/microsoft/api-guidelines/blob/vNext/azure/Guidelines.md) — Microsoft
+
 ### REST idempotency — GET/PUT/DELETE idempotent, POST not; why it matters for retries
 In distributed systems, **timeouts are ambiguous**: the client doesn't know whether the server processed the request. Idempotency is what makes "just retry" safe, and retries happen everywhere: clients, SDKs, gateways, service meshes and message consumers.
+
+#### Intuition
+If you're not sure your letter arrived, you post another copy. That's harmless for "set my address to Pune" but a disaster for "send ₹500". Idempotency is what makes "send it again" safe.
+
+#### Must know
+- A **timeout is ambiguous**: the request may have succeeded.
+- Naturally idempotent: GET, HEAD, PUT, DELETE. Not: POST, relative PATCH.
+- Make writes retry-safe with idempotency keys, client-chosen ids or conditional requests.
+- Retry at **one layer** only, with exponential backoff + jitter and a retry budget.
+- Prevent lost updates with `ETag` + `If-Match` → `412 Precondition Failed`.
+
+#### Numbers to quote
+- 3 retries at each of 3 layers = up to 27× load during an outage.
+
+#### Common mistakes
+- Letting a service mesh retry non-idempotent POSTs on timeout.
+- Retrying at the client, gateway and mesh at once (retry storm).
 
 #### How it works
 ```mermaid
@@ -123,8 +158,30 @@ Optimistic concurrency control. `GET` returns `ETag: "v12"`. The update sends `P
 #### Interview angle
 > "Every write is safe to retry: PUT and DELETE by nature, and POSTs via idempotency keys. Updates use ETags with If-Match to avoid lost updates. Retries happen at one layer only, with backoff and jitter."
 
+#### Sources
+- [Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/) — Amazon Builders' Library
+- [Timeouts, retries and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/) — Amazon Builders' Library
+
 ### GraphQL — schema, queries, mutations, subscriptions, N+1 problem, DataLoader batching solution
 GraphQL is a query language for APIs. The server publishes a typed **schema**, and clients ask for **exactly the fields they need** in a single request, across related objects. It solves REST's over-fetching and under-fetching for complex UIs, but moves complexity to the server.
+
+#### Intuition
+REST is a set menu: each dish comes as the kitchen decided. GraphQL is ordering à la carte from a printed menu (the schema): you list exactly what you want, from several sections, in one order.
+
+#### Must know
+- Typed **schema**; **queries** read, **mutations** write, **subscriptions** push (usually over WebSocket).
+- Clients pick fields, so there's no over- or under-fetching; great as a **BFF** over many services.
+- **N+1** resolvers are the classic problem; **DataLoader** batches and dedupes per request.
+- Protect the server: depth/complexity limits, timeouts, **persisted queries**.
+- Errors come back as HTTP 200 with `errors[]`: adapt monitoring.
+
+#### Numbers to quote
+- 50 posts with authors: 51 queries without DataLoader vs 2 with it.
+
+#### Common mistakes
+- Launching without DataLoader, then watching DB load explode.
+- No query cost limits, so one nested query takes the server down.
+- Expecting CDN caching to work with POST /graphql.
 
 #### How it works
 ```mermaid
@@ -185,8 +242,31 @@ Resolvers run per field per object, so fetching N parent objects and then a chil
 #### Interview angle
 > "I'd use GraphQL as a backend-for-frontend over our REST/gRPC services, with DataLoader to batch downstream calls, and depth limits plus persisted queries to protect it."
 
+#### Sources
+- [Learn GraphQL](https://graphql.org/learn/) — graphql.org
+- [DataLoader](https://github.com/graphql/dataloader) — GraphQL Foundation
+- [GraphQL cheat sheet (security)](https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html) — OWASP
+
 ### gRPC — Protocol Buffers, unary/server-streaming/client-streaming/bidirectional streaming
 gRPC is an RPC framework from Google: you define services and messages in a `.proto` file, generate client and server code in many languages, and calls travel as compact **Protocol Buffers** over **HTTP/2**. It's the standard for efficient, strongly typed service-to-service communication.
+
+#### Intuition
+Calling a remote service as if it were a local function, with a strict contract both sides compile against. Like two companies exchanging pre-printed forms in a shared format instead of free-text letters.
+
+#### Must know
+- `.proto` contract → generated client/server code; **Protobuf over HTTP/2**.
+- Four call types: unary, server-streaming, client-streaming, bidirectional.
+- **Always set deadlines** and propagate them across hops.
+- Never reuse or renumber fields; `reserved` removed ones; check with `buf breaking` in CI.
+- Needs **L7/request-level load balancing**; browsers need gRPC-Web or a REST gateway.
+
+#### Numbers to quote
+- Protobuf payloads are typically 3–10× smaller than equivalent JSON.
+
+#### Common mistakes
+- No deadline on calls, so slow downstreams hang threads forever.
+- L4 balancing of long-lived HTTP/2 connections (one pod gets everything).
+- Changing a field's number or type.
 
 #### How it works
 ```protobuf
@@ -250,8 +330,26 @@ Add new fields with new field numbers (they're optional in proto3, and old reade
 #### Interview angle
 > "Internal calls use gRPC: protobuf contracts checked in CI, deadlines propagated on every hop, and request-level load balancing through the mesh. External clients get REST via a gateway."
 
+#### Sources
+- [gRPC core concepts](https://grpc.io/docs/what-is-grpc/core-concepts/) — grpc.io
+- [Protocol Buffers: updating a message type](https://protobuf.dev/programming-guides/proto3/#updating) — protobuf.dev
+- [gRPC and deadlines](https://grpc.io/blog/deadlines/) — gRPC blog
+
 ### gRPC vs REST — binary vs text, schema contract, streaming, use cases for each
 Both are ways for programs to call each other over HTTP. **REST** optimises for universality and simplicity (text JSON, any client, cacheable). **gRPC** optimises for performance and strict contracts (binary protobuf, generated code, streaming). Most companies use REST at the edge and gRPC inside.
+
+#### Intuition
+REST/JSON is plain English: anyone can read and speak it. gRPC is a compact shorthand both sides agreed on in advance: much faster between colleagues, useless to strangers without the codebook.
+
+#### Must know
+- **REST at the edge** (universal, cacheable, curl-able); **gRPC inside** (fast, typed, streaming).
+- gRPC: mandatory contract, HTTP/2 only, 4 streaming modes, no HTTP caching, browsers need a proxy.
+- Transcoding (grpc-gateway, Envoy) lets one proto definition serve both.
+- Choose by client: partners/browsers → REST; high-QPS internal calls → gRPC.
+
+#### Common mistakes
+- Exposing only gRPC to external partners.
+- Migrating everything to gRPC without L7 load balancing and proto governance.
 
 #### How it works
 ```mermaid
@@ -306,8 +404,29 @@ L4 load balancers won't balance HTTP/2 well (need a mesh or client-side LB). Deb
 #### Interview angle
 > "REST/JSON at the edge for reach and cacheability, gRPC internally for speed, typed contracts and streaming, with the gateway translating between the two."
 
+#### Sources
+- [gRPC vs REST: understanding gRPC, OpenAPI and REST](https://cloud.google.com/blog/products/api-management/understanding-grpc-openapi-and-rest-and-when-to-use-them) — Google Cloud blog
+- [gRPC-Gateway](https://github.com/grpc-ecosystem/grpc-gateway) — grpc-ecosystem
+
 ### WebSockets — full-duplex, ws:// upgrade from HTTP, heartbeat ping-pong, reconnection
 A WebSocket is a **persistent, full-duplex connection** between client and server: after an HTTP handshake upgrades the connection, either side can send messages at any time with tiny framing overhead. It's the default for chat, live collaboration, trading screens and multiplayer features.
+
+#### Intuition
+An HTTP request is sending a letter and waiting for a reply. A WebSocket is a phone line left open: either side can talk at any moment, until someone hangs up.
+
+#### Must know
+- HTTP `Upgrade: websocket` → `101 Switching Protocols` → full-duplex frames. Use `wss://`.
+- **Heartbeats** (ping/pong every 20–30 s) detect dead connections and keep LB/NAT timers alive.
+- Clients reconnect with **backoff + jitter** and resume from the last message id.
+- Scale with a **connection registry** (user → gateway node) and a **pub/sub backplane**.
+- No delivery guarantees built in: add message ids and acks.
+
+#### Numbers to quote
+- ~50k–100k connections per tuned gateway node.
+
+#### Common mistakes
+- No heartbeats, so connections die silently at LB idle timeouts.
+- Deploying by killing all gateways at once, causing a reconnect stampede.
 
 #### How it works
 ```mermaid
@@ -366,8 +485,26 @@ Scores flow one way (server → client) and update every few seconds, so **SSE**
 #### Interview angle
 > "Clients hold a WebSocket to a stateless gateway tier. A Redis registry maps user to gateway node and pub/sub routes messages across nodes. Messages carry ids and acks, so reconnects resume without loss."
 
+#### Sources
+- [RFC 6455: The WebSocket protocol](https://datatracker.ietf.org/doc/html/rfc6455) — IETF
+- [The WebSocket API](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API) — MDN
+
 ### Server-Sent Events (SSE) — one-way server push over HTTP, auto-reconnect, use cases
 SSE lets a server **push a stream of text events** to the browser over a normal long-lived HTTP response (`Content-Type: text/event-stream`). It's one-way (server → client), works with plain HTTP infrastructure, and the browser's `EventSource` API reconnects automatically.
+
+#### Intuition
+A radio broadcast: the station talks, you listen. If your signal drops, your radio retunes by itself and asks "what did I miss since message 42?".
+
+#### Must know
+- `Content-Type: text/event-stream` over a normal long-lived HTTP response; browser `EventSource` API.
+- **One-way** (server → client), text only; auto-reconnect with **`Last-Event-ID`**.
+- Works with existing auth, proxies and HTTP/2 (no 6-connection limit).
+- Great for notifications, live status, dashboards, **LLM token streaming**.
+- Turn off proxy buffering and compression for the stream; send comment heartbeats.
+
+#### Common mistakes
+- Proxy or gzip buffering, so events arrive in bursts.
+- Ignoring `Last-Event-ID`, so events are lost on reconnect.
 
 #### How it works
 ```mermaid
@@ -432,8 +569,25 @@ Something between server and client is buffering: NGINX proxy buffering, gzip co
 #### Interview angle
 > "For one-way live updates like order status, I'd pick SSE over WebSockets: plain HTTP, built-in reconnect and resume, and it passes through existing proxies and auth."
 
+#### Sources
+- [Using server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events) — MDN
+- [HTML spec: Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) — WHATWG
+
 ### Long polling — client holds connection until server has data, fallback for older clients
 Long polling simulates server push with ordinary requests: the client sends a request, the server **holds it open until there's new data (or a timeout ~30 s)**, responds, and the client immediately asks again. It works everywhere, but it's the least efficient real-time option.
+
+#### Intuition
+Asking "any news?" and the other person simply doesn't answer until there is news (or 30 seconds pass). Then you immediately ask again.
+
+#### Must know
+- Server **holds** the request until data arrives or ~25–30 s, client re-requests immediately.
+- Always send a **cursor** (`since=`) so nothing is missed between polls.
+- Needs **async/non-blocking** servers; thread-per-request runs out of threads.
+- Works through any proxy: the universal fallback when WebSocket/SSE are blocked.
+
+#### Common mistakes
+- Hold time longer than a proxy's idle timeout.
+- No cursor, so messages that arrive between polls are lost.
 
 #### How it works
 ```mermaid
@@ -487,8 +641,27 @@ Use non-blocking I/O (async servlets, WebFlux, Node, Go) so a held request costs
 #### Interview angle
 > "Long polling is my compatibility fallback. The primary channel is SSE or WebSocket, but clients degrade to long polling with a cursor when proxies block them."
 
+#### Sources
+- [Real-time communication: long polling, WebSockets and SSE](https://ably.com/topic/long-polling) — Ably
+- [RFC 6202: Known issues and best practices for long polling](https://datatracker.ietf.org/doc/html/rfc6202) — IETF
+
 ### Webhooks — event-driven callbacks, retry policy, HMAC signature verification
 A webhook is an **HTTP callback**: when an event happens in system A (payment captured, PR merged), A sends an HTTP POST to a URL that system B registered. It's how SaaS platforms push events to customers (Stripe, Razorpay, GitHub, Shopify) instead of making them poll.
+
+#### Intuition
+Instead of calling the courier every hour to ask "has my parcel shipped?" (polling), you give them your number and they call you when it happens. But they might call twice, late, or out of order, so you keep your own notes.
+
+#### Must know
+- Delivery is **at-least-once and unordered**: dedupe on event id, use a state machine.
+- Verify the **HMAC signature over the raw body** with a constant-time compare, and check the timestamp.
+- **Ack fast** (2xx within a second or two), process asynchronously via a queue.
+- Back it with a **reconciliation poller** for events that are lost or delayed.
+- Senders: durable queue, exponential retries for days, per-endpoint limits, replay UI.
+
+#### Common mistakes
+- Verifying the signature on re-serialised JSON instead of the raw bytes.
+- Doing heavy work inline, so the provider times out, retries and eventually disables the endpoint.
+- Trusting the webhook alone for payment status, with no reconciliation.
 
 #### How it works
 ```mermaid
@@ -551,8 +724,28 @@ No. Webhooks are at-least-once by design (retries after timeouts, network errors
 #### Interview angle
 > "Webhook consumers verify the HMAC signature, dedupe on event id, ack within a second and process via a queue. A reconciliation job polls the provider for anything stuck, because webhooks can arrive late, twice or out of order."
 
+#### Sources
+- [Razorpay webhooks: validate and test](https://razorpay.com/docs/webhooks/validate-test/) — Razorpay docs
+- [Receive Stripe events in your webhook endpoint](https://docs.stripe.com/webhooks) — Stripe docs
+- [Standard Webhooks specification](https://www.standardwebhooks.com/) — Standard Webhooks
+
 ### API versioning strategies — URL path (/v1/), query param, header, content negotiation
 APIs must evolve without breaking clients you don't control: mobile app versions that never update, partner integrations. Versioning gives breaking changes a new contract while old clients keep working. The best strategy is to **avoid breaking changes** most of the time and version rarely.
+
+#### Intuition
+Like renovating a shop while it's open: you mostly add new shelves (additive changes) without moving the old ones. Only when you must rearrange everything do you open a second branch (v2) and keep the old one running until customers move over.
+
+#### Must know
+- Default: **URL path** (`/v1/orders`). Date-based header versions (Stripe-style) for mature APIs.
+- **Additive changes don't need a version**: new optional fields, endpoints, params.
+- Breaking: removing/renaming fields, changing types or meaning, new required params.
+- Clients should be **tolerant readers** (ignore unknown fields and enum values).
+- Deprecate → announce (`Deprecation`/`Sunset` headers) → measure usage → remove.
+
+#### Common mistakes
+- Shipping a breaking change in place, which crashes old mobile apps.
+- Creating a new version for every small change.
+- Not tracking which clients still call old versions.
 
 #### How it works
 | Strategy | Example | Pros | Cons |
@@ -609,8 +802,27 @@ Keep old versions alive as long as meaningful traffic remains, ideally via adapt
 #### Interview angle
 > "Changes are additive by default and clients are tolerant readers. Breaking changes get a new URL version, served through adapters on the same service, with usage tracked per version and a published sunset date."
 
+#### Sources
+- [Stripe API versioning](https://docs.stripe.com/api/versioning) — Stripe docs
+- [RFC 8594: The Sunset HTTP header](https://datatracker.ietf.org/doc/html/rfc8594) — IETF
+
 ### Idempotency keys — safe retries for payments and mutations
 An idempotency key is a unique token the **client generates per logical operation** and sends with a write request. The server remembers the key and its result. Retries with the same key return the stored result instead of repeating the side effect, so a timeout never causes a double charge.
+
+#### Intuition
+A cloakroom ticket: hand over the same ticket twice and you still get one coat back, not two. The client creates the ticket (key) once per action and reuses it on every retry.
+
+#### Must know
+- Client generates the key **once per user action** and reuses it for retries.
+- Server enforces it with a **unique constraint** (atomic "first writer wins"), not check-then-insert.
+- Store **request hash + full response**: same key + same body → same response; different body → **422**; still running → **409**.
+- Pass **derived keys** to downstream providers so the whole chain is idempotent.
+- Expire keys (~24 h); recover stuck IN_PROGRESS keys by querying the processor.
+
+#### Common mistakes
+- SELECT-then-INSERT, which races and double-charges.
+- Not passing an idempotency key to the payment processor.
+- Generating a new key on every retry, which defeats the purpose.
 
 #### How it works
 ```mermaid
@@ -680,8 +892,30 @@ Two concurrent retries can both run the check before either inserts. Both see "n
 #### Interview angle
 > "Every mutating payment API takes an Idempotency-Key, enforced by a unique constraint with a stored response and request hash. Downstream calls carry derived keys, so retries are safe end to end."
 
+#### Sources
+- [Idempotent requests](https://docs.stripe.com/api/idempotent_requests) — Stripe API docs
+- [Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency) — Stripe engineering blog
+
 ### WebRTC — peer-to-peer video/audio, STUN (IP discovery), TURN (relay), ICE negotiation
 WebRTC lets browsers and apps send **real-time audio, video and data directly to each other**, peer-to-peer, with built-in encryption (DTLS-SRTP). The hard part is connecting two devices that both sit behind NATs and firewalls, which is what **STUN, TURN and ICE** are for.
+
+#### Intuition
+Two people behind different office receptionists (NATs) want to talk directly. STUN tells each one their public phone number, ICE tries every route to connect, and if no direct line works, TURN is an operator who relays the call (reliable, but you pay for every minute).
+
+#### Must know
+- **Signaling** is yours (usually WebSocket): exchange SDP offers/answers and ICE candidates.
+- **STUN** discovers the public address (cheap); **TURN** relays when direct fails (expensive bandwidth).
+- **ICE** gathers candidates and picks the best working path.
+- Media is encrypted by default (DTLS-SRTP) over UDP.
+- 1:1 → peer-to-peer; groups → **SFU** with simulcast; huge audiences → HLS.
+
+#### Numbers to quote
+- Roughly 10–20% of calls need a TURN relay.
+- Full mesh stops working beyond ~4 participants.
+
+#### Common mistakes
+- No TURN over TCP/TLS 443, so calls fail on office networks.
+- Using full-mesh P2P for group calls.
 
 #### How it works
 ```mermaid
@@ -749,3 +983,9 @@ WebSockets run over TCP: a lost packet stalls everything behind it (head-of-line
 
 #### Interview angle
 > "WebRTC for media, with a WebSocket signaling service and STUN plus TURN for NAT traversal. 1:1 calls go peer-to-peer, group calls go through an SFU with simulcast so each client uploads only once."
+
+#### Sources
+- [WebRTC API](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API) — MDN
+- [WebRTC for the curious](https://webrtcforthecurious.com/) — open book
+- [RFC 8445: ICE](https://datatracker.ietf.org/doc/html/rfc8445) — IETF
+

@@ -36,7 +36,7 @@ All content is Markdown:
 |---|---|
 | `content/roadmap/phases.json` | Phases, sections and **exact topic titles** (plus linked lessons) |
 | `content/roadmap/pN.md` | One `### <exact topic title>` block per topic (short explanation) |
-| `content/deep/pN-*.md` | Deep dives: one `### <exact topic title>` block per topic, with `#### How it works`, `#### Example`, `#### Trade-offs`, `#### Problems & fixes`, `#### Cheat sheet`, `#### Interview questions`, `#### Interview angle` |
+| `content/deep/pN-*.md` | Deep dives: one `### <exact topic title>` block per topic, with `#### How it works`, `#### Example`, `#### Trade-offs`, `#### Problems & fixes`, `#### Cheat sheet`, `#### Interview questions`, `#### Interview angle`. Enriched topics also have `#### Intuition`, `#### Must know`, `#### Numbers to quote` (optional), `#### Common mistakes` and `#### Sources`, which feed the topic page's 2-minute tab |
 | `content/lessons/*.md` | Deep-dive lessons (several per file, each starting with a `---` frontmatter block) |
 | `content/cases/*.md`, `content/lld/*.md` | Case studies and LLD problems |
 | `content/pages/*.md` | Interview prep, cheat sheet, company playbook, resources, changelog |
@@ -44,6 +44,7 @@ All content is Markdown:
 `npm run check` validates everything, and the build fails on the same errors:
 
 - every roadmap topic has an explanation and a deep dive, and neither has a misspelled title
+- an enriched topic has all of Intuition, Must know, Common mistakes and Sources
 - mermaid blocks don't set colours (`style`, `classDef`, `fill:#…`), so diagrams always follow the theme
 - unique IDs, and plan days 1..N with no gaps
 - no broken internal links

@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import Prose from '../../../components/Prose';
 import { DoneBar, Notes } from '../../../components/ItemTools';
-import { loadContent, renderDeep } from '../../../lib/content.mjs';
+import TopicTabs from '../../../components/TopicTabs';
+import { loadContent, topicLayers, topicSources, readMinutes } from '../../../lib/content.mjs';
 
 // Every roadmap topic in order, with its phase and section.
 const flat = roadmap => roadmap.flatMap(p => p.sections.flatMap(s => s.topics.map(t => ({ t, p, s }))));
@@ -22,7 +23,8 @@ export default function Page({ params }) {
   const idx = all.findIndex(x => x.t.id === params.id);
   if (idx < 0) notFound();
   const { t, p, s } = all[idx], prev = all[idx - 1], next = all[idx + 1];
-  const { html, toc } = renderDeep(t.deep || '_The deep dive for this topic is being written. The summary above covers the essentials._');
+  const layers = topicLayers(t), sources = topicSources(t);
+  const tabs = layers.map(({ key, label, badge }) => ({ key, label, badge }));
   const lessons = (p.lessons || []).map(id => items.find(i => i.id === id));
 
   return (
@@ -33,10 +35,12 @@ export default function Page({ params }) {
             <Link href={`/phase/${p.id}/`}>PHASE {p.num} · {p.title}</Link> · {s.t}
           </div>
           <h1>{t.title}</h1>
+          <p className="read-time">⏱ {readMinutes(t)} min read · start with the 2-min layer, go deeper when you need to</p>
         </header>
-        <div className="in-short"><b>In short</b><div className="prose" dangerouslySetInnerHTML={{ __html: t.html }} /></div>
-        <div className="deep"><Prose html={html} /></div>
+        <TopicTabs tabs={tabs} />
+        <div className="deep"><Prose html={layers.map(l => l.html).join('')} /></div>
         <div className="links-box">
+          {sources && <div className="card"><h3>📚 Sources & further reading</h3><div className="prose src" dangerouslySetInnerHTML={{ __html: sources }} /></div>}
           <div className="card"><h3>▶ Watch</h3><ul><li><a href={t.yt} target="_blank" rel="noopener">Search YouTube for this topic</a></li></ul></div>
           {lessons.length > 0 && <div className="card"><h3>📘 Related lessons</h3>
             <ul>{lessons.map(l => <li key={l.id}><Link href={`/item/${l.id}/`}>{l.title}</Link></li>)}</ul></div>}
@@ -48,7 +52,7 @@ export default function Page({ params }) {
           {next && <Link className="nx" href={`/topic/${next.t.id}/`}><small>NEXT →</small>{next.t.title}</Link>}
         </nav>
       </article>
-      <aside className="toc"><b>On this page</b>{toc.map(h => <a key={h.id} href={`#${h.id}`}>{h.text}</a>)}<a href={`/phase/${p.id}/#${t.id}`}>↩ Back to phase {p.num}</a></aside>
+      <aside className="toc"><b>Layers</b>{tabs.map(l => <a key={l.key} className="tab-link" href={`#${l.key}`}>{l.label}{l.badge && <small>{l.badge}</small>}</a>)}<a href={`/phase/${p.id}/#${t.id}`}>↩ Back to phase {p.num}</a></aside>
     </div>
   );
 }

@@ -3,6 +3,19 @@
 ### Forward proxy — client-side, hides client identity, corporate firewalls
 A forward proxy sits **in front of clients** and makes outbound requests on their behalf. The destination server sees the proxy's IP, not the client's. Companies use forward proxies to control and log what employees and servers can reach. Backend systems use them as **egress proxies** with fixed outbound IPs.
 
+#### Intuition
+A company's mailroom that sends all outgoing letters on your behalf: recipients only see the company's return address, and the mailroom can refuse to post letters to addresses not on its approved list.
+
+#### Must know
+- Sits in front of **clients** and makes outbound requests for them; destinations see the proxy's IP.
+- HTTPS goes through as a `CONNECT` tunnel (or is decrypted by TLS inspection with a company CA).
+- **Egress proxy** for servers: domain allow-list, audit logs, static outbound IPs.
+- Run it redundantly across AZs; it's a choke point.
+
+#### Common mistakes
+- A single egress proxy instance, so all outbound traffic dies with it.
+- Assuming every HTTP library honours `HTTPS_PROXY`/`NO_PROXY`.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -50,8 +63,28 @@ A forward proxy works at the application level (usually HTTP/S) for configured a
 #### Interview angle
 > "Outbound traffic from private subnets goes through a redundant egress proxy with a domain allow-list and static IPs. That gives partners fixed IPs to allow-list and stops a compromised host from calling arbitrary servers."
 
+#### Sources
+- [Proxy servers and tunneling](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Proxy_servers_and_tunneling) — MDN
+- [Forward vs reverse proxies explained](https://www.cloudflare.com/learning/cdn/glossary/reverse-proxy/) — Cloudflare Learning
+
 ### Reverse proxy — server-side, hides server topology (Nginx, HAProxy)
 A reverse proxy sits **in front of servers** and receives client requests on their behalf. Clients see one address, and the proxy decides which backend serves each request. It's where you put TLS termination, load balancing, caching, compression, rate limiting and request routing.
+
+#### Intuition
+A hotel receptionist: guests talk only to the front desk, which knows which room or department handles each request. Guests never see the corridors behind it.
+
+#### Must know
+- Sits in front of **servers**: TLS termination, routing by host/path, load balancing, caching, compression, rate limits.
+- Forward `X-Forwarded-For`, `X-Forwarded-Proto` and `Host`; trust only your own proxies' hops.
+- Keep **pooled keep-alive connections** to backends.
+- Align timeouts: client > proxy > app > downstream.
+
+#### Numbers to quote
+- An extra proxy hop costs about 1 ms inside a datacenter.
+
+#### Common mistakes
+- Trusting the leftmost `X-Forwarded-For` value, which the client controls.
+- App unaware TLS ended at the proxy, causing redirect loops to `http://`.
 
 #### How it works
 ```mermaid
@@ -107,8 +140,28 @@ Each hop appends to `X-Forwarded-For`. Configure each layer to trust only the kn
 #### Interview angle
 > "Behind the load balancer, an NGINX/Envoy reverse proxy layer terminates TLS, routes by path and applies per-IP limits. Only that layer is public and the services sit in private subnets."
 
+#### Sources
+- [What is a reverse proxy?](https://www.cloudflare.com/learning/cdn/glossary/reverse-proxy/) — Cloudflare Learning
+- [NGINX reverse proxy](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/) — NGINX docs
+- [X-Forwarded-For](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Forwarded-For) — MDN
+
 ### API gateway — routing, auth enforcement, rate limiting, request aggregation, protocol translation
 An API gateway is a specialised reverse proxy that is the **single entry point for all external API traffic**. It routes requests to the right microservice and enforces cross-cutting policies: authentication, rate limits, quotas, request/response transformation, aggregation and observability.
+
+#### Intuition
+The security desk and switchboard of an office tower: it checks every visitor's badge, limits how often each company may send people up, and directs each visitor to the right floor. It doesn't do the work on any floor.
+
+#### Must know
+- Single entry point for **external (north-south)** traffic: authN, rate limits/quotas, routing, transformation, observability.
+- Keep it **thin**: no business logic; client-specific aggregation belongs in a **BFF**.
+- Highly available across AZs; services must not be reachable around it.
+- LB spreads load for one service; gateway fronts many; mesh handles **east-west** traffic.
+- Distributed rate limits need a shared store (Redis token bucket).
+
+#### Common mistakes
+- Business rules creeping into the gateway.
+- Services still publicly reachable, bypassing gateway auth.
+- Remote token introspection on every request instead of local JWT validation with cached keys.
 
 #### How it works
 ```mermaid
@@ -162,8 +215,29 @@ Use a shared counter store: Redis with a token bucket or sliding window per API 
 #### Interview angle
 > "All external traffic enters through the API gateway, which validates JWTs, applies per-client rate limits and routes to services. It stays thin, while client-specific aggregation lives in a BFF owned by each app team."
 
+#### Sources
+- [API gateway pattern](https://microservices.io/patterns/apigateway.html) — microservices.io (Chris Richardson)
+- [Backends for Frontends pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/backends-for-frontends) — Azure Architecture Center
+
 ### CDN — PoPs (Points of Presence), edge nodes, origin server, pull vs push model
 A CDN (Content Delivery Network) is a globally distributed set of caching servers (**edge nodes**, grouped in **PoPs**) that serve content from close to the user. It cuts latency (shorter distance), offloads the **origin** (most requests never reach it) and absorbs traffic spikes and DDoS attacks.
+
+#### Intuition
+Instead of everyone travelling to one central warehouse, a chain of local corner shops (edge PoPs) stocks the popular items. The warehouse (origin) only restocks the shops when they run out.
+
+#### Must know
+- Edges near users → optional **origin shield** (regional) → origin.
+- **Pull** CDN caches on first miss (default); **push** uploads content ahead of time.
+- Hit ratio drives everything: aim for 90%+ on static content.
+- Lock the origin so only the CDN can reach it (origin access control, secret header, IP allow-list).
+- Also absorbs traffic spikes and DDoS.
+
+#### Numbers to quote
+- At a 95% hit ratio the origin serves 5% of bytes: 200 TB/day of traffic becomes 10 TB/day at origin.
+
+#### Common mistakes
+- Cookies or random query strings in the cache key, which ruin the hit ratio.
+- Leaving the origin publicly reachable, so attackers bypass the CDN.
 
 #### How it works
 ```mermaid
@@ -216,8 +290,26 @@ Serve cached content even when stale: `stale-if-error` / CDN "serve stale on ori
 #### Interview angle
 > "Static assets and media are served from a pull CDN with an origin shield and immutable versioned URLs. That gives a 95%+ hit ratio, so the origin only sees misses and the API traffic."
 
+#### Sources
+- [What is a CDN?](https://www.cloudflare.com/learning/cdn/what-is-a-cdn/) — Cloudflare Learning
+- [CloudFront origin shield](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html) — AWS docs
+
 ### CDN cache invalidation — TTL expiry, immediate purge, cache-busting via URL versioning
 When content changes, cached copies across hundreds of edges must stop being served. There are three tools: let it **expire** (TTL), **purge** it explicitly, or **change the URL** so the old copy is never requested again. URL versioning is the most reliable.
+
+#### Intuition
+Three ways to stop shops selling an old edition: wait until the "sell by" date passes (TTL), phone every shop to bin it (purge), or publish the new edition under a new title so nobody asks for the old one (URL versioning). The last is the most reliable.
+
+#### Must know
+- **Versioned URLs** (content hashes) for static assets: no purge ever needed.
+- TTL + `stale-while-revalidate` for semi-static content.
+- **Tag/surrogate-key purges** when something must change now (price, takedown).
+- A CDN purge doesn't clear **browser caches**: keep browser TTLs short for mutable resources.
+- Purge narrowly; a full purge stampedes the origin.
+
+#### Common mistakes
+- "Purge everything" on every deploy.
+- Non-versioned JS/CSS, so a deploy serves new HTML with old JS.
 
 #### How it works
 ```mermaid
@@ -270,8 +362,25 @@ It throws away the whole cache: every edge goes back to the origin at the same m
 #### Interview angle
 > "Assets are content-hashed and immutable. Pages use short s-maxage with stale-while-revalidate, and business events trigger tag-based purges, so price changes reach users in seconds without a cache-wide flush."
 
+#### Sources
+- [Invalidating files](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html) — AWS CloudFront docs
+- [Purging with surrogate keys](https://www.fastly.com/documentation/guides/full-site-delivery/purging/working-with-surrogate-keys/) — Fastly docs
+
 ### CDN for dynamic content — ESI (Edge Side Includes), Lambda@Edge, Cloudflare Workers
 CDNs aren't only for static files. They can accelerate and even compute **dynamic** responses: assembling pages from cacheable fragments (ESI), running code at the edge (Cloudflare Workers, Lambda@Edge, CloudFront Functions), and speeding up uncacheable API calls through warm, optimised connections to origin.
+
+#### Intuition
+A sandwich shop that pre-makes the bread and fillings everyone orders (cached fragments) and only assembles the personal touch at the counter (edge function), instead of sending every order back to the central kitchen.
+
+#### Must know
+- **ESI**: cache page fragments separately; fetch only the personal parts.
+- **Edge functions** (Workers, Lambda@Edge, CloudFront Functions): redirects, auth checks, A/B bucketing, header rewrites, light lookups.
+- Uncacheable APIs still gain: TLS near the user + warm backbone connections to origin.
+- Edge KV stores are eventually consistent: config and read-mostly data only.
+
+#### Common mistakes
+- Putting transactional logic (payments, inventory) at the edge, which still has to call a central DB.
+- Varying the whole page per user instead of caching a shell plus small personal fragments.
 
 #### How it works
 ```mermaid
@@ -325,8 +434,28 @@ When it needs strongly consistent data or transactions (payments, inventory), he
 #### Interview angle
 > "The CDN caches the page shell and shared modules, an edge function picks the variant by geo and experiment cookie, and only the small per-user fragment goes to the origin."
 
+#### Sources
+- [How Workers works](https://developers.cloudflare.com/workers/reference/how-workers-works/) — Cloudflare docs
+- [Customize at the edge with functions](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-functions.html) — AWS CloudFront docs
+
 ### GeoDNS — route users to nearest datacenter based on client IP
 GeoDNS returns **different DNS answers depending on where the query comes from**: users in India get the Mumbai load balancer's IP, users in Europe get Frankfurt's. It's the simplest form of global traffic management, built into Route 53, Cloudflare and NS1.
+
+#### Intuition
+A national helpline number that connects you to the nearest office based on where you're calling from. It works, but it guesses your location from your phone exchange (the DNS resolver), not from you.
+
+#### Must know
+- Different DNS answers per location: **geolocation**, **latency-based**, **weighted**, **failover** policies + health checks.
+- Decides by the **resolver's IP** (or client subnet via EDNS Client Subnet).
+- Failover speed ≈ TTL + client caching: minutes, not seconds.
+- Useful for **data residency** (Indian users → Indian region), but enforce residency in the data layer too.
+
+#### Numbers to quote
+- TTL 30–60 s on failover records; health checks every 10–30 s.
+
+#### Common mistakes
+- Relying on GeoDNS for fast failover.
+- Assuming the resolver's location equals the user's (public resolvers without ECS).
 
 #### How it works
 ```mermaid
@@ -382,8 +511,26 @@ They use a public resolver (e.g. 8.8.8.8) whose anycast node or egress IP geoloc
 #### Interview angle
 > "GeoDNS chooses the region per user and enforces residency, with health-checked failover records. For sub-minute failover I'd put anycast or a global accelerator in front, because DNS caching limits how fast failover can be."
 
+#### Sources
+- [Route 53 routing policies](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html) — AWS docs
+- [RFC 7871: EDNS Client Subnet](https://datatracker.ietf.org/doc/html/rfc7871) — IETF
+
 ### Anycast routing — same IP announced from multiple locations, routed to nearest
 With anycast, **the same IP address is announced via BGP from many locations** at once. Internet routers deliver each packet to the "closest" location in network terms. One IP gives you global load distribution, automatic failover and DDoS absorption. It's how DNS root servers, 1.1.1.1, Cloudflare and AWS Global Accelerator work.
+
+#### Intuition
+Every branch of a pizza chain answers the same phone number, and the phone network connects you to the closest branch. If one branch closes, calls simply go to the next nearest, with no number change.
+
+#### Must know
+- One IP announced via **BGP** from many locations; routers deliver to the nearest.
+- Failover in **seconds** by withdrawing the route (no DNS TTL).
+- Spreads DDoS traffic across all PoPs.
+- Used by DNS resolvers (1.1.1.1, 8.8.8.8), CDNs and AWS Global Accelerator.
+- Not load-aware; best for short connections, UDP or provider-managed edges.
+
+#### Common mistakes
+- Assuming BGP "nearest" always means lowest latency.
+- Running long-lived stateful TCP sessions on raw anycast without connection-aware handling.
 
 #### How it works
 ```mermaid
@@ -432,3 +579,8 @@ DNS is short, mostly UDP request/response traffic, so route changes mid-flow don
 
 #### Interview angle
 > "User traffic enters through anycast IPs at the nearest edge (CDN or Global Accelerator), so regional failover takes seconds instead of a DNS TTL. Behind that, latency-based routing picks the healthy regional origin."
+
+#### Sources
+- [What is anycast?](https://www.cloudflare.com/learning/cdn/glossary/anycast-network/) — Cloudflare Learning
+- [AWS Global Accelerator: how it works](https://docs.aws.amazon.com/global-accelerator/latest/dg/introduction-how-it-works.html) — AWS docs
+

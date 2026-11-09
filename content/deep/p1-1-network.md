@@ -3,6 +3,24 @@
 ### OSI model — 7 layers and each layer's responsibility
 The OSI (Open Systems Interconnection) model is a **reference model**: nobody ships "an OSI stack", but every engineer uses its layer numbers as shared vocabulary. Each layer offers a service to the layer above and relies on the layer below, so you can swap one layer (Wi-Fi for Ethernet) without touching the others.
 
+#### Intuition
+Think of posting a parcel: you write the letter (application), seal it in an envelope (presentation), the courier adds a tracking slip (transport), the sorting hub routes it by city (network), and the van drives it street by street (link/physical). Each step only cares about its own label.
+
+#### Must know
+- It's a **vocabulary**, not a real stack. You'll use the numbers: "L4 load balancer", "L7 routing", "L3 network ACL".
+- **L4 = IP + port** (TCP/UDP). **L7 = understands HTTP** (paths, headers, cookies).
+- Each layer adds a header on the way out (encapsulation) and strips it on the way in.
+- Debug **bottom-up**: `ping` (L3) → `nc -vz host port` (L4) → `curl -v` (L7).
+
+#### Numbers to quote
+- 7 layers in OSI, 4 in TCP/IP.
+- Typical Ethernet MTU 1,500 B.
+
+#### Common mistakes
+- Treating the layers as code boundaries. Real stacks (TCP/IP) merge 5–7, and TLS doesn't fit neatly anywhere.
+- Saying "L7 firewall" when you mean a security group (L3/L4) or a WAF (L7).
+- Claiming an L4 load balancer can route by URL path. It can't see the path.
+
 #### How it works
 On the way out, each layer wraps the data from the layer above with its own header (**encapsulation**). The receiver peels the headers off in reverse order.
 
@@ -38,10 +56,6 @@ When a load balancer "terminates TLS and routes on the URL path" it is working a
 - **L4 devices** are fast and protocol-agnostic, but blind to URLs, headers and cookies.
 - **L7 devices** can route by path, retry, cache and authenticate, but they must parse (and usually decrypt) every request, which costs CPU and latency.
 
-#### Common mistakes
-- Treating the layers as code boundaries. Real stacks (TCP/IP) merge 5–7, and TLS doesn't fit neatly anywhere.
-- Saying "L7 firewall" when you mean a security group (L3/L4) or a WAF (L7).
-
 #### Problems & fixes
 | Symptom | Likely layer / cause | Fix |
 |---|---|---|
@@ -69,8 +83,29 @@ L4 when you need raw throughput and very low latency, non-HTTP protocols (databa
 #### Interview angle
 > "I'll put an L7 load balancer in front because I need path-based routing to the order and payment services, and TLS termination in one place. Between internal services an L4 balancer is enough and cheaper."
 
+#### Sources
+- [What is the OSI model?](https://www.cloudflare.com/learning/ddos/glossary/open-systems-interconnection-model-osi/) — Cloudflare Learning
+- [Elastic Load Balancing: ALB (L7) vs NLB (L4)](https://aws.amazon.com/elasticloadbalancing/features/) — AWS
+
 ### TCP/IP model — 4 layers and mapping to OSI
 The TCP/IP model is the stack the internet actually runs. It has four layers, and it's what Linux, your phone and every cloud VM implement.
+
+#### Intuition
+OSI is the textbook map; TCP/IP is the road you actually drive on. Four lanes: link (the wire), internet (IP addresses), transport (TCP/UDP ports) and application (HTTP, DNS, TLS).
+
+#### Must know
+- Layers: **Link → Internet (IP) → Transport (TCP/UDP/QUIC) → Application (HTTP, DNS, TLS)**.
+- OSI 5–7 collapse into "application"; OSI 1–2 collapse into "link".
+- TLS runs **on top of** TCP (or inside QUIC). It is not a transport.
+- HTTP/3 swapped TCP for QUIC without touching IP or HTTP semantics, which shows why layering matters.
+
+#### Numbers to quote
+- Headers: Ethernet 14 B, IPv4 20 B, IPv6 40 B, TCP 20 B, UDP 8 B.
+- MTU 1,500 B, so TCP payload (MSS) ≈ 1,460 B.
+
+#### Common mistakes
+- Thinking TLS is a transport. It runs **on top of** TCP (or inside QUIC).
+- Forgetting that the 40+ bytes of headers matter for tiny messages, such as IoT telemetry or game ticks.
 
 #### How it works
 ```mermaid
@@ -110,10 +145,6 @@ Each layer adds a header: an HTTP request becomes the payload of a TCP segment, 
 #### Trade-offs
 Layering makes the internet evolvable: HTTP/3 replaced TCP with QUIC without changing IP or HTTP semantics. The cost is header overhead and some duplicated work (both TCP and TLS track state).
 
-#### Common mistakes
-- Thinking TLS is a transport. It runs **on top of** TCP (or inside QUIC).
-- Forgetting that the 40+ bytes of headers matter for tiny messages, such as IoT telemetry or game ticks.
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -140,8 +171,33 @@ TCP lives in OS kernels and middleboxes. Changing it takes a decade, and middleb
 #### Interview angle
 > "HTTP rides on TCP, which rides on IP. TCP's in-order delivery causes head-of-line blocking, which is exactly why HTTP/3 moved to QUIC over UDP."
 
+#### Sources
+- [RFC 1122: Requirements for Internet Hosts](https://datatracker.ietf.org/doc/html/rfc1122) — IETF
+- [High Performance Browser Networking: Building blocks of TCP](https://hpbn.co/building-blocks-of-tcp/) — Ilya Grigorik
+
 ### IP addressing — IPv4, IPv6, CIDR, subnetting, NAT
 Every host on a network needs an address. How addresses are grouped (CIDR, subnets) decides what can talk to what, which makes it the foundation of cloud network security.
+
+#### Intuition
+An IP address is a postal address; CIDR is how many houses share a street name. A `/24` street has 256 houses, a `/16` neighbourhood has 65,536. NAT is the office receptionist: everyone inside shares one public phone number, and the receptionist remembers who called whom.
+
+#### Must know
+- `/n` means the first n bits are the network: addresses = 2^(32 − n). Removing one bit doubles the size.
+- Private ranges `10/8`, `172.16/12`, `192.168/16` aren't routable on the internet.
+- **Public subnet** = route to an internet gateway. **Private subnet** = outbound via NAT only, or no internet route at all.
+- Plan non-overlapping CIDRs per VPC and region up front; overlaps block peering forever.
+- NAT gives you a **fixed egress IP** that partners can allow-list.
+
+#### Numbers to quote
+- `/24` = 256 addresses, `/20` = 4,096, `/16` = 65,536.
+- AWS reserves 5 addresses per subnet (a `/24` leaves 251 usable); VPC and subnet sizes range from `/16` to `/28`.
+- One NAT gateway IP handles ~55,000 simultaneous connections per destination; add IPs or gateways beyond that.
+- IPv4 ≈ 4.3 billion addresses; IPv6 is 128-bit.
+
+#### Common mistakes
+- Overlapping CIDRs between VPCs or with the office network, which makes peering impossible later.
+- Putting databases in public subnets "temporarily".
+- Undersizing subnets for Kubernetes, where every pod takes an IP.
 
 #### How it works
 - **IPv4**: 32 bits written as 4 bytes, e.g. `192.168.1.10`. About 4.3 billion addresses, long since exhausted.
@@ -179,10 +235,6 @@ How many hosts fit in a `/24`? 256 addresses, minus the network and broadcast ad
 - NAT saves public IPs and hides internal hosts, but it breaks inbound connections (hence port forwarding and the hole-punching tricks WebRTC needs) and is one more component that can bottleneck.
 - Subnets that are too small leave you out of IPs when Kubernetes gives every pod an IP. Plan generously (`/16` per VPC, `/19`–`/20` per subnet).
 
-#### Common mistakes
-- Overlapping CIDRs between VPCs or with the office network, which makes peering impossible later.
-- Putting databases in public subnets "temporarily".
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -211,8 +263,30 @@ One VPC (e.g. `10.0.0.0/16`) across 3 AZs. Public subnets hold only the ALB and 
 #### Interview angle
 > "Databases and caches live in private subnets with no public IP. Only the app tier's security group can reach them, and egress goes through NAT."
 
+#### Sources
+- [RFC 1918: Address Allocation for Private Internets](https://datatracker.ietf.org/doc/html/rfc1918) — IETF
+- [Subnet CIDR blocks (sizing and the 5 reserved addresses)](https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html) — AWS docs
+- [NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html) — AWS docs
+
 ### TCP — 3-way handshake (SYN → SYN-ACK → ACK)
 TCP is connection-oriented. Before any data flows, both sides agree on starting sequence numbers so they can detect lost, duplicate and reordered bytes. Agreeing costs one round trip.
+
+#### Intuition
+Before a phone call starts: "Can you hear me?" — "Yes, can you hear me?" — "Yes." Only then do you talk. That exchange costs one round trip before a single byte of real data.
+
+#### Must know
+- `SYN → SYN-ACK → ACK` exchanges random starting sequence numbers so loss, duplicates and reordering can be detected.
+- It costs **1 RTT** before data; TLS 1.3 adds another; the request itself a third.
+- **Reuse connections** (pools, keep-alive, gRPC channels) so you pay the handshake once.
+- SYN floods exhaust half-open state; **SYN cookies** and edge DDoS protection defend.
+
+#### Numbers to quote
+- Cold HTTPS request ≈ 3 RTTs before the first response byte (TCP + TLS 1.3 + request).
+- India ↔ us-east-1 RTT ≈ 200–250 ms, so a cold request costs ~0.7 s before any server work.
+
+#### Common mistakes
+- Opening a new connection per request between services. Use connection pools (HikariCP for databases, HTTP keep-alive or gRPC channels for services).
+- Forgetting TLS adds its own round trip on top of TCP's.
 
 #### How it works
 ```mermaid
@@ -246,10 +320,6 @@ Reuse the connection and the next request costs 1 RTT (230 ms). Serve from a Mum
 #### Trade-offs
 The handshake buys reliability and protection against spoofed connections at the cost of latency. **SYN floods** abuse the server-side state allocation, and **SYN cookies** defend against them by encoding the state in the sequence number.
 
-#### Common mistakes
-- Opening a new connection per request between services. Use connection pools (HikariCP for databases, HTTP keep-alive or gRPC channels for services).
-- Forgetting TLS adds its own round trip on top of TCP's.
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -277,8 +347,32 @@ Enable SYN cookies so the server keeps no state until the handshake completes, r
 #### Interview angle
 > "Every new connection costs a round trip before data flows, plus one for TLS. That's why I pool connections between services and terminate user connections at an edge close to them."
 
+#### Sources
+- [RFC 9293: Transmission Control Protocol](https://datatracker.ietf.org/doc/html/rfc9293) — IETF (current TCP spec)
+- [HPBN: Three-way handshake](https://hpbn.co/building-blocks-of-tcp/#three-way-handshake) — Ilya Grigorik
+
 ### TCP — 4-way teardown (FIN → FIN-ACK → FIN → ACK)
 TCP is full-duplex, so each direction closes separately. That's four messages, followed by a waiting period that has real operational consequences.
+
+#### Intuition
+Two people hanging up a call politely: "I'm done talking" — "OK" — "I'm done too" — "OK, bye." Then the one who hung up first waits a moment in case a late "wait!" arrives. That waiting is TIME_WAIT.
+
+#### Must know
+- Each direction closes separately, so there are 4 messages.
+- The side that **closes first** sits in **TIME_WAIT** (~60 s on Linux) holding its port.
+- Piles of **CLOSE_WAIT** = your app isn't closing sockets. It's a bug, not a tuning issue.
+- High request rates + new connection per request → **ephemeral port exhaustion**. The fix is connection pooling.
+- Backend keep-alive timeout must be **longer** than the load balancer's idle timeout.
+
+#### Numbers to quote
+- TIME_WAIT ≈ 60 s on Linux.
+- Default ephemeral ports ≈ 28,000 (32768–60999) per destination IP:port.
+- ALB idle timeout defaults to 60 s.
+
+#### Common mistakes
+- Setting `tcp_tw_recycle` (removed from Linux because it broke clients behind NAT).
+- Treating a pile of TIME_WAIT sockets as a leak. It's normal, until you run out of ports.
+- Backend keep-alive shorter than the LB idle timeout, which causes random 502s/resets.
 
 #### How it works
 ```mermaid
@@ -302,10 +396,6 @@ Fixes: keep-alive or connection pooling (the real fix), widening `net.ipv4.ip_lo
 
 #### Trade-offs
 TIME_WAIT protects correctness at the cost of ports and memory. The side that closes first pays it, which is why servers like to let clients close first.
-
-#### Common mistakes
-- Setting `tcp_tw_recycle` (removed from Linux because it broke clients behind NAT).
-- Treating a pile of TIME_WAIT sockets as a leak. It's normal, until you run out of ports.
 
 #### Problems & fixes
 | Symptom | Cause | Fix |
@@ -333,8 +423,30 @@ A classic mismatch: the ALB idle timeout (60 s by default) is shorter than the b
 #### Interview angle
 > "Short-lived connections leave TIME_WAIT sockets behind. At high request rates that exhausts ports, so load balancers keep long-lived pooled connections to backends."
 
+#### Sources
+- [Coping with the TCP TIME-WAIT state on busy Linux servers](https://vincent.bernat.ch/en/blog/2014-tcp-time-wait-state-linux) — Vincent Bernat
+- [ALB connection idle timeout](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html#connection-idle-timeout) — AWS docs
+
 ### TCP flow control — sliding window protocol
 Flow control stops a fast sender from overwhelming a slow **receiver**. The receiver tells the sender how much buffer space it has left, and the sender never has more unacknowledged bytes in flight than that.
+
+#### Intuition
+A waiter bringing dishes to a small table: they only bring as many plates as there's room for. The table (receiver) keeps saying how much space is left, and the waiter (sender) never overfills it.
+
+#### Must know
+- The receiver advertises free buffer space (`rwnd`) in every ACK; the sender keeps at most `min(rwnd, cwnd)` bytes in flight.
+- **Throughput per connection ≈ window ÷ RTT**, regardless of link speed.
+- **Bandwidth-delay product** (bandwidth × RTT) is the window needed to fill a link.
+- Flow control protects the **receiver**; congestion control protects the **network**.
+- Long, fat links: use parallel streams or multipart transfers.
+
+#### Numbers to quote
+- 64 KB window at 200 ms RTT ≈ 2.6 Mbit/s max.
+- Filling 1 Gbit/s at 200 ms needs a 25 MB window.
+
+#### Common mistakes
+- Confusing flow control (protects the receiver) with congestion control (protects the network).
+- Blaming bandwidth when cross-region transfers are slow. Usually the window and RTT are the limit.
 
 #### How it works
 ```mermaid
@@ -357,10 +469,6 @@ With a 64 KB window and an RTT of 200 ms (India to the US): 64 KB ÷ 0.2 s = **3
 
 #### Trade-offs
 Bigger buffers mean higher throughput on long links, but more memory per connection. With 100k connections, 4 MB buffers each would need 400 GB. Kernels auto-tune buffers for this reason.
-
-#### Common mistakes
-- Confusing flow control (protects the receiver) with congestion control (protects the network).
-- Blaming bandwidth when cross-region transfers are slow. Usually the window and RTT are the limit.
 
 #### Problems & fixes
 | Symptom | Cause | Fix |
@@ -388,8 +496,29 @@ TCP flow control is backpressure at the transport level: a full receiver buffer 
 #### Interview angle
 > "A single TCP stream is limited to window ÷ RTT. For cross-region replication or backups I'd use parallel streams or chunked multipart transfers instead of one big stream."
 
+#### Sources
+- [HPBN: Flow control](https://hpbn.co/building-blocks-of-tcp/#flow-control) — Ilya Grigorik
+- [RFC 7323: TCP window scaling](https://datatracker.ietf.org/doc/html/rfc7323) — IETF
+
 ### TCP congestion control — slow start, AIMD, CUBIC
 Congestion control protects the **network** (the routers in between) from collapse. The sender can't see the network, so it infers congestion from packet loss or rising delay and adjusts its congestion window (`cwnd`).
+
+#### Intuition
+Merging onto a highway you can't see: start slowly, speed up while traffic flows, and brake hard the moment you sense a jam (packet loss). BBR is the driver who watches the traffic itself instead of waiting to bump into the car ahead.
+
+#### Must know
+- **Slow start**: start at ~10 segments and **double every RTT**.
+- **AIMD**: add 1 segment per RTT, **halve on loss** (the sawtooth).
+- **CUBIC** is the Linux default; **BBR** paces to measured bandwidth and RTT and does far better on lossy mobile links.
+- Cold connections are slow for several RTTs, so reuse connections and keep the first payload small (~14 KB).
+
+#### Numbers to quote
+- Initial congestion window = 10 segments ≈ 14 KB (RFC 6928).
+- A 1 MB response on a cold connection needs ~7 RTTs of slow start.
+
+#### Common mistakes
+- Assuming a new connection gets full bandwidth immediately.
+- Shipping huge first responses. Keep the critical first payload under about 14 KB so it fits the initial window.
 
 #### How it works
 ```mermaid
@@ -427,10 +556,6 @@ That's **7 RTTs**. At a 100 ms RTT, 700 ms is spent just ramping up, no matter h
 - Loss-based algorithms (Reno, CUBIC) fill router buffers and add queuing delay (bufferbloat).
 - Delay-based algorithms (BBR) keep latency low but can be unfair to CUBIC flows sharing the link.
 
-#### Common mistakes
-- Assuming a new connection gets full bandwidth immediately.
-- Shipping huge first responses. Keep the critical first payload under about 14 KB so it fits the initial window.
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -457,8 +582,31 @@ Loss-based congestion control (CUBIC) treats random radio loss as congestion and
 #### Interview angle
 > "Slow start means cold connections are slow for several round trips, so connection reuse, HTTP/2 multiplexing and CDNs that keep warm connections to origin all pay off."
 
+#### Sources
+- [RFC 5681: TCP congestion control](https://datatracker.ietf.org/doc/html/rfc5681) — IETF
+- [RFC 9438: CUBIC](https://datatracker.ietf.org/doc/html/rfc9438) — IETF
+- [BBR: Congestion-based congestion control](https://research.google/pubs/pub45646/) — Cardwell et al., ACM Queue 2016
+
 ### UDP — connectionless, no ordering, no guarantee, use cases
 UDP is "IP with ports": it sends independent datagrams with no handshake, no retransmission, no ordering and no congestion control. Its header is 8 bytes. Whatever reliability you need, you build yourself.
+
+#### Intuition
+TCP is a registered letter with tracking; UDP is a postcard. Postcards are fast and cheap, but if one is lost nobody tells you, and they can arrive out of order.
+
+#### Must know
+- No handshake, no retransmission, no ordering, no congestion control: an **8-byte header** and that's it.
+- Use it where **old data is worthless**: live audio/video, games, DNS, metrics, and QUIC (which builds reliability per stream on top).
+- Never for things that must not be lost: chat, orders, payments.
+- Keep datagrams ≤ ~1,200 B to avoid fragmentation, and have a TCP fallback because firewalls block UDP.
+
+#### Numbers to quote
+- UDP header 8 B vs TCP 20+ B.
+- Safe datagram size ≈ 1,200 B.
+
+#### Common mistakes
+- Using UDP for anything that must not be lost: chat messages, payments, orders.
+- Sending datagrams bigger than the path MTU (~1,200 to 1,500 B), which get fragmented or dropped.
+- Building your own reliability on UDP instead of using QUIC.
 
 #### How it works
 ```mermaid
@@ -492,10 +640,6 @@ sequenceDiagram
 #### Trade-offs
 UDP gives the lowest latency and full control, but you own reliability, ordering, congestion control and security. Some corporate firewalls block it too, so production systems (Zoom, QUIC) fall back to TCP.
 
-#### Common mistakes
-- Using UDP for anything that must not be lost: chat messages, payments, orders.
-- Sending datagrams bigger than the path MTU (~1,200 to 1,500 B), which get fragmented or dropped.
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -523,8 +667,30 @@ Number every packet, have the receiver ACK (or NACK gaps), retransmit after a ti
 #### Interview angle
 > "For the live location stream I'd tolerate loss, since the next update supersedes it. So UDP or WebRTC fits there, while chat messages and payments go over TCP with acknowledgements."
 
+#### Sources
+- [RFC 768: User Datagram Protocol](https://datatracker.ietf.org/doc/html/rfc768) — IETF
+- [RFC 8085: UDP usage guidelines](https://datatracker.ietf.org/doc/html/rfc8085) — IETF
+
 ### DNS resolution — recursive vs iterative, root → TLD → authoritative
 DNS turns names into IP addresses. It's a globally distributed, heavily cached, hierarchical database, and it's the first hop of almost every request your system serves.
+
+#### Intuition
+Asking for a shop's address: you ask your friend (the recursive resolver), who asks the city directory (root), which points to the street directory (.com), which points to the shop itself (authoritative). Your friend remembers the answer for a while (TTL), so next time it's instant.
+
+#### Must know
+- The client asks a **recursive resolver** for the final answer; the resolver walks **root → TLD → authoritative** iteratively.
+- Answers are cached everywhere (browser, OS, resolver) for the record's TTL.
+- **GeoDNS / latency-based routing** = global load balancing at the DNS layer.
+- DNS is a dependency that can fail: consider a secondary provider and make apps re-resolve (JVM DNS cache!).
+
+#### Numbers to quote
+- 13 root server identities (hundreds of anycast instances).
+- Failover via DNS takes TTL + client caching, typically minutes.
+
+#### Common mistakes
+- Forgetting that DNS is a dependency that can fail. The 2016 Dyn outage took down Twitter, GitHub and others. Use more than one DNS provider for critical domains.
+- JVM services caching DNS forever (`networkaddress.cache.ttl`), which breaks failover.
+- Kubernetes `ndots:5` multiplying lookups for external names.
 
 #### How it works
 ```mermaid
@@ -555,10 +721,6 @@ Route 53 latency-based routing for `api.myapp.com`: a user in Chennai resolves t
 - Caching makes DNS fast and resilient, but changes propagate only as TTLs expire.
 - DNS-based load balancing is coarse: it sees the resolver's location, not the user's (EDNS Client Subnet helps), and clients may ignore the TTL.
 
-#### Common mistakes
-- Forgetting that DNS is a dependency that can fail. The 2016 Dyn outage took down Twitter, GitHub and others. Use more than one DNS provider for critical domains.
-- JVM services caching DNS forever (`networkaddress.cache.ttl`), which breaks failover.
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -586,8 +748,27 @@ Latency- or geo-based records send each user to the nearest region, and health c
 #### Interview angle
 > "The client resolves our domain through GeoDNS, which hands out the nearest healthy region's load balancer. A short TTL (60 s) on that record bounds how long failover takes."
 
+#### Sources
+- [What is DNS?](https://www.cloudflare.com/learning/dns/what-is-dns/) — Cloudflare Learning
+- [Root servers](https://www.iana.org/domains/root/servers) — IANA
+- [Debugging DNS resolution in Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/) — Kubernetes docs
+
 ### DNS record types — A, AAAA, CNAME, MX, TXT, NS, PTR, SOA
 A DNS zone is a set of typed records. Knowing what each type does is enough to wire up domains, CDNs, email and certificate validation, and to debug outages with `dig`.
+
+#### Intuition
+A DNS zone is a contact card for your domain: A/AAAA is the street address, CNAME says "see this other card", MX is where to deliver mail, TXT is the notes field used to prove ownership, NS says which office keeps the card.
+
+#### Must know
+- **A/AAAA** = IP, **CNAME** = alias, **MX** = mail, **TXT** = SPF/DKIM/verification, **NS** = delegation, **SOA** = zone metadata, **CAA** = which CAs may issue certs.
+- A CNAME **can't sit at the apex** or next to other records on the same name; use ALIAS/ANAME/CNAME flattening.
+- SPF + DKIM + DMARC TXT records keep transactional email out of spam.
+- Delete DNS records when you delete resources, or you risk **subdomain takeover**.
+
+#### Common mistakes
+- A CNAME at the apex, or a CNAME next to other records on the same name.
+- Missing SPF, DKIM or DMARC TXT records, which sends your transactional emails to spam.
+- Leaving dangling CNAMEs to deleted buckets or apps.
 
 #### How it works
 | Record | Maps | Example |
@@ -617,10 +798,6 @@ Debugging: `dig +trace api.shop.com` shows every referral from root to answer. `
 #### Trade-offs
 CNAMEs add indirection (move the CDN without touching the record) at the cost of an extra lookup.
 
-#### Common mistakes
-- A CNAME at the apex, or a CNAME next to other records on the same name.
-- Missing SPF, DKIM or DMARC TXT records, which sends your transactional emails to spam.
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -648,8 +825,30 @@ Configure the CDN with your current server as origin and test it via the CDN hos
 #### Interview angle
 > "www is a CNAME to the CDN, and the apex uses an ALIAS record to the load balancer. TXT records handle SPF and DKIM so OTP emails don't land in spam."
 
+#### Sources
+- [DNS records overview](https://www.cloudflare.com/learning/dns/dns-records/) — Cloudflare Learning
+- [Route 53 alias vs non-alias records](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-choosing-alias-non-alias.html) — AWS docs
+
 ### DNS TTL — caching behavior, propagation delay
 Every DNS answer carries a **TTL** (time to live, in seconds) that says how long caches may keep it. TTL is the knob that trades lookup load and latency against how quickly changes take effect.
+
+#### Intuition
+TTL is the "best before" date stamped on every DNS answer. Until it expires, caches keep serving the old answer, so "propagation" is really just waiting for old answers to go stale.
+
+#### Must know
+- Changes take effect only as caches expire: there's no push.
+- Before a migration: **lower TTL → wait one old TTL → switch → raise TTL**.
+- Short TTL = fast failover but more queries; long TTL = fewer lookups but slow changes.
+- Negative answers (NXDOMAIN) are cached too, for the SOA's negative TTL.
+- Keep the old endpoint alive after switching; some clients ignore TTLs.
+
+#### Numbers to quote
+- 60 s for failover records, 300 s typical, 86,400 s for stable records.
+- 99.99% allows ~4.3 min downtime a month, less than DNS failover usually takes.
+
+#### Common mistakes
+- Lowering the TTL *at the same time* as the change. Caches still hold the old long-TTL entry.
+- Decommissioning the old server the moment you flip DNS.
 
 #### How it works
 ```mermaid
@@ -684,10 +883,6 @@ sequenceDiagram
 | Short (30–60 s) | fast failover and migrations | more queries, a little extra latency, higher DNS bill |
 | Long (1 h – 1 day) | fewer lookups, resilient if DNS is down | slow to change, slow failover |
 
-#### Common mistakes
-- Lowering the TTL *at the same time* as the change. Caches still hold the old long-TTL entry.
-- Decommissioning the old server the moment you flip DNS.
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -714,8 +909,31 @@ sequenceDiagram
 #### Interview angle
 > "Failover via DNS is bounded by the TTL plus misbehaving clients, so it takes minutes. For faster failover I'd use anycast or a global load balancer with health checks."
 
+#### Sources
+- [What is TTL?](https://www.cloudflare.com/learning/cdn/glossary/time-to-live-ttl/) — Cloudflare Learning
+- [RFC 2308: Negative caching of DNS queries](https://datatracker.ietf.org/doc/html/rfc2308) — IETF
+
 ### Latency sources — propagation, transmission, queuing, processing
 The time for a request to cross a network has four parts. Knowing which one dominates tells you which fix will actually help.
+
+#### Intuition
+A road trip's duration = driving distance (propagation) + how long the convoy takes to pass a point (transmission) + traffic jams (queuing) + toll booths (processing). You can't drive faster than light, but you can avoid jams and shorten the route.
+
+#### Must know
+- **Propagation** = distance ÷ speed of light in fibre: fix by moving closer (CDN, region near users).
+- **Transmission** = size ÷ bandwidth: fix with smaller payloads and compression.
+- **Queuing** explodes near saturation: keep utilisation ~60–70% and shed load.
+- **Processing** = CPU per hop: fix with faster code, caching, fewer hops.
+- Find which one dominates your p99 before optimising.
+
+#### Numbers to quote
+- Light in fibre ≈ 5 µs/km; 1,000 km ≈ 10 ms RTT.
+- Same AZ ≈ 0.5 ms, cross-AZ ≈ 1–2 ms, India ↔ US ≈ 200–250 ms RTT.
+- Queue length grows like ρ ÷ (1 − ρ): at 95% utilisation that's 19× the 50% case.
+
+#### Common mistakes
+- Optimising code (processing) when the user is 200 ms away (propagation).
+- Running servers at 90%+ CPU "for efficiency", where queuing delay makes tail latency explode.
 
 #### How it works
 ```mermaid
@@ -741,10 +959,6 @@ Queuing: a server at 50% utilisation queues briefly. At 95% the queue (and the p
 
 #### Trade-offs
 Fighting propagation costs money (more regions, data replication). Fighting queuing costs capacity headroom. You pick based on which component dominates your p99.
-
-#### Common mistakes
-- Optimising code (processing) when the user is 200 ms away (propagation).
-- Running servers at 90%+ CPU "for efficiency", where queuing delay makes tail latency explode.
 
 #### Problems & fixes
 | Symptom | Cause | Fix |
@@ -773,8 +987,30 @@ You can't beat ~200 ms RTT of propagation to Virginia. You can: serve static ass
 #### Interview angle
 > "Users are in India, so the origin goes in Mumbai and static assets on a CDN. That removes ~200 ms of propagation that no code change could. I'd also keep servers under ~70% utilisation so queuing doesn't hurt p99."
 
+#### Sources
+- [HPBN: Primer on latency and bandwidth](https://hpbn.co/primer-on-latency-and-bandwidth/) — Ilya Grigorik
+- [Latency numbers every programmer should know](https://gist.github.com/jboner/2841832) — Jonas Bonér (after Jeff Dean)
+
 ### Bandwidth vs throughput — why they differ in practice
 **Bandwidth** is the capacity of a link (the pipe's width). **Throughput** is what you actually achieve end to end, which is always lower and is set by the tightest constraint along the path.
+
+#### Intuition
+Bandwidth is how wide the highway is; throughput is how many cars actually get through per hour. A narrow bridge on the way, a slow driver at the front, or accidents (packet loss) all cut throughput no matter how wide the highway is.
+
+#### Must know
+- Throughput ≤ min(bottleneck link, **window ÷ RTT**, what packet loss allows).
+- More bandwidth only helps if the link is the bottleneck.
+- Long-distance bulk transfers need **parallel streams** or chunked multipart uploads.
+- Plan capacity at ~70% of nominal bandwidth.
+- Measure with `iperf3 -P 8`; don't assume.
+
+#### Numbers to quote
+- 512 KB window at 150 ms RTT ≈ 28 Mbit/s, even on a 1 Gbit link.
+- 1M concurrent 720p streams ≈ 3 Tbit/s (3 Mbit/s each).
+
+#### Common mistakes
+- Using advertised bandwidth in capacity estimates. Budget about 60–70% of it.
+- Ignoring the bandwidth-delay product for cross-region replication.
 
 #### How it works
 ```mermaid
@@ -794,10 +1030,6 @@ You pay for a 1 Gbit/s link between two regions with a 150 ms RTT, but a single 
 
 #### Trade-offs
 Buying bandwidth only helps when the link is the bottleneck. Otherwise you need fewer round trips, parallelism or less loss.
-
-#### Common mistakes
-- Using advertised bandwidth in capacity estimates. Budget about 60–70% of it.
-- Ignoring the bandwidth-delay product for cross-region replication.
 
 #### Problems & fixes
 | Symptom | Cause | Fix |
@@ -825,8 +1057,30 @@ Chunk the file (e.g. 5–10 MB parts) and upload parts in parallel straight to o
 #### Interview angle
 > "For estimation I'll assume we sustain about 70% of link bandwidth. Cross-region copies are throughput-limited by RTT, so I'd chunk and parallelise them."
 
+#### Sources
+- [HPBN: Bandwidth-delay product](https://hpbn.co/building-blocks-of-tcp/#bandwidth-delay-product) — Ilya Grigorik
+- [Uploading objects with multipart upload](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html) — AWS docs
+
 ### RTT (Round Trip Time) and its compounding effect on performance
 RTT is the time for a packet to go to the other side and for the reply to come back. What matters is **how many round trips** a user-visible action needs: they add up linearly and dominate latency far more often than bandwidth does.
+
+#### Intuition
+Every round trip is a walk to the kitchen and back. Making ten separate trips for ten items is slow no matter how fast you walk; carrying everything in one trip (batching) or sending ten helpers at once (parallel calls) is what actually saves time.
+
+#### Must know
+- Latency ≈ **number of round trips × RTT** + server time.
+- Sequential calls cost the **sum**; parallel calls cost the **max**.
+- Cut round trips: connection reuse, batch/BFF endpoints, GraphQL, parallel fan-out.
+- Shrink the RTT: edge/CDN termination, keep request paths in one region.
+- N+1 patterns (services or DB) are round-trip bugs.
+
+#### Numbers to quote
+- Cold HTTPS = 3 RTTs before first byte; warm = 1.
+- 12 sequential calls at 100 ms RTT = 1.2 s; one BFF call = 100 ms.
+
+#### Common mistakes
+- N+1 query patterns, both between services and against the database.
+- Chatty protocols over high-RTT links (cross-region synchronous calls inside a request path).
 
 #### How it works
 ```mermaid
@@ -858,10 +1112,6 @@ The same thing happens on the backend. A service that calls 5 downstream service
 #### Trade-offs
 Batching and aggregation endpoints cut round trips but create bigger, more coupled APIs. Parallel fan-out cuts latency but raises load and tail-latency risk (you wait for the slowest of N).
 
-#### Common mistakes
-- N+1 query patterns, both between services and against the database.
-- Chatty protocols over high-RTT links (cross-region synchronous calls inside a request path).
-
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -888,3 +1138,8 @@ A **Backend-for-Frontend** endpoint that aggregates what the screen needs in one
 
 #### Interview angle
 > "Latency is round trips × RTT. I'd cut round trips (batch APIs, parallel fan-out, connection reuse) and shrink the RTT (edge, same-region dependencies) before tuning code."
+
+#### Sources
+- [Round Trip Time (RTT)](https://developer.mozilla.org/en-US/docs/Glossary/Round_Trip_Time) — MDN
+- [HPBN: Primer on latency and bandwidth](https://hpbn.co/primer-on-latency-and-bandwidth/) — Ilya Grigorik
+

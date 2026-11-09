@@ -3,6 +3,22 @@
 ### HTTP/1.0 — new connection per request
 HTTP/1.0 (1996) opened a **new TCP connection for every request** and closed it after the response. A page with 30 images meant 30 TCP handshakes and 30 slow starts. Every later HTTP version is a reaction to that cost.
 
+#### Intuition
+Like hanging up and redialling for every sentence of a phone call. Each new call costs a dial tone and a "hello" before anything useful is said.
+
+#### Must know
+- One TCP connection **per request**, closed after the response.
+- Every resource pays a handshake and a cold slow start; closed sockets pile up in TIME_WAIT.
+- Browsers opened ~6 parallel connections per host; sites used **domain sharding** to get more (an anti-pattern under HTTP/2).
+- Each later version fixes this: 1.1 reuses connections, 2 multiplexes, 3 removes TCP head-of-line blocking.
+
+#### Numbers to quote
+- 24 resources over 6 connections at 100 ms RTT ≈ 800 ms of pure round-trip waiting.
+
+#### Common mistakes
+- Opening a fresh connection per call between microservices, which recreates HTTP/1.0's cost.
+- Keeping domain sharding after moving to HTTP/2.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -52,8 +68,30 @@ Spreading assets across several hostnames to get around the browser's 6-connecti
 #### Interview angle
 > "HTTP/1.0's connection-per-request is the baseline every later version optimises: 1.1 reuses connections, 2 multiplexes them, 3 removes TCP's head-of-line blocking."
 
+#### Sources
+- [Evolution of HTTP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Evolution_of_HTTP) — MDN
+- [HPBN: HTTP/1.X](https://hpbn.co/http1x/) — Ilya Grigorik
+
 ### HTTP/1.1 — persistent connections, pipelining, keep-alive, Head-of-Line blocking
 HTTP/1.1 (1997) made connections **persistent by default**: many requests reuse one TCP connection. It also made the `Host` header mandatory (virtual hosting) and added chunked transfer encoding. Its big remaining flaw is **head-of-line (HoL) blocking**: one connection handles one request at a time.
+
+#### Intuition
+A single checkout lane that stays open between customers (keep-alive), but still serves one customer at a time. One slow customer holds up everyone behind them: head-of-line blocking.
+
+#### Must know
+- Connections are **persistent by default**; `Host` header mandatory; chunked encoding for streaming.
+- One request at a time per connection → **HoL blocking**, hence ~6 connections per host in browsers.
+- Pipelining exists on paper but was never enabled by browsers.
+- Proxies should keep **pooled keep-alive connections** to backends.
+- Backend keep-alive timeout must exceed the load balancer's idle timeout, or you get random 502s.
+
+#### Numbers to quote
+- ~6 connections per host in browsers.
+- ALB idle timeout 60 s by default; Node.js `keepAliveTimeout` default 5 s (set it above 60 s behind an ALB).
+
+#### Common mistakes
+- Leaving the backend keep-alive shorter than the LB idle timeout.
+- Thinking keep-alive fixes HoL blocking. It only removes repeated handshakes.
 
 #### How it works
 ```mermaid
@@ -105,8 +143,29 @@ A keep-alive race. The backend closes an idle connection (e.g. Node's default 5 
 #### Interview angle
 > "HTTP/1.1 reuses connections but serialises requests on each one, so browsers open ~6 per host. Between our proxy and services I'd keep pooled keep-alive connections with timeouts aligned to the load balancer's."
 
+#### Sources
+- [RFC 9112: HTTP/1.1](https://datatracker.ietf.org/doc/html/rfc9112) — IETF
+- [Connection management in HTTP/1.x](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Connection_management_in_HTTP_1.x) — MDN
+
 ### HTTP/2 — multiplexing streams, header compression (HPACK), server push, binary framing
 HTTP/2 (2015) keeps HTTP's semantics (methods, headers, status codes) but changes the wire format. Requests and responses are split into **binary frames** tagged with a **stream ID**, so many requests share **one TCP connection at the same time**.
+
+#### Intuition
+Instead of one lane per customer, HTTP/2 chops every order into numbered slips and sends them all down one conveyor belt, interleaved. The kitchen reassembles each order by its number (stream ID).
+
+#### Must know
+- Same HTTP semantics, **binary frames**, many **streams** multiplexed on **one connection**.
+- **HPACK** compresses repeated headers (cookies, user-agent) to a few bytes.
+- Fixes HoL at the HTTP layer, **not** at TCP: one lost packet still stalls every stream.
+- Server push is dead (Chrome removed it); use `103 Early Hints` / preload.
+- Long-lived HTTP/2 (gRPC) connections need **request-level (L7) load balancing**.
+
+#### Numbers to quote
+- 24 requests at 100 ms RTT: ~800 ms of waits on HTTP/1.1 vs ~200–300 ms on HTTP/2.
+
+#### Common mistakes
+- Balancing gRPC with an L4 balancer, so all traffic sticks to one pod.
+- Claiming HTTP/2 removes head-of-line blocking completely.
 
 #### How it works
 ```mermaid
@@ -159,8 +218,30 @@ No. It removes HoL at the HTTP layer (requests no longer wait for each other), b
 #### Interview angle
 > "HTTP/2 multiplexes all requests over one connection with compressed headers, which is ideal for API gateways and gRPC between services. But I'd use L7 request-level balancing, since connections are long-lived."
 
+#### Sources
+- [RFC 9113: HTTP/2](https://datatracker.ietf.org/doc/html/rfc9113) — IETF
+- [HPBN: HTTP/2](https://hpbn.co/http2/) — Ilya Grigorik
+- [Load balancing gRPC](https://grpc.io/blog/grpc-load-balancing/) — gRPC blog
+
 ### HTTP/3 — QUIC over UDP, 0-RTT connection, built-in TLS 1.3, no TCP HoL blocking
 HTTP/3 runs HTTP over **QUIC**, a transport built on UDP. QUIC does what TCP + TLS did (reliability, congestion control, encryption) but with **independent streams**, a **combined handshake** and **connection migration**.
+
+#### Intuition
+HTTP/2's conveyor belt still stops entirely if one slip falls off. HTTP/3 gives each order its own little belt (QUIC streams over UDP), so a dropped slip only delays that one order, and the belts keep running when you move from Wi-Fi to 4G.
+
+#### Must know
+- HTTP over **QUIC** (UDP), with **TLS 1.3 built in**.
+- Independent streams: loss stalls only its own stream.
+- **1-RTT** setup, **0-RTT** on resumption (replayable, so idempotent requests only).
+- **Connection migration** via connection IDs survives network switches.
+- Advertised with `Alt-Svc`; clients fall back to HTTP/2 when UDP is blocked.
+
+#### Numbers to quote
+- New connection: TCP + TLS 1.3 = 2 RTT vs QUIC = 1 RTT (0 on resume).
+
+#### Common mistakes
+- Allowing 0-RTT for non-idempotent requests (payments).
+- Forgetting the HTTP/2 fallback for networks that block UDP 443.
 
 #### How it works
 ```mermaid
@@ -215,8 +296,30 @@ Yes. Independent streams avoid TCP HoL stalls under packet loss, the 1-RTT/0-RTT
 #### Interview angle
 > "HTTP/3 helps most on lossy mobile networks: independent streams, faster handshakes and connection migration. I'd enable it at the CDN edge with HTTP/2 fallback and keep 0-RTT for idempotent reads only."
 
+#### Sources
+- [RFC 9114: HTTP/3](https://datatracker.ietf.org/doc/html/rfc9114) — IETF
+- [RFC 9000: QUIC](https://datatracker.ietf.org/doc/html/rfc9000) — IETF
+- [What is HTTP/3?](https://www.cloudflare.com/learning/performance/what-is-http3/) — Cloudflare Learning
+
 ### HTTPS — TLS handshake flow: ClientHello → ServerHello → Certificate → Key Exchange → Finished
 HTTPS is HTTP inside a **TLS** session. The handshake achieves three things before any HTTP data flows: **authenticate the server** (certificate), **agree on a shared secret key** (key exchange), and **agree on algorithms** (cipher suite).
+
+#### Intuition
+Before whispering secrets, you check the other person's ID card (certificate), then the two of you agree on a secret code word nobody listening could work out (key exchange). After that, everything is said in that code (fast symmetric encryption).
+
+#### Must know
+- The handshake does three things: **authenticate the server**, **agree a shared key** (ECDHE), **agree ciphers**.
+- Asymmetric crypto only in the handshake; data uses fast symmetric ciphers (AES-GCM, ChaCha20).
+- **SNI** picks the right certificate when many sites share an IP.
+- Terminate TLS at the edge (CDN/ALB); use **mTLS** internally where compliance demands.
+- Automate certificate renewal and alert on expiry.
+
+#### Numbers to quote
+- TLS 1.3: 1 RTT (0 on resume). TLS 1.2: 2 RTT.
+
+#### Common mistakes
+- Serving the leaf certificate without the intermediate (works in browsers, fails in Java/Android).
+- Manual certificate renewal, the classic avoidable outage.
 
 #### How it works
 ```mermaid
@@ -271,8 +374,29 @@ The server isn't sending the intermediate certificate. Browsers often fill gaps 
 #### Interview angle
 > "TLS terminates at the load balancer with auto-renewed certificates. Internally I'd use mTLS through the mesh for payment services, and keep connections alive so handshakes are rare."
 
+#### Sources
+- [What happens in a TLS handshake?](https://www.cloudflare.com/learning/ssl/what-happens-in-a-tls-handshake/) — Cloudflare Learning
+- [RFC 8446: TLS 1.3](https://datatracker.ietf.org/doc/html/rfc8446) — IETF
+
 ### TLS 1.2 vs TLS 1.3 — fewer round trips, no RSA key exchange (forward secrecy)
 TLS 1.3 (2018) is faster and safer than 1.2: **one round-trip handshake instead of two**, **0-RTT resumption**, and removal of legacy, insecure options. Most importantly, every connection now has **forward secrecy**.
+
+#### Intuition
+TLS 1.2 was a two-step introduction with an optional unsafe shortcut. TLS 1.3 cut it to one step and removed the shortcut, so every conversation uses throwaway keys: steal the master key tomorrow and yesterday's recordings still stay secret.
+
+#### Must know
+- TLS 1.3: **1 RTT** handshake, 0-RTT resumption, **ECDHE only**, AEAD ciphers only, encrypted certificate.
+- **Forward secrecy**: ephemeral keys mean a stolen server key can't decrypt recorded past traffic.
+- Minimum today is TLS 1.2 with ECDHE + AEAD; prefer 1.3.
+- 1.3 breaks passive decryption by network monitors; inspect at the termination point instead.
+
+#### Numbers to quote
+- Saves 1 RTT per new connection (≈ 100–200 ms on mobile).
+- 5 cipher suites in TLS 1.3.
+
+#### Common mistakes
+- Leaving TLS 1.0/1.1 or RSA key exchange enabled for "compatibility".
+- Expecting big savings on long-lived pooled connections, where the handshake is rare anyway.
 
 #### How it works
 ```mermaid
@@ -331,8 +455,28 @@ One full round trip per new connection (2 RTT → 1 RTT), and up to two with 0-R
 #### Interview angle
 > "I'd enforce TLS 1.2+ with ECDHE suites and prefer 1.3: one round trip less per connection, and forward secrecy, so a leaked key can't decrypt recorded traffic."
 
+#### Sources
+- [RFC 8446: TLS 1.3](https://datatracker.ietf.org/doc/html/rfc8446) — IETF
+- [Mozilla server-side TLS recommendations](https://wiki.mozilla.org/Security/Server_Side_TLS) — Mozilla
+
 ### Mutual TLS (mTLS) — both client and server authenticate with certificates
 In normal TLS only the **server** proves its identity. In **mTLS** the client also presents a certificate, so both sides know exactly who they're talking to. It's the backbone of zero-trust service-to-service security and of many bank and partner integrations.
+
+#### Intuition
+Normal TLS is a shop showing you its licence. mTLS is a members-only club: you show your membership card too, so both sides know exactly who they're dealing with.
+
+#### Must know
+- Both sides present certificates: **mutual authentication** plus encryption.
+- Service meshes (Istio, Linkerd) issue and rotate short-lived workload certs (SPIFFE IDs) automatically.
+- Authentication ≠ authorization: add per-identity allow policies.
+- Standard for bank/partner APIs (often alongside OAuth and IP allow-lists).
+
+#### Numbers to quote
+- Mesh workload certs typically rotate every ~24 hours.
+
+#### Common mistakes
+- Turning on mTLS without authorization policies, so any compromised service can call anything.
+- Rotating the CA without overlapping old and new trust bundles.
 
 #### How it works
 ```mermaid
@@ -390,13 +534,37 @@ API keys are simple but are bearer secrets that leak in logs and repos. mTLS pro
 #### Interview angle
 > "Inside the cluster I'd rely on mesh-managed mTLS for identity and encryption, with authorization policies on top, so a compromised pod can't call the ledger service."
 
+#### Sources
+- [What is mutual TLS?](https://www.cloudflare.com/learning/access-management/what-is-mutual-tls/) — Cloudflare Learning
+- [Istio security concepts](https://istio.io/latest/docs/concepts/security/) — Istio docs
+- [SPIFFE concepts](https://spiffe.io/docs/latest/spiffe-about/spiffe-concepts/) — SPIFFE
+
 ### Certificate chains — root CA → intermediate CA → leaf certificate
 A browser trusts a site's certificate because it can follow a **chain of signatures** from that certificate up to a **root CA** already in its trust store. Roots are kept offline, and intermediates do the day-to-day signing.
+
+#### Intuition
+A chain of signed recommendation letters: your browser already trusts the head office (root CA), which vouches for a regional manager (intermediate), who vouches for the shop (leaf certificate). Miss the middle letter and some clients refuse to trust the shop.
+
+#### Must know
+- Root (in trust stores, kept offline) → intermediate → leaf.
+- The server sends **leaf + intermediates**, never the root.
+- Clients check signatures, **SAN** hostname match, validity dates, sometimes revocation.
+- Public certificate lifetimes are shrinking: automate issuance and renewal (ACM, cert-manager, ACME).
+- Don't pin leaf certificates in apps; pin keys with a backup, or don't pin.
+
+#### Numbers to quote
+- Max public cert validity: 200 days (from March 2026) → 100 days (March 2027) → 47 days (March 2029).
+- Let's Encrypt certificates last 90 days.
+
+#### Common mistakes
+- Missing intermediate: works in Chrome, fails in curl/Java/Android.
+- Pinning the leaf certificate, so the app breaks on renewal.
+- Hard-coding a specific Let's Encrypt intermediate; they rotate.
 
 #### How it works
 ```mermaid
 flowchart TD
-  R["Root CA: self-signed, in OS/browser trust store, kept offline"] -- "signs" --> I["Intermediate CA: e.g. R3 / Amazon RSA 2048 M01"]
+  R["Root CA: self-signed, in OS/browser trust store, kept offline"] -- "signs" --> I["Intermediate CA: e.g. Let's Encrypt R12 / Amazon RSA 2048 M01"]
   I -- "signs" --> L["Leaf certificate: shop.com, SAN: shop.com, *.shop.com, valid 90 days"]
   L -- "served by" --> S["Your server sends leaf + intermediate"]
   B["Browser"] -- "verifies each signature up to a trusted root, plus hostname, dates, revocation" --> S
@@ -407,13 +575,13 @@ The client checks: every signature in the chain, that the hostname matches the *
 #### Example
 `openssl s_client -connect shop.com:443 -showcerts` shows:
 ```text
-0 s:CN = shop.com              i:C = US, O = Let's Encrypt, CN = R3
-1 s:C = US, O = Let's Encrypt, CN = R3   i:O = Internet Security Research Group, CN = ISRG Root X1
+0 s:CN = shop.com              i:C = US, O = Let's Encrypt, CN = R12
+1 s:C = US, O = Let's Encrypt, CN = R12  i:O = Internet Security Research Group, CN = ISRG Root X1
 ```
-Depth 0 is the leaf, depth 1 the intermediate. The root (ISRG Root X1) comes from the client's trust store.
+Depth 0 is the leaf, depth 1 the intermediate. The root (ISRG Root X1) comes from the client's trust store. Let's Encrypt rotates its intermediates (R3 is retired, R10/R11 no longer issue), so never hard-code or pin a specific intermediate.
 
 #### Trade-offs
-Short-lived certificates (90 days, heading to 47) limit damage from key theft, but demand automated renewal. Wildcards (`*.shop.com`) are convenient, but one leaked key exposes every subdomain.
+Short-lived certificates limit damage from key theft, but demand automated renewal. Industry rules (CA/B Forum ballot SC-081) cap public certificates at 200 days since March 2026, 100 days from March 2027 and 47 days from March 2029, so manual renewal stops being viable. Wildcards (`*.shop.com`) are convenient, but one leaked key exposes every subdomain.
 
 #### Problems & fixes
 | Symptom | Cause | Fix |
@@ -425,7 +593,7 @@ Short-lived certificates (90 days, heading to 47) limit damage from key theft, b
 
 #### Cheat sheet
 - Root (trust store) → intermediate → leaf. Server sends leaf + intermediates.
-- Check the SAN, not the CN. Validity ≤ 398 days (Let's Encrypt 90).
+- Check the SAN, not the CN. Max public cert validity: 200 days (2026) → 100 (2027) → 47 (2029). Let's Encrypt issues 90-day certs.
 - Tools: `openssl s_client -showcerts`, SSL Labs, `openssl x509 -text -noout`.
 
 #### Interview questions
@@ -442,8 +610,27 @@ A compromised root breaks trust for every certificate under it, and replacing a 
 #### Interview angle
 > "Certificates are issued and rotated automatically (ACM or cert-manager), the server sends the full chain, and expiry is monitored with alerts weeks in advance. Expired certificates are a top cause of avoidable outages."
 
+#### Sources
+- [Let's Encrypt chains of trust](https://letsencrypt.org/certificates/) — Let's Encrypt
+- [47-day certificate validity timeline (SC-081)](https://www.digicert.com/blog/tls-certificate-lifetimes-will-officially-reduce-to-47-days) — DigiCert
+
 ### HTTP methods — GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS and idempotency of each
 HTTP methods carry meaning that the whole infrastructure relies on. Caches, proxies, retries and clients all behave differently depending on whether a method is **safe** (no side effects) and **idempotent** (repeating it has the same effect as doing it once).
+
+#### Intuition
+Pressing a lift's "floor 5" button ten times still takes you to floor 5 (idempotent, like PUT). Pressing "add ₹100" ten times adds ₹1,000 (not idempotent, like POST). Retries are only safe for the first kind.
+
+#### Must know
+- **Safe** (no side effects): GET, HEAD, OPTIONS.
+- **Idempotent**: safe ones + PUT, DELETE. Not idempotent: POST, PATCH (unless designed to be).
+- Proxies, gateways and clients retry idempotent methods automatically.
+- Make POSTs retry-safe with an **Idempotency-Key** + server-side dedupe (unique constraint).
+- Never change state on GET.
+
+#### Common mistakes
+- Retrying a POST without an idempotency key, which creates duplicate orders or charges.
+- Mutating data on GET (`GET /delete?id=5`), which crawlers and prefetchers will trigger.
+- Thinking a 404 on a repeated DELETE breaks idempotency. Idempotency is about state, not the status code.
 
 #### How it works
 | Method | Meaning | Safe | Idempotent | Typical response |
@@ -499,8 +686,27 @@ Yes. Idempotency is about the **server state**, not the response code. After one
 #### Interview angle
 > "All writes accept an Idempotency-Key. PUT and DELETE are naturally idempotent, and POSTs are deduplicated server-side, so the client, gateway and service mesh can all retry safely."
 
+#### Sources
+- [RFC 9110 §9.2: Common method properties](https://datatracker.ietf.org/doc/html/rfc9110#section-9.2) — IETF
+- [Idempotent requests](https://docs.stripe.com/api/idempotent_requests) — Stripe API docs
+
 ### HTTP status codes — 200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504
 Status codes are a contract: clients, load balancers, caches and monitoring all act on them. The right code tells the caller **whose fault it is and whether to retry**.
+
+#### Intuition
+Status codes tell the caller whose fault it is and what to do next: 4xx means "fix your request", 5xx means "our problem, try again later", and 429/503 add "here's when to try again".
+
+#### Must know
+- **4xx = caller's fault** (don't retry as-is). **5xx = server's fault** (retry with backoff).
+- **401** = who are you? **403** = I know you, and no. **409** = conflicts with current state. **422** = valid JSON, invalid meaning.
+- **429/503** + `Retry-After` for rate limiting and load shedding.
+- **502** = upstream broke; **504** = upstream too slow.
+- Never return errors as `200 {"error": …}`.
+
+#### Common mistakes
+- Retrying on every error, including 4xx.
+- Returning errors as 200, which hides them from monitoring and retries.
+- Downstream timeouts longer than the load balancer's, which turns failures into 504s instead of clear errors.
 
 #### How it works
 ```mermaid
@@ -563,8 +769,30 @@ Some requests never complete inside the service's measured window: maybe they wa
 #### Interview angle
 > "I'd use 409 for business conflicts like a seat already booked, 429 with Retry-After for rate limits, and 503 for load shedding. Clients retry only 5xx and 429, with exponential backoff and jitter."
 
+#### Sources
+- [HTTP response status codes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status) — MDN
+- [RFC 9110 §15: Status codes](https://datatracker.ietf.org/doc/html/rfc9110#section-15) — IETF
+
 ### HTTP caching headers — Cache-Control, ETag, Last-Modified, If-None-Match, Vary
 Caching headers tell browsers, CDNs and proxies **whether, for how long and for whom** a response may be reused, and how to cheaply check whether it changed. Getting them right is the cheapest performance win there is. Getting them wrong leaks private data.
+
+#### Intuition
+A "best before" sticker (max-age) plus a version number (ETag). Before the date, eat it without asking. After it, ask the shop "is version 7 still current?" and get a cheap "yes, keep it" (304) instead of a whole new loaf.
+
+#### Must know
+- `max-age` (browser + CDN), `s-maxage` (CDN only), `public` vs `private`.
+- `no-cache` = store but **revalidate every time**; `no-store` = never store.
+- **ETag + If-None-Match** → 304 Not Modified saves bandwidth (not the round trip).
+- Fingerprinted assets: `max-age=31536000, immutable`; HTML: `no-cache` + ETag.
+- Personalised responses: `private, no-store`, or a CDN may serve one user's data to another.
+
+#### Numbers to quote
+- One year = `max-age=31536000`.
+
+#### Common mistakes
+- Confusing `no-cache` with `no-store`.
+- Caching personalised responses as `public`.
+- `Vary: User-Agent` or `Vary: Cookie`, which shatters the CDN hit ratio.
 
 #### How it works
 ```mermaid
@@ -631,8 +859,27 @@ Put a content hash in every asset filename (`main.8c1f2.js`) and serve those wit
 #### Interview angle
 > "Static assets are fingerprinted and cached for a year at the CDN, HTML is revalidated with ETags, catalogue APIs get short s-maxage with stale-while-revalidate, and anything personalised is private, no-store."
 
+#### Sources
+- [HTTP caching](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching) — MDN
+- [RFC 9111: HTTP caching](https://datatracker.ietf.org/doc/html/rfc9111) — IETF
+- [Prevent unnecessary network requests with the HTTP cache](https://web.dev/articles/http-cache) — web.dev
+
 ### CORS — same-origin policy, preflight OPTIONS, Access-Control-Allow-* headers
 Browsers enforce the **same-origin policy**: JavaScript on `https://app.shop.com` can't read responses from `https://api.shop.com` (a different origin) unless that server opts in with **CORS** headers. It protects users' cookies and data from malicious sites. It is enforced by the browser, not the server.
+
+#### Intuition
+The browser is a strict parent: a page from one website may not read another website's replies unless that website explicitly says "it's OK, I know them". It protects the user's logged-in data, not your server.
+
+#### Must know
+- Origin = **scheme + host + port**. Enforced **by browsers only**; curl and servers ignore it.
+- Non-simple requests (JSON body, custom headers, PUT/DELETE) trigger an **OPTIONS preflight**.
+- With credentials, `Allow-Origin` must be a specific origin (never `*`) plus `Vary: Origin`.
+- Cache preflights with `Access-Control-Max-Age`, or remove CORS by serving SPA and API on one origin.
+- CORS is not authentication.
+
+#### Common mistakes
+- Reflecting any `Origin` with `Allow-Credentials: true`, which lets any site read user data.
+- Not sending CORS headers on error responses and on the OPTIONS route.
 
 #### How it works
 Origin = scheme + host + port. A "non-simple" request (JSON body, custom headers, PUT/DELETE) triggers a **preflight**:
@@ -688,8 +935,27 @@ Serve the SPA and API from the same origin (e.g. `shop.com` with `/api/*` routed
 #### Interview angle
 > "CORS is a browser protection, not API security. I'd serve the SPA and API on one origin through the gateway where possible, otherwise use an explicit origin allow-list with credentials and cached preflights."
 
+#### Sources
+- [Cross-Origin Resource Sharing (CORS)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) — MDN
+- [CORS misconfiguration](https://portswigger.net/web-security/cors) — PortSwigger Web Security Academy
+
 ### Cookies — HttpOnly, Secure, SameSite (Strict/Lax/None), session vs persistent
 Cookies are small key-value pairs the server sets (`Set-Cookie`) and the browser sends back automatically on every matching request. That automatic sending is what makes sessions work, and also what makes CSRF possible. Cookie attributes control the risk.
+
+#### Intuition
+A cookie is a wristband the venue gives you: you show it automatically at every door. HttpOnly means pickpockets (scripts) can't grab it, Secure means it's only shown at locked doors (HTTPS), and SameSite controls whether you show it when someone else's website sends you in.
+
+#### Must know
+- `HttpOnly` blocks theft via XSS; `Secure` = HTTPS only.
+- `SameSite`: **Strict** never cross-site, **Lax** only top-level GET navigations, **None** cross-site (needs Secure).
+- Chrome treats cookies with no SameSite as Lax; don't rely on that default, set it explicitly.
+- No expiry = **session cookie**; `Max-Age`/`Expires` = persistent.
+- Cookie auth needs **CSRF** protection (SameSite + token); prefer cookies over localStorage for tokens.
+
+#### Common mistakes
+- Storing auth tokens in localStorage, where any XSS can read them.
+- Relying on SameSite alone for CSRF on high-value actions.
+- Huge or numerous cookies inflating every request (431 errors).
 
 #### How it works
 ```mermaid
@@ -707,7 +973,7 @@ sequenceDiagram
 | `HttpOnly` | JavaScript can't read it, which blocks session theft via XSS |
 | `Secure` | only sent over HTTPS |
 | `SameSite=Strict` | never sent on cross-site requests (even clicking a link from email) |
-| `SameSite=Lax` (default) | sent on top-level GET navigations, not on cross-site POSTs/iframes/fetch, which blocks most CSRF |
+| `SameSite=Lax` (Chrome/Edge default when unset) | sent on top-level GET navigations, not on cross-site POSTs/iframes/fetch, which blocks most CSRF |
 | `SameSite=None; Secure` | sent cross-site (embedded widgets, third-party SSO) |
 | `Domain` / `Path` | scope (`Domain=shop.com` also covers subdomains) |
 | no `Max-Age`/`Expires` | **session cookie**, deleted when the browser closes |
@@ -742,14 +1008,36 @@ Prefer an **HttpOnly, Secure, SameSite cookie**: JavaScript, and therefore an XS
 
 <details><summary>Users of your partner portal get logged out when it's embedded in the partner's site. Why?</summary>
 
-The portal runs in a cross-site iframe, and browsers now default cookies to `SameSite=Lax` and increasingly block third-party cookies, so the session cookie isn't sent. Options: set `SameSite=None; Secure` (still blocked where third-party cookies are disabled), use the Storage Access API / CHIPS (`Partitioned`), or avoid iframes with a redirect-based flow or a token passed to the embed.
+The portal runs in a cross-site iframe. Chrome treats cookies without a SameSite attribute as `Lax`, Safari and Firefox block or partition third-party cookies by default, so the session cookie isn't sent. Options: set `SameSite=None; Secure` (still blocked where third-party cookies are disabled), use the Storage Access API / CHIPS (`Partitioned`), or avoid iframes with a redirect-based flow or a token passed to the embed.
 </details>
 
 #### Interview angle
 > "Sessions use an opaque ID in an HttpOnly, Secure, SameSite cookie, backed by Redis so we can revoke them instantly. State-changing endpoints also check a CSRF token."
 
+#### Sources
+- [Using HTTP cookies](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Cookies) — MDN
+- [SameSite cookies explained](https://web.dev/articles/samesite-cookies-explained) — web.dev
+- [Cross-Site Request Forgery prevention cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html) — OWASP
+
 ### Content negotiation — Accept, Content-Type, Accept-Encoding
 Content negotiation lets one URL serve different representations (JSON vs XML, gzip vs brotli, English vs Hindi) based on what the client says it can handle. `Content-Type` describes what is actually in a body.
+
+#### Intuition
+Ordering at a counter: you say "tea, no sugar, in a paper cup" (Accept headers) and the label on what you get says what's actually in it (Content-Type). If they can't make anything you'd accept, they tell you (406).
+
+#### Must know
+- `Accept*` = what the client wants; `Content-*` = what the body is.
+- `Vary` tells caches which request headers changed the response.
+- **406** = can't produce an acceptable format; **415** = can't accept the format sent.
+- Compress text (JSON, HTML, CSS, JS) with gzip/brotli; don't compress JPEG/MP4/ZIP.
+- Pre-compress static files with brotli at build time; use faster levels for dynamic responses.
+
+#### Numbers to quote
+- JSON typically shrinks 80–90% with gzip/brotli (1.2 MB → ~150 KB).
+
+#### Common mistakes
+- Forgetting `Vary: Accept-Encoding`, so a CDN serves compressed bodies to clients that can't decode them.
+- Clients omitting `Content-Type: application/json`, which leads to 415s.
 
 #### How it works
 ```mermaid
@@ -804,3 +1092,8 @@ A CDN caches by URL by default. If the response differs by `Accept-Encoding` or 
 
 #### Interview angle
 > "Responses are compressed at the edge (brotli for static files, gzip for dynamic responses), with `Vary` set so the CDN caches each variant correctly. Clients declare formats with Accept, and the server validates Content-Type with 415."
+
+#### Sources
+- [Content negotiation](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Content_negotiation) — MDN
+- [RFC 9110 §12: Content negotiation](https://datatracker.ietf.org/doc/html/rfc9110#section-12) — IETF
+
