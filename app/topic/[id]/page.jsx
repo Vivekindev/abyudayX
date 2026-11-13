@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import Prose from '../../../components/Prose';
 import { DoneBar, Notes } from '../../../components/ItemTools';
 import TopicTabs from '../../../components/TopicTabs';
+import { TierPill } from '../../../components/Roadmap';
 import { loadContent, topicLayers, topicSources, readMinutes } from '../../../lib/content.mjs';
 
 // Every roadmap topic in order, with its phase and section.
@@ -23,6 +24,8 @@ export default function Page({ params }) {
   const idx = all.findIndex(x => x.t.id === params.id);
   if (idx < 0) notFound();
   const { t, p, s } = all[idx], prev = all[idx - 1], next = all[idx + 1];
+  const nextMust = all.slice(idx + 1).find(x => x.t.tier === 'must');
+  const detail = t.title.slice(t.short.length).replace(/^ — /, '');
   const layers = topicLayers(t), sources = topicSources(t);
   const tabs = layers.map(({ key, label, badge }) => ({ key, label, badge }));
   const lessons = (p.lessons || []).map(id => items.find(i => i.id === id));
@@ -34,8 +37,9 @@ export default function Page({ params }) {
           <div className="eyebrow pc" style={{ '--pc': p.color }}>
             <Link href={`/phase/${p.id}/`}>PHASE {p.num} · {p.title}</Link> · {s.t}
           </div>
-          <h1>{t.title}</h1>
-          <p className="read-time">⏱ {readMinutes(t)} min read · start with the 2-min layer, go deeper when you need to</p>
+          <h1>{t.short}</h1>
+          {detail && <p className="sum">{detail}</p>}
+          <p className="read-time"><TierPill tier={t.tier} /> ⏱ {readMinutes(t)} min read · start with the 2-min layer, go deeper when you need to</p>
         </header>
         <TopicTabs tabs={tabs} />
         <div className="deep"><Prose html={layers.map(l => l.html).join('')} /></div>
@@ -50,6 +54,7 @@ export default function Page({ params }) {
         <nav className="pager">
           {prev && <Link href={`/topic/${prev.t.id}/`}><small>← PREVIOUS</small>{prev.t.title}</Link>}
           {next && <Link className="nx" href={`/topic/${next.t.id}/`}><small>NEXT →</small>{next.t.title}</Link>}
+          {nextMust && nextMust !== next && <Link className="nx wide" href={`/topic/${nextMust.t.id}/`}><small>SKIP TO NEXT 🔥 MUST-KNOW →</small>{nextMust.t.title}</Link>}
         </nav>
       </article>
       <aside className="toc"><b>Layers</b>{tabs.map(l => <a key={l.key} className="tab-link" href={`#${l.key}`}>{l.label}{l.badge && <small>{l.badge}</small>}</a>)}<a href={`/phase/${p.id}/#${t.id}`}>↩ Back to phase {p.num}</a></aside>

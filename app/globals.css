@@ -178,6 +178,13 @@ a.card:hover{border-color:var(--bdr-h);background:var(--card-h);text-decoration:
 .pager a:hover{border-color:var(--bdr-h);text-decoration:none}
 .pager small{display:block;color:var(--t3);font-family:var(--mono);font-size:.72rem}
 .pager .nx{text-align:right;grid-column:2}
+.pager .wide{grid-column:1/-1}
+.topic-head h3 .pill{vertical-align:middle;margin-left:4px}
+.read-time .pill{margin-right:6px}
+.next-steps{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:22px}
+.next-steps .today{flex-direction:column;align-items:flex-start;gap:12px}
+.next-steps .today .grow{min-width:0}
+.next-steps .today h2{font-size:1.08rem}
 
 /* ── FLASHCARDS ── */
 .fc-wrap{max-width:720px;margin:0 auto}

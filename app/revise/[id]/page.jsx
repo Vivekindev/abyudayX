@@ -20,7 +20,7 @@ export default function Page({ params }) {
   const md = p.sections.map(s => `## ${s.t}\n\n` + s.topics.filter(t => t.deep).map(t => {
     const part = (name, label) => { const b = deepSection(t.deep, name); return b ? `**${label}**\n\n${b}\n\n` : ''; };
     const must = deepSection(t.deep, 'Must know') ? part('Must know', '★ Must know') : part('Cheat sheet', '⚡ Cheat sheet');
-    return `### ${t.short}\n\n[Full deep dive →](/topic/${t.id}/)\n\n` + must + part('Numbers to quote', '# Numbers to quote') + part('Common mistakes', '⚠ Common mistakes')
+    return `### ${t.tier === 'must' ? '🔥 ' : ''}${t.short}\n\n[Full deep dive →](/topic/${t.id}/)\n\n` + must + part('Numbers to quote', '# Numbers to quote') + part('Common mistakes', '⚠ Common mistakes')
       + part('Problems & fixes', '🛠 Problems & fixes') + part('Interview questions', '🎯 Interview questions');
   }).join('\n')).join('\n');
   const { html } = renderPage(md);

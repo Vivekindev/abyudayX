@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { SectionCount, TopicCard } from '../../../components/Roadmap';
+import { PhaseTopics } from '../../../components/Roadmap';
 import { loadContent, slug } from '../../../lib/content.mjs';
 
 export const dynamicParams = false;
@@ -41,12 +41,7 @@ export default function Page({ params }) {
           </div>
         )}
 
-        {ph.sections.map(s => (
-          <section key={s.t}>
-            <h2 className="section-h" id={slug(s.t)}>{s.t} <SectionCount ids={s.topics.map(t => t.id)} /></h2>
-            {s.topics.map(({ deep, ...t }) => <TopicCard key={t.id} t={t} />)}
-          </section>
-        ))}
+        <PhaseTopics sections={ph.sections.map(s => ({ t: s.t, id: slug(s.t), topics: s.topics.map(({ deep, ...t }) => t) }))} />
 
         {ph.note && <blockquote className="phase-note">💡 {ph.note}</blockquote>}
 

@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { useProgress } from './Progress';
+import { isDue, useProgress } from './Progress';
 
 const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
@@ -13,16 +13,21 @@ export default function Flashcards({ cards, modules, phases }) {
   const [shown, setShown] = useState(false);
 
   const build = useCallback(f => {
-    setDeck(shuffle(cards.filter(c => {
+    // Review deck: one random question per topic that is due, so each review tests it from a different angle.
+    const perTopic = {};
+    if (f === 'due') for (const c of shuffle(cards)) if (isDue(p, c.doneKey)) perTopic[c.doneKey] = c;
+    setDeck(shuffle(f === 'due' ? Object.values(perTopic) : cards.filter(c => {
       if (f === 'all') return true;
+      if (f === 'must') return c.must;
       if (f === 'qa') return !c.group.startsWith('p:');           // self-check questions only
       if (f === 'unknown') return !p.known[c.q];
       if (f === 'done') return !!p.done[c.doneKey];
       return c.group === f;
     })));
     setPos(0); setShown(false);
-  }, [cards, p.known, p.done]);
+  }, [cards, p.known, p.done, p.rev]);
 
+  useEffect(() => { const h = location.hash.slice(1); if (h === 'due' || h === 'must') setFilter(h); }, []);
   useEffect(() => { if (p.ready) build(filter); }, [p.ready, filter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const card = deck[pos];
@@ -31,9 +36,10 @@ export default function Flashcards({ cards, modules, phases }) {
     if (a === 'reveal') return setShown(true);
     if (a === 'got') p.setKnown(card.q, true);
     if (a === 'again') { p.setKnown(card.q, false); setDeck(d => [...d, card]); }
+    if (filter === 'due' && a !== 'skip' && isDue(p, card.doneKey)) p.review(card.doneKey, a === 'got');
     setShown(false);
     setPos(i => i + 1);
-  }, [card, p]);
+  }, [card, p, filter]);
 
   useEffect(() => {
     const onKey = e => { if (e.key === ' ' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(document.activeElement.tagName)) { e.preventDefault(); act(shown ? 'got' : 'reveal'); } };
@@ -41,6 +47,7 @@ export default function Flashcards({ cards, modules, phases }) {
   }, [act, shown]);
 
   const groups = [
+    ['Start here', [['due', '🔁 Due for review today'], ['must', '🔥 Must-know topics only']]],
     ['Mixes', [['qa', 'Self-check questions (lessons & cases)'], ['all', 'Everything (incl. every roadmap topic)'], ['unknown', "Cards I haven't nailed"], ['done', 'Only things I marked done']]],
     ['Roadmap phases', phases.map(ph => ['p:' + ph.id, `Phase ${ph.num} · ${ph.title}`])],
     ['Lesson modules', modules.map(m => ['m:' + m.id, `Module ${m.num} · ${m.title}`])],
@@ -74,7 +81,8 @@ export default function Flashcards({ cards, modules, phases }) {
           </div>
         </>
       ) : (
-        <div className="fc"><div className="q">{deck.length ? 'Deck finished 🎉' : (p.ready ? 'No cards in this deck' : 'Loading…')}</div>
+        <div className="fc"><div className="q">{deck.length ? 'Deck finished 🎉' : !p.ready ? 'Loading…' : filter === 'due' ? 'Nothing due today 🎉' : 'No cards in this deck'}</div>
+          {p.ready && filter === 'due' && <p className="muted" style={{ marginTop: 8 }}>Every topic or lesson you mark done comes back here after 1, 4, 11 and 27 days, as long as you still remember it. Forget one and it returns tomorrow.</p>}
           {p.ready && <button className="btn primary" style={{ marginTop: 16 }} onClick={() => build(filter)}>Shuffle again</button>}</div>
       )}
     </div>

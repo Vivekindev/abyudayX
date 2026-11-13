@@ -35,6 +35,7 @@ All content is Markdown:
 | Path | What |
 |---|---|
 | `content/roadmap/phases.json` | Phases, sections and **exact topic titles** (plus linked lessons) |
+| `content/roadmap/priority.json` | Interview priority: per phase, the topic numbers (the number ending each topic URL) that are 🔥 must-know or 💤 rarely asked |
 | `content/roadmap/pN.md` | One `### <exact topic title>` block per topic (short explanation) |
 | `content/deep/pN-*.md` | Deep dives: one `### <exact topic title>` block per topic, with `#### How it works`, `#### Example`, `#### Trade-offs`, `#### Problems & fixes`, `#### Cheat sheet`, `#### Interview questions`, `#### Interview angle`. Enriched topics also have `#### Intuition`, `#### Must know`, `#### Numbers to quote` (optional), `#### Common mistakes` and `#### Sources`, which feed the topic page's 2-minute tab |
 | `content/lessons/*.md` | Deep-dive lessons (several per file, each starting with a `---` frontmatter block) |

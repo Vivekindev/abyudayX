@@ -7,7 +7,7 @@ import { useProgress } from './Progress';
 const NAV = [
   ['/', '🏠 Today'], ['/roadmap/', '📍 Roadmap (654 topics)'], ['/ref/interview/', '🎯 Interview prep'],
   ['/plan/', '🗓️ Day-by-day plan'], ['/learn/', '📘 Deep-dive lessons'],
-  ['/cases/', '🏗️ HLD case studies'], ['/lld/', '🧩 LLD problems'], ['/cards/', '🃏 Flashcards'],
+  ['/cases/', '🏗️ HLD case studies'], ['/lld/', '🧩 LLD problems'], ['/cards/', '🃏 Flashcards & review'],
 ];
 const REF = [['/ref/cheatsheet/', '⚡ Cheat sheet'], ['/ref/companies/', '🏢 Company playbook'],
   ['/ref/resources/', '📚 Resources & GitHub'], ['/ref/changes/', '🔁 What changed vs v1']];
@@ -36,7 +36,7 @@ export default function Shell({ planIds, children }) {
   };
   const exportProgress = () => {
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([JSON.stringify({ done: p.done, notes: p.notes, known: p.known }, null, 2)], { type: 'application/json' }));
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ done: p.done, notes: p.notes, known: p.known, rev: p.rev }, null, 2)], { type: 'application/json' }));
     a.download = 'sysdesign-progress.json'; a.click();
   };
   const importProgress = async e => {
@@ -57,7 +57,7 @@ export default function Shell({ planIds, children }) {
         <form className="top-search" onSubmit={search} role="search">
           <input ref={qRef} type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search lessons, case studies…  ( / )" aria-label="Search" />
         </form>
-        <div className="top-progress" title="Overall progress"><div className="bar"><div style={{ width: pct + '%' }} /></div><span>{pct}%</span></div>
+        <div className="top-progress" title="Day-by-day plan progress"><div className="bar"><div style={{ width: pct + '%' }} /></div><span>{pct}%</span></div>
         <button className="icon-btn" onClick={toggleTheme} aria-label="Toggle theme">◐</button>
       </header>
       <div className="layout">
