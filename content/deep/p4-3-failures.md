@@ -3,6 +3,21 @@
 ### Cache stampede / thundering herd — mass cache miss triggers simultaneous DB requests
 A cache stampede happens when a **popular key expires (or is evicted) and many concurrent requests miss at the same moment**. They all go to the database to rebuild the same value. One key can turn into thousands of identical expensive queries, overloading the DB just when traffic is highest.
 
+#### Intuition
+The office coffee pot runs empty and fifty people all walk to the kitchen to brew a new one at the same time. One pot was needed. Fifty people now block the kitchen.
+
+#### Must know
+- A **hot key expires** and many concurrent requests miss together, so all of them rebuild the same value from the database.
+- One key becomes thousands of identical expensive queries.
+- Fix 1: **single-flight / mutex**. One request rebuilds and the others wait.
+- Fix 2: **stale-while-revalidate**. Keep serving the old value while one worker refreshes.
+- Fix 3: refresh before expiry (probabilistic early refresh or a background job).
+
+#### Common mistakes
+- Thinking a higher hit rate fixes it. The damage happens in the instant of expiry.
+- A lock with no timeout, so a crashed holder blocks everyone.
+- Confusing it with an avalanche, which is many keys or the whole cache.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -57,8 +72,28 @@ Request collapsing: when many requests for the same uncached object arrive at on
 #### Interview angle
 > "Hot keys use a soft TTL with a single-flight lock: one request refreshes while everyone else gets the slightly stale value, so an expiry never multiplies into thousands of DB queries."
 
+#### Sources
+- [Cache stampede](https://en.wikipedia.org/wiki/Cache_stampede) — Wikipedia
+- [Scaling Memcache at Facebook](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala) — Nishtala et al., USENIX NSDI 2013
+- [ngx_http_proxy_module: proxy_cache_lock](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_cache_lock) — NGINX docs
+
 ### Mutex lock to prevent stampede — only one request fetches, others wait and read populated cache
 The mutex approach serialises cache rebuilding per key: on a miss, a request tries to acquire a short-lived lock for that key. The **winner** loads from the database and fills the cache. **Losers** wait briefly and re-read the cache (or return stale or default data). One DB query instead of thousands.
+
+#### Intuition
+One person goes to brew the coffee and puts a "brewing" sign on the kitchen door. Everyone else waits a minute and then pours from the fresh pot.
+
+#### Must know
+- On a miss, try `SET lock:key token NX PX <ttl>`. Only one request wins.
+- The **winner** loads from the database and fills the cache. **Losers** wait briefly and re-read, or serve stale data.
+- The lock needs a **TTL**, and release must check the token.
+- Inside one process, use single-flight first (Caffeine loader, Go `singleflight`). The distributed lock is for across instances.
+- Cap the waiting time below the request timeout, then fall back.
+
+#### Common mistakes
+- Losers waiting forever when the winner is slow or dead.
+- Releasing with a plain `DEL`, which can remove another request's lock.
+- Taking the Redis lock on every miss from every thread, with no in-process coalescing.
 
 #### How it works
 ```mermaid
@@ -129,8 +164,28 @@ Within one instance, dozens of threads may miss the same key at once. A local si
 #### Interview angle
 > "On a miss for a hot key, one caller wins a short token-checked Redis lock and rebuilds. Others briefly wait or serve stale, and per-instance single-flight means each pod asks for the lock only once."
 
+#### Sources
+- [singleflight package](https://pkg.go.dev/golang.org/x/sync/singleflight) — Go docs
+- [SET command (NX and PX options)](https://redis.io/docs/latest/commands/set/) — Redis docs
+- [Cache stampede: locking](https://en.wikipedia.org/wiki/Cache_stampede) — Wikipedia
+
 ### Probabilistic early re-expiration (PER) — randomly refresh before TTL expires to prevent stampede
 Probabilistic early recomputation (the "XFetch" algorithm) has each reader decide **randomly** whether to refresh a value **before** it expires. The probability rises sharply as expiry approaches and scales with how long the value takes to compute. Usually exactly one request refreshes early, and the key never actually expires under load. No locks required.
+
+#### Intuition
+As the milk gets close to its date, each person who opens the fridge rolls a dice to decide whether to buy more. Far from the date almost nobody does. On the last day someone almost certainly will, so the fridge never actually runs out.
+
+#### Must know
+- Each reader decides **at random** whether to refresh the value **before** it expires.
+- The probability rises sharply as expiry approaches.
+- It also scales with how long the value takes to compute, so expensive values refresh earlier.
+- Under load, one reader refreshes early and the key never expires. **No lock is needed.**
+- It does not help when the key is missing entirely (cold start).
+
+#### Common mistakes
+- Claiming exactly one refresh. Occasionally two happen.
+- Forgetting to store the compute time with the value.
+- Using it alone, with nothing for cold or evicted keys.
 
 #### How it works
 ```mermaid
@@ -187,8 +242,30 @@ Values that take long to compute must start refreshing earlier, so the new value
 #### Interview angle
 > "For expensive hot values I'd use probabilistic early recomputation: readers occasionally refresh just before expiry, weighted by compute time, so the key never expires under load and no lock is needed."
 
+#### Sources
+- [Optimal probabilistic cache stampede prevention](https://www.vldb.org/pvldb/vol8/p886-vattani.pdf) — Vattani, Chierichetti and Lowenstein, VLDB 2015
+- [Cache stampede: probabilistic early expiration](https://en.wikipedia.org/wiki/Cache_stampede) — Wikipedia
+
 ### Hot key problem — single key overwhelms one Redis node (e.g., celebrity tweet)
 In a sharded cache, each key lives on **one node**. When a single key gets enormous traffic (a celebrity's post, a flash-sale product, a global config), that node's CPU or network saturates while others idle, and adding nodes doesn't help. Hot keys cause latency spikes, timeouts and cascading failures.
+
+#### Intuition
+A ten-counter bank where everyone queues at counter 4 because that is where one celebrity teller sits. Nine counters are idle and counter 4 collapses.
+
+#### Must know
+- In a sharded cache, **one key lives on one node**.
+- A viral key saturates that node's CPU or network while the rest sit idle.
+- **Adding nodes does not help.**
+- Everything else on that node suffers too, and retries make it worse.
+- Detect it with per-node imbalance alerts, `redis-cli --hotkeys` and key-level client metrics.
+
+#### Numbers to quote
+- One Redis node handles roughly 100,000+ simple operations per second, and bandwidth is often the first limit for large values.
+
+#### Common mistakes
+- Proposing "scale out the cluster" for a single hot key.
+- Running `MONITOR` in production to find it.
+- Ignoring **big keys** (a huge hash or list), which cause the same pain with one command.
 
 #### How it works
 ```mermaid
@@ -236,8 +313,30 @@ Sharding distributes keys, not requests for a single key. All traffic for that k
 #### Interview angle
 > "A hot key pins one Redis node no matter how big the cluster is. I detect hot keys with node-imbalance alerts and hotkey sampling, then absorb them with an in-process L1 cache or by replicating the key."
 
+#### Sources
+- [Redis CLI: scanning for hot and big keys](https://redis.io/docs/latest/develop/tools/cli/) — Redis docs
+- [Redis cluster specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/) — Redis docs
+
 ### Hot key solution — local in-process L1 cache (Caffeine/Guava) + L2 Redis; key replication to N slots
 The standard fixes for hot keys spread or absorb the load: an **in-process L1 cache** in every app instance (each instance serves the hot key from its own memory), and/or **replicating the key** across N copies on different Redis nodes so reads spread out. For static or public data, push it further out to the **CDN**.
+
+#### Intuition
+Give every branch a photocopy of the notice everyone keeps asking about, so nobody phones head office for it. And keep several copies at head office, so the callers who do ring are spread over several desks.
+
+#### Must know
+- **L1 in-process cache** with a TTL of a few seconds in every app instance absorbs the hot key.
+- Redis then sees at most about (instances ÷ TTL) reads per second for that key.
+- **Replicate the key** as `key#0 … key#N` across slots, and read a random copy.
+- Public content can go out to the CDN.
+- Invalidate by pub/sub or Redis client-side caching, or accept the short TTL as the staleness bound.
+
+#### Numbers to quote
+- 200 instances with a 5-second L1 TTL turn 500,000 reads per second into about 40 Redis reads per second.
+
+#### Common mistakes
+- An L1 cache with a long TTL and no invalidation, so instances disagree for minutes.
+- Caching everything in L1 and running the JVM out of memory.
+- Updating only one of the N replica keys on a write.
 
 #### How it works
 ```mermaid
@@ -303,8 +402,27 @@ Keep L1 TTLs short so staleness is bounded by seconds. For faster convergence, p
 #### Interview angle
 > "Hot keys get an in-process L1 with a seconds-long TTL plus N replicas in Redis, so a million reads a second turns into a few dozen Redis reads. Updates broadcast an invalidation."
 
+#### Sources
+- [Client-side caching](https://redis.io/docs/latest/develop/reference/client-side-caching/) — Redis docs
+- [Caffeine](https://github.com/ben-manes/caffeine/wiki) — Caffeine wiki
+
 ### Cache penetration — query for non-existent key repeatedly bypasses cache and hammers DB
 Cache penetration is when requests ask for data that **doesn't exist**, so it's never cached, and **every request falls through to the database**. It happens with buggy clients, enumeration attacks (random ids) or deleted content still being linked. The cache provides zero protection for those keys.
+
+#### Intuition
+A prank caller keeps ringing the hospital asking for patients who were never admitted. Reception has no note for them, so every call triggers a full search of the records room.
+
+#### Must know
+- Requests for data that **does not exist** are never cached, so every one reaches the database.
+- Causes: enumeration attacks with random ids, buggy clients, links to deleted content.
+- Defence 1: **validate** the id format and range.
+- Defence 2: a **bloom filter** of valid ids in front of the cache.
+- Defence 3: **negative caching** with a short TTL, plus rate limiting.
+
+#### Common mistakes
+- Mixing up the three cache failures. Penetration = missing keys. Stampede = one hot key expires. Avalanche = many keys or the whole cache.
+- Negative caching alone against unique random ids, which fills the cache with junk.
+- Sequential public ids, which are easy to enumerate.
 
 #### How it works
 ```mermaid
@@ -358,8 +476,31 @@ At the edge: rate limiting per IP/token, WAF bot rules, auth required for user l
 #### Interview angle
 > "Requests for things that don't exist never hit the DB repeatedly: format validation and a bloom filter reject impossible ids, misses are negatively cached briefly, and enumerators get rate-limited."
 
+#### Sources
+- [Bloom filter](https://redis.io/docs/latest/develop/data-types/probabilistic/bloom-filter/) — Redis docs
+- [Caching challenges and strategies](https://aws.amazon.com/builders-library/caching-challenges-and-strategies/) — Amazon Builders' Library
+
 ### Bloom filter for cache penetration — reject requests for keys known not to exist
 A bloom filter is a compact probabilistic set: it can say "**definitely not present**" or "**possibly present**". Loaded with all valid keys and checked **before** cache and database, it rejects requests for non-existent ids in microseconds with a tiny memory footprint, at the cost of a small false-positive rate.
+
+#### Intuition
+A guard with a compact guest checklist. If your name is not on it, you are certainly not invited. If it seems to be on it, you are probably invited, and the desk inside confirms.
+
+#### Must know
+- A compact probabilistic set that answers "**definitely not present**" or "**possibly present**".
+- Load it with every valid id and check it **before** the cache and the database.
+- No false negatives. A small false-positive rate still reaches the database.
+- **Add the id on create**, or new items are rejected.
+- A standard filter cannot delete. Rebuild it periodically or use a cuckoo or counting filter.
+
+#### Numbers to quote
+- About 10 bits per key gives a 1% false-positive rate.
+- 10 million ids at 1% need about 12 MB. 100 million need about 120 MB.
+
+#### Common mistakes
+- Saying the filter confirms that a key exists.
+- Sizing for today's count, so the false-positive rate climbs as the data grows.
+- A separate local filter per instance that is never synchronised.
 
 #### How it works
 ```mermaid
@@ -417,8 +558,27 @@ Each item sets k bits that may be shared with other items. Clearing them on remo
 #### Interview angle
 > "A RedisBloom filter of every valid id sits in front of the cache. Impossible ids are rejected in microseconds, new ids are added on create, and the filter is rebuilt periodically."
 
+#### Sources
+- [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) — Wikipedia
+- [Bloom filter](https://redis.io/docs/latest/develop/data-types/probabilistic/bloom-filter/) — Redis docs
+
 ### Cache avalanche — mass TTL expiry at the same time causes thundering herd on DB
 A cache avalanche is a **large-scale** miss event: many keys expire simultaneously (same TTL set during a bulk load), or the cache tier itself fails or restarts, so a flood of requests goes to the database at once. Unlike a stampede (one hot key), an avalanche affects a big share of the keyspace and can take down the database and everything behind it.
+
+#### Intuition
+A dam that has been holding back the river gives way all at once. The town downstream was built for the trickle that normally gets through, not for the whole river.
+
+#### Must know
+- A **large share of the cache disappears at once**: many keys with the same TTL, or the cache tier fails or restarts.
+- The database suddenly receives many times its normal load and can go down.
+- Prevent: **TTL jitter**, a replicated cache across AZs, persistence, warming.
+- Contain: a **circuit breaker and rate limit** on database fallback, an in-process L1, serving stale data.
+- Know how much fallback traffic the database can actually take.
+
+#### Common mistakes
+- Assuming "fall back to the database" is safe. The database is sized for cache-hit traffic.
+- Retrying immediately after the cache returns, which keeps the database down.
+- Treating it like a stampede and adding only a per-key lock.
 
 #### How it works
 ```mermaid
@@ -470,8 +630,27 @@ A stampede is one hot key: fix it with per-key single-flight, stale-while-revali
 #### Interview angle
 > "I assume the cache will fail. TTLs are jittered, Redis is replicated across AZs, an in-process L1 serves the hottest data, and database fallback goes through a circuit breaker sized to what the DB can survive."
 
+#### Sources
+- [Caching challenges and strategies](https://aws.amazon.com/builders-library/caching-challenges-and-strategies/) — Amazon Builders' Library
+- [Circuit breaker](https://martinfowler.com/bliki/CircuitBreaker.html) — Martin Fowler
+
 ### Staggered TTL + circuit breaker to handle cache avalanche
 The practical recipe against avalanches combines **prevention** (staggered/jittered TTLs so keys don't expire together) with **containment** (a circuit breaker and rate limiter in front of the database so that, when the cache does fail, only as much traffic as the DB can survive gets through, and the rest degrades gracefully).
+
+#### Intuition
+Two safety measures for a building. Stagger closing times so the whole crowd does not leave by one door together. And fit a fuse, so if the wiring overloads anyway, the fuse trips before the building burns.
+
+#### Must know
+- **Prevention**: jittered TTLs, so keys do not expire together.
+- **Containment**: a rate limiter and **circuit breaker** in front of database fallback.
+- Breaker states: closed → open (fail fast) → half-open (trial requests) → closed.
+- When the breaker is open, return stale data or a placeholder, not an error page.
+- Reserve capacity for critical flows with bulkheads, and set limits from load tests.
+
+#### Common mistakes
+- A timeout only. It still sends every request to the struggling database.
+- One shared connection pool, so checkout starves along with everything else.
+- A rate limit picked by guess, above what the database can survive.
 
 #### How it works
 ```mermaid
@@ -534,8 +713,28 @@ Per feature, with product input: serve last-known (stale) data where slightly ol
 #### Interview angle
 > "Jittered TTLs prevent synchronised expiry. If the cache fails anyway, a rate limiter and circuit breaker only let through what the database can survive, and everything else gets stale or placeholder data."
 
+#### Sources
+- [CircuitBreaker](https://resilience4j.readme.io/docs/circuitbreaker) — Resilience4j docs
+- [Circuit breaker pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) — Azure Architecture Center
+- [Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/) — Amazon Builders' Library
+
 ### Cache consistency — dual write problem: cache + DB atomicity impossible without distributed transaction
 Keeping a cache consistent with the database is fundamentally a **dual-write problem**: there's no atomic transaction spanning Redis and Postgres. Any sequence of "update DB, update or delete cache" can be interrupted or reordered by concurrency, leaving stale data. The goal is **bounded staleness**, not perfection.
+
+#### Intuition
+Updating a price in the ledger and on the shelf tag. They are two separate actions, so there is always a moment when they disagree, and if you are interrupted in between they stay that way.
+
+#### Must know
+- No transaction spans the cache and the database, so this is a **dual-write problem**.
+- Aim for **bounded staleness**, not perfection.
+- Rules: commit to the database first, **delete** the cache key afterwards, always keep a TTL.
+- A race remains (a reader can put the old value back just after the delete). Stronger options are versioned cache writes or CDC-driven invalidation.
+- Decisions about money read the source of truth.
+
+#### Common mistakes
+- Updating the cache before the commit, then rolling back.
+- "Set the new value" on write, which concurrent writers can reorder.
+- Promising that the cache and database are always consistent.
 
 #### How it works
 ```mermaid
@@ -596,8 +795,30 @@ Use change data capture on the database: Debezium reads the WAL or binlog and pu
 #### Interview angle
 > "Cache and DB can't be updated atomically, so I aim for bounded staleness: commit first, then delete the key, with CDC invalidation as a backstop, TTLs everywhere, and money decisions always read the source of truth."
 
+#### Sources
+- [Scaling Memcache at Facebook](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala) — Nishtala et al., USENIX NSDI 2013
+- [Cache-aside pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside) — Azure Architecture Center
+
 ### Event-driven cache invalidation — use CDC (Debezium → Kafka) to invalidate on DB change
 Instead of relying on every code path to remember to invalidate the cache, **watch the database itself**. CDC tools read the transaction log and emit an event for every committed change, and a consumer invalidates or updates the cache keys affected. Invalidation becomes reliable, ordered and independent of who wrote the data.
+
+#### Intuition
+Stop asking every employee to remember to tell the noticeboard when something changes. Put a clerk beside the official record book who updates the noticeboard whenever a new line is written, whoever wrote it.
+
+#### Must know
+- CDC reads the database's **commit log** and emits an event for every committed change.
+- A consumer deletes or updates the affected cache keys.
+- It catches **every writer**: other services, admin SQL, batch jobs.
+- Events come after commit and in order per key, when the topic is partitioned by primary key.
+- It adds a small lag, so the writer may also delete the key directly. Keep a TTL as the backstop.
+
+#### Numbers to quote
+- Typical end-to-end lag: tens to hundreds of milliseconds.
+
+#### Common mistakes
+- A stopped connector holding a replication slot until the database disk fills.
+- Invalidating only the entity key and forgetting list or aggregate caches built from it.
+- Expecting read-your-writes from CDC alone.
 
 #### How it works
 ```mermaid
@@ -648,3 +869,8 @@ Maintain a mapping from entities to dependent cache keys (product → its catego
 
 #### Interview angle
 > "Invalidation is driven by CDC: Debezium streams committed changes through Kafka to an invalidator, so every writer, even manual SQL, clears the cache in commit order within about 100 ms."
+
+#### Sources
+- [Automating cache invalidation with change data capture](https://debezium.io/blog/2018/12/05/automating-cache-invalidation-with-change-data-capture/) — Debezium blog
+- [Debezium connector for PostgreSQL](https://debezium.io/documentation/reference/stable/connectors/postgresql.html) — Debezium docs
+

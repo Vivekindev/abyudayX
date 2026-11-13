@@ -3,6 +3,21 @@
 ### Client-side cache — browser cache, service worker, localStorage (for static assets)
 The fastest request is the one never sent. Client-side caches (the **browser HTTP cache**, **service workers** and **storage APIs** like localStorage and IndexedDB, plus mobile app caches) keep data on the user's device, eliminating network round trips for repeat visits.
 
+#### Intuition
+Keeping a copy of the bus timetable in your pocket. You do not walk to the station to read it every time. The catch is that the station cannot reach into your pocket to replace it when the times change.
+
+#### Must know
+- The fastest request is the one never sent. The cache lives **on the user's device**.
+- **HTTP cache**: controlled by the server's response headers. For static assets and cacheable GETs.
+- **Service worker**: your own code decides (cache-first, stale-while-revalidate) and enables offline use.
+- **IndexedDB**: larger structured data and queues of offline actions. localStorage is small and synchronous.
+- The server **cannot purge** a user's cache. Use hashed URLs for assets and `no-cache` for HTML.
+
+#### Common mistakes
+- Storing auth tokens in localStorage, where any injected script can read them.
+- A long `max-age` on HTML, so users are stuck on an old version.
+- Offline actions replayed with no idempotency key, which creates duplicates.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -55,8 +70,31 @@ The browser cache is local to each device, and HTTP has no push-invalidation for
 #### Interview angle
 > "Static assets live in the browser cache via hashed URLs. For offline needs, a service worker serves the shell and queues writes in IndexedDB with idempotency keys. Tokens never go in localStorage."
 
+#### Sources
+- [HTTP caching](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching) — MDN
+- [Service Worker API](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API) — MDN
+- [Storage for the web](https://web.dev/articles/storage-for-the-web) — web.dev
+
 ### In-process cache — Caffeine (JVM), Guava Cache, Node.js Map/LRU cache
 An in-process cache lives **inside the application's memory**: a lookup is a hash-map access taking nanoseconds, with no network hop or serialisation. It's ideal for small, hot, read-mostly data (config, reference data, hot entities), but every instance has its own copy, so consistency and memory need care.
+
+#### Intuition
+The notes you keep in your own head, compared with looking something up in the shared office file. Recalling is instant, but every colleague has their own notes and they can differ.
+
+#### Must know
+- The cache lives **inside the application's own memory**: no network hop, no serialisation.
+- Best for **small, hot, read-mostly** data: config, feature flags, reference data.
+- **Every instance has its own copy**, so instances can disagree until a TTL or an invalidation.
+- Always bound it by size and TTL. Caffeine is the JVM default.
+- It keeps serving when Redis is down.
+
+#### Numbers to quote
+- A local lookup takes on the order of 100 nanoseconds. A Redis call takes roughly 0.5–1 ms.
+
+#### Common mistakes
+- An unbounded `HashMap` used as a cache, which ends in an out-of-memory error.
+- A large in-heap cache that causes long GC pauses.
+- Forgetting the memory is multiplied by the number of pods.
 
 #### How it works
 ```mermaid
@@ -119,8 +157,30 @@ Bound staleness with short TTLs or refreshAfterWrite, and push invalidations: pu
 #### Interview angle
 > "Hot reference data like flags and pricing rules sits in Caffeine with refreshAfterWrite and pub/sub invalidation: nanosecond reads, and it keeps working when Redis is down."
 
+#### Sources
+- [Caffeine](https://github.com/ben-manes/caffeine/wiki) — Caffeine wiki
+- [Caches explained](https://github.com/google/guava/wiki/CachesExplained) — Guava wiki
+
 ### Distributed cache — Redis, Memcached, Apache Ignite
 A distributed cache is a **separate, shared caching tier** (a cluster of nodes holding key-value data in memory) that all application instances use over the network. It gives every instance the same view, scales beyond one machine's memory and survives app restarts, at the cost of a network round trip (~0.2–1 ms).
+
+#### Intuition
+One shared whiteboard in the corridor instead of a notepad on every desk. Everyone reads the same thing and one update reaches all, at the price of walking to the corridor.
+
+#### Must know
+- A **separate, shared cache tier** that all app instances reach over the network.
+- Every instance sees the **same value**, and capacity scales beyond one machine's memory.
+- It survives app restarts and deploys.
+- It is required for shared state: sessions, rate limits, locks.
+- It is another critical system. Plan for its failure with replicas, an L1 cache and circuit breakers.
+
+#### Numbers to quote
+- A round trip within the same AZ is typically under 1 ms.
+
+#### Common mistakes
+- Letting a cache outage cascade into a database outage.
+- Caching very large values and saturating the network.
+- Opening a new connection per request instead of pooling.
 
 #### How it works
 ```mermaid
@@ -140,7 +200,7 @@ flowchart LR
 | HA | replicas, Sentinel, Cluster | client-side sharding, no replication | partitions with backups |
 | Typical use | general cache + rate limits + leaderboards | simple, huge, multi-threaded cache | in-memory data grid, near-cache, compute close to data |
 
-Managed options: ElastiCache / MemoryDB (AWS), Memorystore (GCP), Azure Cache for Redis.
+Managed options: ElastiCache / MemoryDB (AWS), Memorystore (GCP), Azure Managed Redis (the successor to Azure Cache for Redis).
 
 #### Example
 A ride-hailing backend: sessions, rider and driver profiles, surge multipliers per geohash, and rate-limit counters all in a Redis Cluster (6 shards × 1 replica across 3 AZs). 300k ops/s at sub-ms latency is shared by 400 service pods, so every pod sees the same surge value at the same time, which an in-process cache can't guarantee.
@@ -175,8 +235,27 @@ Product details and pricing (with TTL plus invalidation), session and cart data,
 #### Interview angle
 > "Shared state like sessions, rate limits and surge values lives in a Redis Cluster across AZs, with an in-process L1 in front for hot keys and circuit breakers so a cache outage can't cascade to the database."
 
+#### Sources
+- [What is Amazon ElastiCache?](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html) — Amazon ElastiCache docs
+- [Redis data types](https://redis.io/docs/latest/develop/data-types/) — Redis docs
+
 ### Memcached vs Redis — Memcached: multi-threaded, pure cache; Redis: rich data types, persistence, Lua
 Both are in-memory key-value caches with sub-millisecond latency. **Memcached** is deliberately simple: strings only, multi-threaded, no persistence, no replication. **Redis** is a data-structure server with persistence, replication, clustering, scripting, pub/sub and streams. Today Redis (or Valkey, its open-source fork) is the default, and Memcached still shines for huge, simple object caching.
+
+#### Intuition
+Memcached is a wall of lockers: put a bag in, take a bag out, nothing else. Redis is a workshop with lockers plus scoreboards, queues, counters and a way to keep things after closing time.
+
+#### Must know
+- **Memcached**: strings only, multi-threaded, no persistence, no built-in replication.
+- **Redis**: rich data structures, persistence, replication and clustering, Lua scripts, pub/sub.
+- Redis runs commands on one thread, so you scale it by sharding.
+- Rate limits, leaderboards, locks or queues all need Redis.
+- Default to Redis (or its fork, Valkey). Memcached fits a huge, simple, rebuildable object cache.
+
+#### Common mistakes
+- Saying Memcached is always faster. It only wins on many-core boxes with simple get/set.
+- Proposing Memcached and then needing sorted sets or persistence.
+- Calling Redis fully single-threaded. Network I/O can use threads since version 6.
 
 #### How it works
 | | Memcached | Redis |
@@ -228,8 +307,27 @@ For a very large, simple object cache (serialised blobs) on many-core machines w
 #### Interview angle
 > "I'd default to Redis or Valkey because one system covers caching, counters, leaderboards and locks. Memcached only makes sense as a huge, simple, multi-threaded blob cache that's fully rebuildable."
 
+#### Sources
+- [Comparing Valkey, Memcached, and Redis OSS self-designed caches](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SelectEngine.html) — Amazon ElastiCache docs
+- [Memcached overview](https://github.com/memcached/memcached/wiki/Overview) — Memcached wiki
+
 ### Two-level cache architecture — L1 in-process (nanoseconds) + L2 Redis (microseconds)
 A two-level cache puts a small **in-process L1** (Caffeine) in front of a shared **L2** (Redis) in front of the database. Hot keys are served from local memory in nanoseconds, the shared L2 keeps instances mostly consistent and absorbs L1 misses, and the database sees very little traffic.
+
+#### Intuition
+The few things you use all day sit on your desk. Everything else is in the shared cupboard down the hall. Only when both are empty do you go to the warehouse.
+
+#### Must know
+- **L1**: a small in-process cache per pod with a TTL of seconds. **L2**: shared Redis. Then the database.
+- Hot keys are served from local memory, and Redis sees far less traffic.
+- The **L1 TTL bounds how long pods can disagree**.
+- On update: commit to the DB → delete from L2 → broadcast an L1 eviction to every pod.
+- L1 keeps serving during a Redis blip.
+
+#### Common mistakes
+- A large L1 with a long TTL, which multiplies memory and staleness by the pod count.
+- Relying on pub/sub alone for L1 invalidation. A missed message needs the TTL as backstop.
+- Invalidating L1 before L2, so a pod refills L1 from the stale L2 value.
 
 #### How it works
 ```mermaid
@@ -281,8 +379,30 @@ Each pod holds its own copy, so memory multiplies by the pod count, long TTLs ex
 #### Interview angle
 > "Hot paths use a two-level cache: a tiny short-TTL Caffeine L1 per pod, a shared Redis L2, and invalidation by deleting from L2 and broadcasting an L1 eviction after the DB commit."
 
+#### Sources
+- [Client-side caching](https://redis.io/docs/latest/develop/reference/client-side-caching/) — Redis docs
+- [Caffeine](https://github.com/ben-manes/caffeine/wiki) — Caffeine wiki
+
 ### CDN edge cache — CloudFront, Fastly, Cloudflare cache static and semi-static content
 A CDN edge cache stores HTTP responses at points of presence near users. It's the outermost and highest-leverage cache layer: hits are served in ~10–30 ms from a nearby city without touching your infrastructure, and it absorbs global traffic spikes and DDoS attacks.
+
+#### Intuition
+A chain of neighbourhood kiosks stocked from one central warehouse. Most customers are served round the corner and never reach the warehouse.
+
+#### Must know
+- The **outermost cache**, close to users. A hit never touches your servers.
+- Hashed static assets: cache for a year.
+- Public pages and GET APIs: short `s-maxage` plus `stale-while-revalidate`, with purge by tag.
+- **Never cache personalised responses publicly** (`private` or `no-store`).
+- Normalise the cache key, use an origin shield, and serve stale when the origin is down.
+
+#### Numbers to quote
+- A well-tuned site reaches a 90–95% edge hit ratio.
+
+#### Common mistakes
+- Cookies or tracking parameters in the cache key, which destroy the hit ratio.
+- A logged-in page cached as public, so one user sees another's data.
+- Purging everything at once and sending the full load to the origin.
 
 #### How it works
 ```mermaid
@@ -337,8 +457,28 @@ Normalise cache keys (drop irrelevant query params like utm tags, sort params, i
 #### Interview angle
 > "The CDN is my biggest cache: hashed assets cached for a year, public pages with short s-maxage plus stale-while-revalidate and tag purges, normalised cache keys and an origin shield. Personalised data is never cached publicly."
 
+#### Sources
+- [Cloudflare cache](https://developers.cloudflare.com/cache/) — Cloudflare docs
+- [Increase the proportion of requests that are served directly from the CloudFront caches](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cache-hit-ratio.html) — Amazon CloudFront developer guide
+- [HTTP cache-control extensions for stale content (RFC 5861)](https://www.rfc-editor.org/rfc/rfc5861) — IETF
+
 ### Reverse proxy cache — Nginx proxy_cache, Varnish Cache for HTTP response caching
 A reverse proxy cache sits in your own infrastructure in front of application servers and stores HTTP responses (by URL plus a selected key), serving repeats without touching the app. It's like a private CDN layer: great for caching expensive pages or API responses close to the app, with full control over rules.
+
+#### Intuition
+A receptionist who keeps the answers to the ten most common questions on a card. Most visitors are answered at the front desk and the experts in the back are not disturbed.
+
+#### Must know
+- NGINX or Varnish **in front of your app servers** stores HTTP responses and serves repeats.
+- Like a private CDN layer: full control, close to the app, no per-request cost.
+- Turn on **cache lock** so concurrent misses for one key send a single request upstream.
+- Serve stale while updating and on upstream errors.
+- Skip the cache for responses with `Set-Cookie` or `Authorization`.
+
+#### Common mistakes
+- Caching a personalised response.
+- Purging one proxy node when there are several.
+- Expecting it to help far-away users. It is in your datacenter, not near them.
 
 #### How it works
 ```mermaid
@@ -400,8 +540,27 @@ For content the CDN can't or shouldn't cache (internal APIs, authenticated-but-s
 #### Interview angle
 > "In front of expensive renders I'd put NGINX or Varnish caching with cache lock, stale-while-updating and stale-on-error, skipping anything with cookies or auth headers."
 
+#### Sources
+- [NGINX content caching](https://docs.nginx.com/nginx/admin-guide/content-cache/content-caching/) — NGINX docs
+- [ngx_http_proxy_module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) — NGINX docs
+
 ### Database query result cache — application-level, careful with invalidation
 Caching the **result of a query** (keyed by the query and its parameters) avoids re-running expensive SQL. Built-in DB query caches have largely disappeared (MySQL removed its query cache in 8.0 because invalidation was too coarse). The modern approach is **application-level caching** of results in Redis or in-process, with explicit invalidation logic.
+
+#### Intuition
+Writing the answer to a hard sum on a sticky note so you do not work it out again. That is fine until one of the numbers changes and nobody updates the note.
+
+#### Must know
+- Cache the **result of an expensive query**, keyed by query name + version + parameters.
+- Do it in the application (Redis or in-process). Built-in database query caches have mostly gone.
+- Good for **shared, expensive, staleness-tolerant** results, such as top sellers.
+- Bad for per-user or must-be-fresh queries. Fix those with an index.
+- Invalidate with a TTL or by bumping a version in the key.
+
+#### Common mistakes
+- Caching high-cardinality per-user queries: low hit rate, high memory.
+- No version in the key, so a logic change keeps serving old results.
+- Trying to work out which cached queries each write affects.
 
 #### How it works
 ```mermaid
@@ -454,8 +613,31 @@ Precompute rather than cache ad hoc: a scheduled job or stream processor maintai
 #### Interview angle
 > "I cache only expensive, shared, staleness-tolerant query results, with versioned keys and TTLs. Per-user queries get proper indexes, and heavy aggregates get precomputed summary tables."
 
+#### Sources
+- [MySQL 8.0: retiring support for the query cache](https://dev.mysql.com/blog-archive/mysql-8-0-retiring-support-for-the-query-cache/) — MySQL blog
+- [Materialized views](https://www.postgresql.org/docs/current/rules-materializedviews.html) — PostgreSQL docs
+
 ### Redis Cluster for horizontal cache scaling — 16384 hash slots, add nodes to expand
 When one Redis node's memory or CPU isn't enough, Redis Cluster spreads the keyspace over many masters using **16,384 hash slots**. You scale capacity by **adding nodes and moving slots** to them online, while each master's replica provides failover.
+
+#### Intuition
+A car park that is filling up. You open more levels and direct some rows of cars to the new levels while the car park stays open.
+
+#### Must know
+- When one node's memory or CPU runs out, spread the keys over more masters.
+- Scale by **adding masters with replicas and moving hash slots** to them, online.
+- Clients follow `MOVED` / `ASK` redirects during the move.
+- Scale early. Resharding a nearly full cluster is risky.
+- It does not fix a hot key, and multi-key commands need hash tags.
+
+#### Numbers to quote
+- Plan to scale out at about 70% memory use.
+- A common sizing: about 50 GB usable per node.
+
+#### Common mistakes
+- Waiting until 95% memory to add shards.
+- Big keys, which make slot migration slow and spiky.
+- Sizing for memory only and forgetting operations per second.
 
 #### How it works
 ```mermaid
@@ -517,8 +699,31 @@ Assume ~50 GB usable per node to leave headroom (e.g. a 64 GB instance with maxm
 #### Interview angle
 > "I size the Redis Cluster for memory with headroom and for ops per second, scale out at about 70% memory by adding shards and rebalancing slots online, and avoid big keys that make migration slow."
 
+#### Sources
+- [Scale with Redis Cluster](https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/) — Redis docs
+- [Scaling clusters in Valkey or Redis OSS (cluster mode enabled)](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/scaling-redis-cluster-mode-enabled.html) — Amazon ElastiCache docs
+
 ### Cache sizing estimation — working set size (hottest 20% of data), benchmark hit rate target >95%
 Sizing a cache means estimating the **working set**, the portion of data that receives most requests (often ~20% of keys serve ~80% or more of reads under a skewed distribution), multiplying by the size per entry plus overhead, and validating the **hit rate** you get at that size.
+
+#### Intuition
+A corner shop does not stock every product ever made. It stocks the few hundred items that cover most purchases. Shelf space is sized for what actually sells, plus some spare.
+
+#### Must know
+- Size the cache for the **working set**, the hot part of the data, not for all of it.
+- Memory = hot entries × (value + key + overhead) × headroom × replicas.
+- **Database load = request rate × miss rate**, so the hit rate target drives the size.
+- Returns diminish: the long tail costs a lot of memory for a small gain.
+- Validate with real measurements, not estimates alone.
+
+#### Numbers to quote
+- At 50,000 requests per second, a 95% hit rate leaves 2,500 database queries per second and 99% leaves 500.
+- Allow about 30–50% headroom, and 50–100 bytes of overhead per Redis key.
+
+#### Common mistakes
+- Sizing for the total dataset.
+- Forgetting replicas and per-key overhead.
+- Quoting a hit rate without converting it into database load.
 
 #### How it works
 ```mermaid
@@ -571,8 +776,27 @@ DB load is proportional to the miss rate: 5% vs 1% is a 5× difference in databa
 #### Interview angle
 > "I size the cache from the working set (hot keys × bytes per entry × headroom × replicas) and target a 95%+ hit rate, because database load is request rate times miss rate. Then I validate with real measurements."
 
+#### Sources
+- [Memory optimization](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/memory-optimization/) — Redis docs
+- [MEMORY USAGE command](https://redis.io/docs/latest/commands/memory-usage/) — Redis docs
+
 ### Cache eviction monitoring — track eviction rate; high eviction means cache is too small
 A cache you don't measure is a cache you can't trust. Key signals: **hit ratio**, **eviction rate**, **memory usage**, **latency**, **expired vs evicted keys** and **per-node imbalance**. A rising eviction rate with a falling hit ratio means the cache is too small for the working set, or something is polluting it.
+
+#### Intuition
+A dashboard on a car. Without the fuel gauge and the temperature needle you learn there is a problem only when the engine stops.
+
+#### Must know
+- Core signals: **hit ratio, eviction rate, memory use, latency**.
+- **Expired** keys are normal. **Evicted** keys mean memory pressure.
+- Rising evictions with a falling hit ratio = cache too small, or values got bigger.
+- A low hit ratio with no evictions = TTLs too short, or caching things nobody re-reads.
+- Measure **per cache and per key prefix**, not only server-wide.
+
+#### Common mistakes
+- Watching only the overall hit ratio, which hides the one misbehaving cache.
+- No alert on memory until Redis is already evicting.
+- Confusing expired with evicted.
 
 #### How it works
 ```mermaid
@@ -625,3 +849,8 @@ Compare per-cache and per-prefix metrics before and after: did key naming change
 
 #### Interview angle
 > "Every cache exports hit ratio, eviction rate and memory per cache name. Sustained evictions with a falling hit ratio is my signal to resize, slim values or stop caching low-value keys."
+
+#### Sources
+- [INFO command](https://redis.io/docs/latest/commands/info/) — Redis docs
+- [Key eviction](https://redis.io/docs/latest/develop/reference/eviction/) — Redis docs
+

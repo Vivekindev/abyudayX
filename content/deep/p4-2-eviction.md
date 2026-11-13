@@ -3,6 +3,21 @@
 ### LRU — Least Recently Used: evict the least recently accessed item (most common default)
 When a cache is full, LRU evicts the item **not accessed for the longest time**, betting that recently used items will be used again soon (temporal locality). It's simple, effective for most workloads and the default in many caches.
 
+#### Intuition
+A small desk with room for five books. Each time you use a book it goes on top of the pile. When a sixth arrives, the one at the bottom, untouched the longest, goes back to the shelf.
+
+#### Must know
+- When the cache is full, evict the item that was **used least recently**.
+- O(1) implementation: a **hash map plus a doubly linked list**. A hit moves the node to the head, eviction removes the tail.
+- In Java: `LinkedHashMap` with `accessOrder = true` and `removeEldestEntry`.
+- Redis approximates LRU by sampling a few keys, with no global list.
+- Weakness: one big scan pushes out all the hot items.
+
+#### Common mistakes
+- A singly linked list or an array, which makes removal O(n).
+- Forgetting to move the node to the head on a read.
+- No thread safety in the coding-round version when the interviewer asks about concurrency.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -58,8 +73,28 @@ Exact LRU needs a global linked list updated on every access, which means extra 
 #### Interview angle
 > "LRU is the sensible default, and I can implement it in O(1) with a hash map plus doubly linked list. For in-process caches I'd use Caffeine's W-TinyLFU, which keeps LRU's strengths but resists scans."
 
+#### Sources
+- [Cache replacement policies](https://en.wikipedia.org/wiki/Cache_replacement_policies) — Wikipedia
+- [Key eviction](https://redis.io/docs/latest/develop/reference/eviction/) — Redis docs
+- [LinkedHashMap](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/LinkedHashMap.html) — Java SE 21 API
+
 ### LFU — Least Frequently Used: evict item with fewest accesses in time window
 LFU evicts the item with the **fewest accesses**, keeping consistently popular items even if they weren't touched in the last few seconds. To avoid old popularity sticking forever, practical LFU uses **decay** or windowed counts.
+
+#### Intuition
+A shop deciding which products keep shelf space. It keeps what sells most often, not what happened to sell most recently. One customer buying an odd item today does not push out the bestseller.
+
+#### Must know
+- Evict the item with the **fewest accesses**.
+- Keeps consistently popular items, and resists one-off scans better than LRU.
+- Needs **decay**, or yesterday's popular items never leave.
+- Redis `allkeys-lfu` uses a small approximate counter per key that decays over time.
+- W-TinyLFU (Caffeine) combines a frequency estimate with a small recency window, and usually gives the best hit rate.
+
+#### Common mistakes
+- LFU without ageing, which cannot adapt when popularity shifts.
+- Forgetting that a brand-new item starts with a low count and may be evicted at once.
+- Saying LFU is always better. With fast-changing popularity, LRU wins.
 
 #### How it works
 ```mermaid
@@ -107,8 +142,28 @@ When popularity is stable and skewed (a Zipf distribution: a few items get most 
 #### Interview angle
 > "For skewed, fairly stable popularity like product pages, I'd use LFU with decay (Redis allkeys-lfu) or W-TinyLFU in-process. Best-sellers stay resident even when crawlers sweep the catalogue."
 
+#### Sources
+- [Key eviction: the LFU mode](https://redis.io/docs/latest/develop/reference/eviction/) — Redis docs
+- [TinyLFU: a highly efficient cache admission policy](https://arxiv.org/abs/1512.00727) — Einziger, Friedman and Manes
+- [Caffeine: efficiency](https://github.com/ben-manes/caffeine/wiki/Efficiency) — Caffeine wiki
+
 ### MRU — Most Recently Used: evict most recently accessed (good for sequential scans)
 MRU evicts the **most recently used** item, the opposite of LRU. It sounds odd, but it's optimal for **cyclic or sequential access patterns larger than the cache**, where the item just used is the one you'll need **last** in the next pass.
+
+#### Intuition
+Reading a long list from top to bottom again and again, with room to remember only part of it. The line you just read is the one you will need last on the next pass, so it is the best one to forget.
+
+#### Must know
+- Evict the **most recently used** item, the opposite of LRU.
+- Right for **cyclic or sequential scans larger than the cache**.
+- LRU's worst case: a loop over N + 1 items with a cache of N misses every time.
+- Rarely a general default. The practical lesson is to stop bulk scans from polluting a shared cache.
+- Databases solve the same problem with scan ring buffers (PostgreSQL) or midpoint insertion (InnoDB).
+
+#### Common mistakes
+- Calling MRU a typo for LRU.
+- Suggesting it for ordinary user traffic, where recent items are the likely next ones.
+- Not knowing the LRU worst case it fixes.
 
 #### How it works
 ```mermaid
@@ -154,8 +209,27 @@ They isolate scans: PostgreSQL uses small ring buffers for large sequential scan
 #### Interview angle
 > "MRU only makes sense for cyclic scans bigger than the cache. The general lesson is to keep bulk scans from polluting a shared LRU, which is why databases use scan ring buffers or midpoint insertion."
 
+#### Sources
+- [Cache replacement policies](https://en.wikipedia.org/wiki/Cache_replacement_policies) — Wikipedia
+- [Buffer pool: LRU algorithm and midpoint insertion](https://dev.mysql.com/doc/refman/8.4/en/innodb-buffer-pool.html) — MySQL reference manual
+
 ### ARC — Adaptive Replacement Cache: dynamically balances LRU and LFU based on workload
 ARC (IBM, used in ZFS) keeps two LRU lists, one for items seen **once recently** (recency) and one for items seen **at least twice** (frequency), plus "ghost" lists remembering recently evicted keys. Ghost hits tell ARC which side deserves more space, so it **self-tunes** between recency and frequency with no parameters.
+
+#### Intuition
+A manager with two shelves, one for new arrivals and one for regulars. He also keeps a list of what he recently threw out. When customers keep asking for discarded new arrivals, he gives that shelf more space, and the same for regulars.
+
+#### Must know
+- Two lists: items seen **once recently** (recency) and items seen **twice or more** (frequency).
+- Two **ghost lists** remember the keys of recently evicted items, with no data.
+- A hit on a ghost entry means "evicted too early", so that side gets more room.
+- It **tunes itself** between LRU-like and LFU-like behaviour, and resists scans.
+- Used in ZFS. Caffeine's W-TinyLFU is the common equivalent in JVM applications.
+
+#### Common mistakes
+- Describing it as "LRU plus LFU" without the ghost lists, which are how it adapts.
+- Thinking ghost entries store values. They hold keys only.
+- Treating it as something to implement in a coding round. Know the idea.
 
 #### How it works
 ```mermaid
@@ -207,8 +281,30 @@ Keys (no values) of items recently evicted from each list. If a request hits a g
 #### Interview angle
 > "Adaptive policies like ARC, or W-TinyLFU in Caffeine, learn whether recency or frequency pays off for the current workload, so I don't have to choose a fixed policy and live with its worst case."
 
+#### Sources
+- [ARC: a self-tuning, low overhead replacement cache](https://www.usenix.org/conference/fast-03/arc-self-tuning-low-overhead-replacement-cache) — Megiddo and Modha, USENIX FAST 2003
+- [Adaptive replacement cache](https://en.wikipedia.org/wiki/Adaptive_replacement_cache) — Wikipedia
+
 ### TTL (Time To Live) — key expires after fixed duration, lazy deletion on access
 A TTL makes a cache entry **expire automatically after a duration**. It bounds staleness (no entry is older than its TTL), and reclaims memory from keys nobody uses. Most caches delete expired keys **lazily** when they're accessed, plus a background sweep.
+
+#### Intuition
+A "best before" date on a milk carton. Whatever happens, nobody uses it after that date, even if no one remembered to throw it out.
+
+#### Must know
+- An entry **expires automatically** after a set duration.
+- It **bounds staleness** and reclaims memory from unused keys.
+- Short TTL: fresher data, more misses. Long TTL: better hit rate, staler data.
+- **TTL is the safety net. Invalidation on change gives freshness.** Use both.
+- Add jitter so keys set together do not expire together. Use a sliding TTL for sessions.
+
+#### Numbers to quote
+- Typical values: prices and stock in seconds to a minute, product details 5–60 minutes, sessions 15–30 minutes idle.
+
+#### Common mistakes
+- Cache keys with no TTL at all.
+- Relying on TTL alone for data that must change immediately.
+- The same TTL on a bulk load, so everything expires in the same second.
 
 #### How it works
 ```mermaid
@@ -269,8 +365,30 @@ Explicit invalidation keeps data fresh when changes happen, but invalidations ca
 #### Interview angle
 > "Every cache key gets a TTL with jitter as a safety net, sized to how stale the business can tolerate. Freshness itself comes from invalidation on change, and checkout always re-validates against the source."
 
+#### Sources
+- [EXPIRE command](https://redis.io/docs/latest/commands/expire/) — Redis docs
+- [Caching strategies: adding TTL](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html) — Amazon ElastiCache docs
+
 ### Active expiry — background thread scans for expired keys (Redis probabilistic scan)
 Lazy expiry only deletes a key when someone touches it, so keys never read again would sit in memory forever. **Active expiry** runs in the background to find and delete expired keys. Redis does this **probabilistically**: sample random keys that have TTLs, delete the expired ones, and repeat if many were expired.
+
+#### Intuition
+A supermarket worker who does not check every item's date each day. He picks a handful at random, removes the expired ones, and if many were expired he picks another handful straight away.
+
+#### Must know
+- Lazy expiry deletes a key only when someone reads it, so keys that are never read again would stay forever.
+- **Active expiry** samples random keys with a TTL in the background and deletes the expired ones.
+- If many in the sample were expired, it repeats at once, within a time budget.
+- It keeps the share of dead keys low without ever scanning everything.
+- Replicas do not expire keys themselves. The master sends them a delete.
+
+#### Numbers to quote
+- Redis runs the cycle about 10 times per second, sampling 20 keys and repeating while more than 25% are expired.
+
+#### Common mistakes
+- Believing an expired key is removed at the exact moment its TTL ends.
+- Millions of keys expiring in the same second, which causes a latency spike.
+- Proposing a full key scan to find expired keys.
 
 #### How it works
 ```mermaid
@@ -319,8 +437,27 @@ With millions or billions of keys, a full scan would take significant CPU time a
 #### Interview angle
 > "Redis reclaims expired keys lazily on access plus a time-bounded random sampling sweep, so short-lived rate-limit keys clean themselves up. I jitter TTLs so mass expiry doesn't cause spikes."
 
+#### Sources
+- [EXPIRE: how Redis expires keys](https://redis.io/docs/latest/commands/expire/) — Redis docs
+- [Key eviction](https://redis.io/docs/latest/develop/reference/eviction/) — Redis docs
+
 ### Redis maxmemory-policy — allkeys-lru, volatile-lru, allkeys-random, noeviction
 When Redis reaches `maxmemory`, its **eviction policy** decides what happens to new writes: evict some keys (by LRU, LFU, random or TTL) or **refuse writes**. Picking the right policy depends on whether Redis is a pure cache or holds data you must not lose.
+
+#### Intuition
+A full cupboard and one more thing to put in. Either you refuse the new thing, or you throw something out, and the rule for what to throw out is the policy.
+
+#### Must know
+- At `maxmemory`, the policy decides: **evict something or reject the write**.
+- `noeviction` is the default: writes fail with an out-of-memory error.
+- `allkeys-lru` / `allkeys-lfu`: evict any key. Right for a **pure cache**.
+- `volatile-*`: evict only keys that **have a TTL**.
+- Do not mix cache data and real state (queues, locks) in one instance. Eviction will silently drop the state.
+
+#### Common mistakes
+- Leaving a cache on the default and getting write errors when it fills.
+- A job queue in an `allkeys-lru` instance, so jobs vanish under memory pressure.
+- Setting `maxmemory` equal to the machine's RAM, with no headroom for forks and fragmentation.
 
 #### How it works
 | Policy | Evicts from | Use when |
@@ -378,8 +515,30 @@ The default is `noeviction`: reads keep working, but commands that would increas
 #### Interview angle
 > "A cache Redis runs allkeys-lfu with maxmemory well below RAM. Anything that's real state (queues, locks) lives on a separate noeviction instance with memory alerts, so eviction can never silently drop it."
 
+#### Sources
+- [Key eviction](https://redis.io/docs/latest/develop/reference/eviction/) — Redis docs
+- [Caching strategies](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html) — Amazon ElastiCache docs
+
 ### Staggered TTLs — add small random jitter to TTL to prevent cache avalanche
 If many keys are cached at the same moment with the same TTL (after a deploy, a warm-up job or a bulk load), they **all expire at the same moment**, and the resulting wave of misses hits the database together: a **cache avalanche**. Adding random jitter to each TTL spreads expirations over time.
+
+#### Intuition
+If every shop in a market closes for lunch at exactly 1:00, the one open stall is mobbed. If they close at slightly different times, the crowd spreads out.
+
+#### Must know
+- Keys cached together with the same TTL **expire together**, and the misses hit the database in one wave.
+- Fix: **TTL = base + a random amount**, so expirations spread over a window.
+- The total number of reloads is unchanged. The **peak** is what drops, and peaks are what break databases.
+- Most important for bulk-loaded keys: warm-up jobs, deploys, imports.
+- Combine it with single-flight for hot keys.
+
+#### Numbers to quote
+- A common choice is jitter of 10–20% of the base TTL.
+
+#### Common mistakes
+- A warm-up job that sets one fixed TTL on 200,000 keys.
+- Database spikes "every hour on the hour" that nobody links to the cache TTL.
+- Thinking jitter reduces load. It only spreads it.
 
 #### How it works
 ```mermaid
@@ -431,3 +590,8 @@ Databases fail on peak concurrency, not average load. Jitter keeps the same numb
 
 #### Interview angle
 > "Every TTL gets random jitter, especially for bulk-loaded keys, so expirations spread out instead of hitting the database all at once."
+
+#### Sources
+- [Caching challenges and strategies](https://aws.amazon.com/builders-library/caching-challenges-and-strategies/) — Amazon Builders' Library
+- [Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/) — Amazon Builders' Library
+

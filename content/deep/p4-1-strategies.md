@@ -3,6 +3,21 @@
 ### Cache-aside (lazy loading) — app checks cache, fetches DB on miss, populates cache
 Cache-aside is the most common caching pattern: the **application** owns the logic. It reads from the cache first. On a miss it reads the database, stores the result in the cache with a TTL, and returns it. On writes it updates the database and **deletes** (invalidates) the cache entry.
 
+#### Intuition
+You keep a sticky note of phone numbers you call often. You look at the note first. If the number is not there, you open the phone book, then write it on the note for next time. When a number changes, you throw that sticky note away.
+
+#### Must know
+- **Read**: check the cache → on a miss read the DB → store in the cache with a TTL → return.
+- **Write**: update the DB, then **delete** the cache key. Do not update it.
+- The application owns the logic, so only data that is actually requested gets cached.
+- If the cache is down, reads fall back to the database: degraded, not broken.
+- Always set a TTL with jitter, and protect hot keys from a stampede.
+
+#### Common mistakes
+- Updating the cache on write. Two writers can arrive out of order and leave the old value.
+- Deleting the cache before the database commit.
+- No TTL, so one missed invalidation stays stale forever.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -74,8 +89,28 @@ Concurrent writes can reach the cache in a different order than the DB commits, 
 #### Interview angle
 > "I'd use cache-aside with Redis: read-through-on-miss with TTL and jitter, delete after DB commit on writes, and single-flight protection for hot keys. Redis failing degrades to DB reads behind a circuit breaker."
 
+#### Sources
+- [Cache-aside pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside) — Azure Architecture Center
+- [Caching strategies: lazy loading](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html) — Amazon ElastiCache docs
+- [Scaling Memcache at Facebook](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala) — Nishtala et al., USENIX NSDI 2013
+
 ### Read-through — cache layer fetches from DB on miss transparently to application
 In read-through caching the **cache itself** (or a caching library wrapping the data source) loads missing entries from the database. The application only talks to the cache, so loading logic lives in one place, configured as a **loader**.
+
+#### Intuition
+A librarian's desk. You always ask the librarian. If the book is on the desk you get it at once. If not, the librarian fetches it from the stacks, keeps a copy on the desk, and hands it over. You never go to the stacks yourself.
+
+#### Must know
+- The application talks **only to the cache**. On a miss, the cache loads from the database through a configured loader.
+- Same data flow as cache-aside. The difference is **who** does the loading.
+- Loading logic lives in one place, and good libraries merge concurrent loads of the same key into one.
+- Examples: Caffeine `LoadingCache`, DynamoDB DAX.
+- It only covers reads. Pair it with invalidation or write-through to stay fresh.
+
+#### Common mistakes
+- Describing it as identical to cache-aside without saying who loads.
+- Forgetting the write side, so the cache serves stale data after an update.
+- A loader that returns null on every call for a missing key, with no negative caching.
 
 #### How it works
 ```mermaid
@@ -137,8 +172,27 @@ In cache-aside the application fetches from the DB on a miss and populates the c
 #### Interview angle
 > "For hot reference data I'd use a read-through Caffeine LoadingCache: one loader, deduplicated concurrent loads, and refreshAfterWrite so hot keys never block on a reload."
 
+#### Sources
+- [Caffeine: population (loading caches)](https://github.com/ben-manes/caffeine/wiki/Population) — Caffeine wiki
+- [In-memory acceleration with DynamoDB Accelerator (DAX)](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DAX.html) — Amazon DynamoDB developer guide
+
 ### Write-through — write to cache and DB synchronously; reads always hit cache
 With write-through, every write goes **through the cache to the database synchronously**: the write completes only when both are updated. The cache always holds the latest data for written keys, so reads right after writes hit fresh cache entries.
+
+#### Intuition
+Whenever you change a contact's number, you update both the phone book and your sticky note in the same sitting. The note is never out of date, but every change takes two steps.
+
+#### Must know
+- Every write updates **the database and the cache synchronously**.
+- A read straight after a write hits the cache and is fresh.
+- Cost: each write pays both latencies, and you cache data nobody may ever read.
+- It is still a **dual write**. Write the database first, and on a cache failure delete the key.
+- Best for data that is read often right after it is written, such as profiles and settings.
+
+#### Common mistakes
+- Writing the cache first and then the database. If the database write fails, the cache holds data that never existed.
+- Calling it atomic. One of the two writes can fail.
+- Using it for write-heavy data that is rarely read.
 
 #### How it works
 ```mermaid
@@ -193,8 +247,27 @@ The cache holds the old value, which is stale until TTL. Mitigate by deleting th
 #### Interview angle
 > "Write-through suits read-after-write-heavy data like profiles: write the DB, then the cache, with versioned values and CDC invalidation as a safety net for partial failures."
 
+#### Sources
+- [Caching strategies: write-through](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html) — Amazon ElastiCache docs
+- [Caching data sources: read-through, write-through, write-behind and refresh-ahead](https://docs.oracle.com/en/middleware/standalone/coherence/14.1.1.0/develop-applications/caching-data-sources.html) — Oracle Coherence docs
+
 ### Write-behind (write-back) — write to cache only, async flush to DB later; risk of data loss
 In write-behind, writes go to the cache and are **acknowledged immediately**. The cache flushes them to the database **asynchronously**, often batched and coalesced. Write latency is excellent and the DB sees far fewer writes, but if the cache loses data before flushing, those writes are gone.
+
+#### Intuition
+A waiter takes orders on a notepad and walks them to the kitchen every few minutes in one batch. Service is quick and the kitchen is not interrupted for every dish. If the notepad is lost on the way, those orders are gone.
+
+#### Must know
+- The write goes to the cache and is **acknowledged immediately**. The database is updated later, in batches.
+- Fastest writes, and many updates to the same key collapse into one database write.
+- **Data loss window**: if the cache dies before flushing, those writes are lost.
+- Good for counters, view counts and last-seen timestamps.
+- **Never for money or orders.**
+
+#### Common mistakes
+- Proposing it for anything the user was told "succeeded" and cannot be reconstructed.
+- A flush that is not atomic, so a retry double-counts.
+- Forgetting that other readers of the database see old values until the flush.
 
 #### How it works
 ```mermaid
@@ -249,8 +322,27 @@ The order is acknowledged to the customer before it's durable in the database. I
 #### Interview angle
 > "Write-behind is only for loss-tolerant, high-frequency writes like view counters: increment in Redis, flush aggregated deltas atomically every few seconds. Anything financial goes straight to the database."
 
+#### Sources
+- [Caching data sources: read-through, write-through, write-behind and refresh-ahead](https://docs.oracle.com/en/middleware/standalone/coherence/14.1.1.0/develop-applications/caching-data-sources.html) — Oracle Coherence docs
+- [Cache (computing): writing policies](https://en.wikipedia.org/wiki/Cache_%28computing%29) — Wikipedia
+
 ### Refresh-ahead — cache proactively refreshes keys before they expire based on access patterns
 Refresh-ahead reloads **hot entries before they expire**, so users almost never hit a miss on popular data. When an entry is accessed after a refresh threshold (say 80% of its TTL), the cache asynchronously reloads it while continuing to serve the current value.
+
+#### Intuition
+A shop that reorders milk when the shelf is nearly empty, not after it runs out. Customers never find the shelf bare.
+
+#### Must know
+- A hot entry is **reloaded in the background before it expires**, while the current value keeps being served.
+- Users of popular keys never see a miss or a slow reload.
+- Usually triggered by an access after a threshold, for example 80% of the TTL.
+- Apply it to hot, expensive keys only. For cold keys it wastes reloads.
+- Caffeine's `refreshAfterWrite` is the standard example.
+
+#### Common mistakes
+- Refreshing every key on a timer, which hammers the source for data nobody reads.
+- Every instance refreshing the same key at once, with no single-flight.
+- Mixing it up with stale-while-revalidate, where the value has already expired.
 
 #### How it works
 ```mermaid
@@ -300,8 +392,30 @@ Hot, expensive-to-compute keys where miss latency hurts and slight staleness is 
 #### Interview angle
 > "Hot, expensive keys like exchange rates get refresh-ahead: one background reload at about 80% of the TTL while readers keep getting the cached value, so there's never a miss spike."
 
+#### Sources
+- [Caffeine: refresh](https://github.com/ben-manes/caffeine/wiki/Refresh) — Caffeine wiki
+- [Caching challenges and strategies](https://aws.amazon.com/builders-library/caching-challenges-and-strategies/) — Amazon Builders' Library
+
 ### Negative caching — cache "not found" result with short TTL to prevent DB hammering on missing keys
 Negative caching stores the fact that **something doesn't exist** (or a request failed), so repeated lookups for missing keys don't hit the database every time. Without it, every request for a non-existent id is a cache miss that reaches the DB, which is exploitable by attackers and painful for buggy clients.
+
+#### Intuition
+A receptionist who has just checked that "Mr Sharma" does not work here. For the next few minutes she answers the same question from memory instead of searching the staff directory again.
+
+#### Must know
+- Cache the fact that something **does not exist**, as a sentinel value with a short TTL.
+- Without it, every request for a missing id is a cache miss that reaches the database (cache penetration).
+- **Delete the negative entry when the item is created.**
+- Against floods of random ids, add a bloom filter of valid ids and rate limiting.
+- DNS does the same with NXDOMAIN answers.
+
+#### Numbers to quote
+- Typical negative TTL: 30–120 seconds.
+
+#### Common mistakes
+- A long TTL on "not found", so a newly created item keeps returning 404.
+- Caching only hits and never misses.
+- Relying on negative caching alone against unique random ids. Each one is a new key.
 
 #### How it works
 ```mermaid
@@ -349,8 +463,27 @@ If the entity is created after the negative entry was cached (a user signs up, a
 #### Interview angle
 > "Lookups that miss cache a not-found sentinel for about a minute. Creation deletes it, and a bloom filter plus rate limiting stop random-id enumeration from reaching the database."
 
+#### Sources
+- [Negative caching of DNS queries (RFC 2308)](https://www.rfc-editor.org/rfc/rfc2308) — IETF
+- [Negative cache](https://en.wikipedia.org/wiki/Negative_cache) — Wikipedia
+
 ### Cache warming / pre-warming — populate cache before traffic spike (cold start problem)
 An empty cache is a hazard: after a deploy, failover, scale-out or flush, every request misses and hits the database at once. **Cache warming** populates the cache with the hot working set **before** real traffic arrives (or before a known spike like a sale), so the database never sees cold-start load.
+
+#### Intuition
+A restaurant that chops vegetables and prepares sauces before the doors open. If prep only started when the first hundred customers walked in, the kitchen would collapse.
+
+#### Must know
+- An **empty cache is dangerous**: after a restart, deploy or flush, every request misses and hits the database together.
+- Warming loads the hot set **before** traffic arrives or before a known spike.
+- Methods: a scripted load of known hot keys, replaying access logs, persisted snapshots.
+- New instances should pass readiness only after warming, and receive traffic gradually (slow start).
+- Throttle the warm-up itself so it does not overload the database.
+
+#### Common mistakes
+- Restarting the whole cache tier at once.
+- An unthrottled warm-up job that becomes the outage.
+- Warming hours before the event, so the data is stale when it matters.
 
 #### How it works
 ```mermaid
@@ -400,8 +533,27 @@ Run a warm-up step during startup (load config, top-N entities) before the readi
 #### Interview angle
 > "Before known spikes, a throttled job warms Redis and the CDN with the hot set. New instances warm up before passing readiness and get slow-start traffic, so the database never sees a cold-cache storm."
 
+#### Sources
+- [Caching challenges and strategies](https://aws.amazon.com/builders-library/caching-challenges-and-strategies/) — Amazon Builders' Library
+- [Slow start mode](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/slow_start) — Envoy docs
+
 ### Cache busting — append content hash to URLs to force new cache entries on deploy
 Cache busting forces clients and CDNs to fetch a new version of a resource by **changing its URL** whenever its content changes, typically by putting a **content hash** in the filename (`app.3f9a1c.js`). Old URLs keep their long-lived cache entries, and new URLs are simply new cache entries, so no purge is needed.
+
+#### Intuition
+Printing a new edition of a booklet with the edition number on the cover. Nobody has to hunt down and destroy old copies. Readers simply ask for the new edition by name.
+
+#### Must know
+- Put a **content hash in the filename**: `app.3f9a1c.js`. A changed file gets a new URL.
+- Hashed assets: `Cache-Control: public, max-age=31536000, immutable`.
+- The HTML entry point: `Cache-Control: no-cache`, so it is revalidated on every load.
+- A deploy needs **no CDN purge**, and unchanged files stay cached.
+- Keep old assets on the server for a while. Users with old HTML still request them.
+
+#### Common mistakes
+- A long `max-age` on a filename that never changes, so users run old code for a day.
+- Deleting the previous build's files at deploy, which breaks sessions in progress.
+- A build number in every URL, which forces a full re-download on each deploy.
 
 #### How it works
 ```mermaid
@@ -451,3 +603,9 @@ A build number changes every file's URL on every deploy, so users redownload eve
 
 #### Interview angle
 > "Static assets carry content hashes and a one-year immutable cache, and HTML is no-cache, so deploys reach users on the next load without any CDN purge."
+
+#### Sources
+- [Prevent unnecessary network requests with the HTTP cache](https://web.dev/articles/http-cache) — web.dev
+- [Cache-Control header](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cache-Control) — MDN
+- [Caching](https://webpack.js.org/guides/caching/) — webpack docs
+
