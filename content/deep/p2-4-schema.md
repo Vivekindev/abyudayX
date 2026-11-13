@@ -3,6 +3,20 @@
 ### 1NF — atomic values, no repeating groups
 First Normal Form requires that every column holds a **single, atomic value**, with no lists in a cell and no repeating column groups (`phone1, phone2, phone3`), and that each row is uniquely identifiable. It's the baseline that makes data queryable and indexable.
 
+#### Intuition
+A spreadsheet where one cell holds "98450…, 99001…, 90080…". You cannot sort or search by the second number. Give every value its own row and the sheet becomes usable.
+
+#### Must know
+- **One value per cell.** No comma-separated lists, no repeating columns such as `phone1, phone2, phone3`.
+- Every row has a key that identifies it.
+- A list becomes a **child table** with a foreign key.
+- Arrays or JSONB bend the rule on purpose. That is acceptable when the value is read and written as a whole.
+
+#### Common mistakes
+- Storing ids or tags as a comma-separated string and filtering with `LIKE`.
+- Adding `address2`, `address3` columns instead of a child table.
+- Putting core relational data (money, status, ownership) inside JSON.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -53,8 +67,27 @@ Strictly it breaks 1NF. It's acceptable for semi-structured, variable attributes
 #### Interview angle
 > "Core entities are normalised with child tables instead of lists in cells. JSONB is only for genuinely variable attributes, with GIN indexes on the fields we filter by."
 
+#### Sources
+- [First normal form](https://en.wikipedia.org/wiki/First_normal_form) — Wikipedia
+- [Description of the database normalization basics](https://learn.microsoft.com/en-us/office/troubleshoot/access/database-normalization-description) — Microsoft Learn
+
 ### 2NF — full functional dependency on entire primary key (no partial dependency)
 Second Normal Form applies to tables with a **composite primary key**: every non-key column must depend on the **whole key**, not just part of it. Columns that depend on only part of the key belong in another table, otherwise you get duplication and update anomalies.
+
+#### Intuition
+A class register keyed by (student, subject). The marks belong to that pair. The student's home address has nothing to do with the subject, so it does not belong in this register.
+
+#### Must know
+- It only applies to tables with a **composite primary key**.
+- Every non-key column must depend on the **whole key**, not on one part of it.
+- A column that depends on part of the key moves to its own table (product name goes to `products`).
+- This removes **update anomalies**: one fact stored in many rows.
+- The price at purchase on an order line is a historical fact, not a violation.
+
+#### Common mistakes
+- Copying product name and category into every order line.
+- "Fixing" the price snapshot by looking up the current price, which changes old invoices.
+- Applying 2NF reasoning to a table with a single-column key, where it holds automatically.
 
 #### How it works
 ```mermaid
@@ -102,8 +135,26 @@ When the same fact is stored in many rows, updating it requires changing all of 
 #### Interview angle
 > "Product attributes live in products, and order lines keep only facts about that line: quantity, plus the price snapshotted at purchase so invoices never change."
 
+#### Sources
+- [Second normal form](https://en.wikipedia.org/wiki/Second_normal_form) — Wikipedia
+- [Database normalization](https://en.wikipedia.org/wiki/Database_normalization) — Wikipedia
+
 ### 3NF — no transitive dependency (non-key → non-key)
 Third Normal Form: every non-key column depends on **the key, the whole key and nothing but the key**. If column C depends on column B, which depends on the key (key → B → C), then C is **transitively dependent** and belongs in a separate table keyed by B.
+
+#### Intuition
+An employee card that also prints the department's office address. When the department moves, every employee's card is wrong. Store the address once, with the department.
+
+#### Must know
+- Every non-key column depends on "the key, the whole key, and nothing but the key".
+- If key → B → C, then C belongs in a table keyed by B (employee → dept_id → dept_name).
+- 3NF is the **default target for transactional (OLTP) schemas**.
+- Read-heavy views can be denormalised deliberately, on top of a 3NF source of truth.
+
+#### Common mistakes
+- Keeping `customer_email` on the orders table.
+- Treating normal forms as rules to follow blindly instead of a way to avoid anomalies.
+- Normalising a read model that would be faster and simpler denormalised.
 
 #### How it works
 ```mermaid
@@ -147,8 +198,26 @@ For transactional (write) models, yes as a default, because it keeps writes simp
 #### Interview angle
 > "The write model is 3NF so each fact lives in one place. Read-heavy screens get denormalised projections that are updated from events or materialised views."
 
+#### Sources
+- [Third normal form](https://en.wikipedia.org/wiki/Third_normal_form) — Wikipedia
+- [Description of the database normalization basics](https://learn.microsoft.com/en-us/office/troubleshoot/access/database-normalization-description) — Microsoft Learn
+
 ### BCNF — every determinant is a candidate key
 Boyce-Codd Normal Form tightens 3NF: for **every** functional dependency X → Y in a table, X must be a candidate key. It removes rare anomalies 3NF still allows, which happen when a table has overlapping composite candidate keys. It comes up rarely in interviews and in practice, but it's good to explain once.
+
+#### Intuition
+A stricter 3NF with one rule: if knowing column X tells you column Y, then X must be able to identify the whole row. If it cannot, that fact is stored in the wrong table.
+
+#### Must know
+- For every dependency X → Y, **X must be a candidate key**.
+- It differs from 3NF only when a table has overlapping composite candidate keys, which is rare.
+- Decomposing to BCNF can make a business rule impossible to enforce with one unique constraint.
+- Production schemas normally stop at 3NF.
+
+#### Common mistakes
+- Spending interview time here. One definition and one example are enough.
+- Claiming BCNF is always better. It can lose dependency preservation.
+- Confusing a determinant with a primary key.
 
 #### How it works
 ```mermaid
@@ -194,8 +263,27 @@ Usually no further than 3NF. BCNF decomposition can break dependency preservatio
 #### Interview angle
 > "I know BCNF as the strict form where every determinant is a key, but production schemas usually stop at 3NF. The extra decomposition rarely pays for the constraints it makes harder to enforce."
 
+#### Sources
+- [Boyce–Codd normal form](https://en.wikipedia.org/wiki/Boyce%E2%80%93Codd_normal_form) — Wikipedia
+- [Database normalization](https://en.wikipedia.org/wiki/Database_normalization) — Wikipedia
+
 ### Denormalization — intentional redundancy to speed up reads, accept write overhead
 Denormalisation deliberately **stores the same data in more than one place** (copied columns, precomputed aggregates, read-optimised tables) so reads avoid joins or expensive computations. You trade write complexity and the risk of inconsistency for read speed and scalability.
+
+#### Intuition
+Keeping a running total at the bottom of your expense sheet instead of adding up every row each time someone asks. Reading is instant, but you must remember to update the total on every change.
+
+#### Must know
+- Deliberately store data **more than once** so reads skip joins or heavy counts.
+- Forms: copied columns, precomputed counters (`like_count`), read models shaped for one screen.
+- The normalised tables stay the **source of truth**.
+- Update copies in the same transaction for critical values, or asynchronously via events / CDC.
+- Always keep a way to **rebuild or reconcile**, because copies drift.
+
+#### Common mistakes
+- Denormalising with no owner and no mechanism that keeps the copies in sync.
+- Running `COUNT(*)` on a huge table for every page view.
+- A single counter row updated by every request (a hot row).
 
 #### How it works
 ```mermaid
@@ -248,8 +336,28 @@ Copies go stale if events are lost or processed out of order, there's no single 
 #### Interview angle
 > "The normalised tables stay the source of truth. Hot reads like counts and feeds come from denormalised projections, updated in the same transaction or via events, with a rebuild job for drift."
 
+#### Sources
+- [Denormalization](https://en.wikipedia.org/wiki/Denormalization) — Wikipedia
+- [Materialized views](https://www.postgresql.org/docs/current/rules-materializedviews.html) — PostgreSQL docs
+- [CQRS](https://martinfowler.com/bliki/CQRS.html) — Martin Fowler
+
 ### Online schema changes — gh-ost (GitHub), pt-online-schema-change (Percona), pg_repack
 Large production tables can't be locked for hours while an `ALTER TABLE` rewrites them. Online schema change tools build a **new copy of the table with the new schema in the background**, keep it in sync with ongoing writes, then **swap** it in with a brief lock.
+
+#### Intuition
+Renovating a shop while it stays open. You build the new layout in the room next door, keep it stocked with every new delivery, and switch the doors over in a few seconds.
+
+#### Must know
+- A blocking `ALTER TABLE` on a big hot table is an outage.
+- Online tools build a **shadow copy** with the new schema, keep it in sync, then swap it in with a brief lock.
+- MySQL: **gh-ost** (reads the binlog) or pt-online-schema-change (triggers), plus native `ALGORITHM=INSTANT`.
+- PostgreSQL: `CREATE INDEX CONCURRENTLY`, instant `ADD COLUMN`, pg_repack to remove bloat.
+- Always set `lock_timeout`, throttle on replica lag, and check free disk first.
+
+#### Common mistakes
+- Running `CREATE INDEX` without `CONCURRENTLY` on a live table.
+- Forgetting that the copy temporarily doubles the table's disk usage.
+- Leaving an INVALID index behind after a failed concurrent build.
 
 #### How it works
 ```mermaid
@@ -314,8 +422,28 @@ It still needs a brief exclusive lock. If a long-running transaction holds a con
 #### Interview angle
 > "Schema changes on big tables use expand-contract and online tooling (CREATE INDEX CONCURRENTLY, gh-ost), always with a lock_timeout and throttling on replica lag."
 
+#### Sources
+- [gh-ost: GitHub's online schema migration tool for MySQL](https://github.com/github/gh-ost) — GitHub
+- [CREATE INDEX: building indexes concurrently](https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY) — PostgreSQL docs
+- [Online DDL operations](https://dev.mysql.com/doc/refman/8.4/en/innodb-online-ddl-operations.html) — MySQL reference manual
+
 ### Expand-contract pattern — add new column nullable → backfill → add constraint → drop old
 Expand-contract (parallel change) evolves a schema **without downtime and without breaking running code**: first **expand** the schema so old and new code both work, migrate the data and code gradually, then **contract** by removing the old structure once nothing uses it.
+
+#### Intuition
+Replacing a bridge without stopping traffic. Build the new bridge beside the old one, move traffic across lane by lane, and demolish the old one only when it is empty.
+
+#### Must know
+- **Expand**: add the new column or table. Additive, so old code keeps working.
+- **Migrate**: dual-write, backfill in batches, switch reads behind a flag.
+- **Contract**: stop writing the old column, then drop it once no running version uses it.
+- Every step is backward compatible with the version before it, so rolling deploys and rollbacks are safe.
+- Never rename or drop a column in one step while old code is still running.
+
+#### Common mistakes
+- Backfilling before dual-write is on, so rows written during the backfill are missed.
+- One giant `UPDATE` for the backfill, which locks rows and lags replicas.
+- Dropping the old column in the same release that stops using it.
 
 #### How it works
 ```mermaid
@@ -370,8 +498,32 @@ During a rolling deploy old and new app versions run at the same time. Additive 
 #### Interview angle
 > "Every schema change ships as expand-contract: additive change first, dual writes and a batched backfill, reads switched behind a flag, and the old column dropped last, so rolling deploys and rollbacks never break."
 
+#### Sources
+- [Parallel change](https://martinfowler.com/bliki/ParallelChange.html) — Martin Fowler
+- [Using the expand and contract pattern](https://www.prisma.io/dataguide/types/relational/expand-and-contract-pattern) — Prisma Data Guide
+- [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html) — PostgreSQL docs
+
 ### Connection pooling — PgBouncer (transaction mode), HikariCP (JVM), Sequelize pool (Node)
 Opening a database connection is expensive (TCP + TLS + auth, plus a backend **process** per connection in PostgreSQL), and databases handle only a limited number of concurrent connections well. A pool keeps a small set of open connections and **lends them out** per transaction, which cuts latency and protects the database.
+
+#### Intuition
+A taxi stand. A small fleet of cars that are already running serves many passengers in turn, instead of buying a car for each passenger and scrapping it after one ride.
+
+#### Must know
+- Opening a connection is expensive, and PostgreSQL starts a **process per connection**.
+- A pool keeps a few connections open and lends them out per request or transaction.
+- App-side pool: HikariCP. External pooler: PgBouncer or RDS Proxy, which multiplexes many clients onto few server connections.
+- **Pods × pool size = total connections.** Autoscaling the app can take the database down.
+- PgBouncer transaction mode multiplexes best, but session state does not carry over between transactions.
+
+#### Numbers to quote
+- Starting point: total active DB connections ≈ CPU cores × 2–4.
+- PostgreSQL default `max_connections`: 100.
+
+#### Common mistakes
+- Assuming a bigger pool means more throughput. Past the core count it means more contention.
+- Sizing the pool per pod and forgetting to multiply by the number of pods.
+- No connection timeout, so requests queue forever when the pool is empty.
 
 #### How it works
 ```mermaid
@@ -435,8 +587,32 @@ A database executes in parallel only up to its cores and I/O capacity. Beyond th
 #### Interview angle
 > "Each pod gets a small Hikari pool, and PgBouncer in transaction mode multiplexes everything onto a few dozen server connections, sized to the database's cores, so autoscaling the app can't overwhelm the database."
 
+#### Sources
+- [About pool sizing](https://github.com/brettwooldridge/HikariCP/wiki/About-Pool-Sizing) — HikariCP wiki
+- [PgBouncer features: pooling modes](https://www.pgbouncer.org/features.html) — PgBouncer docs
+- [Number of database connections](https://wiki.postgresql.org/wiki/Number_Of_Database_Connections) — PostgreSQL wiki
+
 ### PostgreSQL-specific — VACUUM, autovacuum, TOAST (for large values), pg_stat_activity
 Running PostgreSQL well means knowing its maintenance internals: **VACUUM** reclaims dead tuples created by MVCC, **autovacuum** does it automatically, **TOAST** stores large values out of line, and **pg_stat_activity** (with other `pg_stat_*` views) shows what the database is doing right now.
+
+#### Intuition
+A restaurant. VACUUM is clearing dirty plates so tables can be reused, autovacuum is the waiter who does it without being asked, TOAST is the storeroom for items too big to keep on the table, and pg_stat_activity is the view of the floor showing who is doing what.
+
+#### Must know
+- Every UPDATE and DELETE leaves a dead row. **VACUUM** makes that space reusable. Autovacuum runs it automatically.
+- Plain VACUUM does not shrink the file. `VACUUM FULL` does, but locks the table, so use pg_repack.
+- A long or idle-in-transaction session, or a stale replication slot, **blocks cleanup**.
+- **TOAST** moves large values out of the row. `SELECT *` pulls them all back.
+- `pg_stat_activity` shows live sessions. `pg_stat_statements` shows the most expensive queries.
+
+#### Numbers to quote
+- Default autovacuum trigger: 20% of the table dead. Hot tables usually need about 1%.
+- TOAST applies to values over roughly 2 KB.
+
+#### Common mistakes
+- Running `VACUUM FULL` on a live table in production.
+- Disabling autovacuum "because it uses I/O".
+- Storing big blobs in the row and selecting `*` on list endpoints.
 
 #### How it works
 ```mermaid
@@ -505,8 +681,28 @@ TOAST stores large column values (over ~2 KB) compressed and out of line in a se
 #### Interview angle
 > "For hot Postgres tables I tune autovacuum per table, watch dead tuples and long transactions in pg_stat views, and use pg_stat_statements to find the queries worth optimising."
 
+#### Sources
+- [Routine vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html) — PostgreSQL docs
+- [TOAST](https://www.postgresql.org/docs/current/storage-toast.html) — PostgreSQL docs
+- [The cumulative statistics system (pg_stat views)](https://www.postgresql.org/docs/current/monitoring-stats.html) — PostgreSQL docs
+
 ### JSONB in PostgreSQL — binary JSON, GIN indexable, operators @>, ?, #>>
 `JSONB` stores JSON in a decomposed binary format: keys are de-duplicated and sorted, so it's fast to query and indexable with **GIN**. It lets a relational database hold semi-structured data (variable attributes, external payloads, settings) next to strongly typed columns.
+
+#### Intuition
+A form with fixed boxes for name and price, plus one flexible "other details" box at the bottom. The fixed boxes are checked strictly. The flexible box takes whatever each product needs, and it is still searchable.
+
+#### Must know
+- JSONB stores JSON in a parsed binary form that can be queried and indexed. Prefer it over the `json` type.
+- A **GIN index** makes containment (`@>`) and key-existence (`?`) queries fast.
+- Read one field with `->>`. Index one hot field with an expression index.
+- Use it for **variable attributes** and raw external payloads.
+- Money, status, ownership and foreign keys stay in typed columns with constraints.
+
+#### Common mistakes
+- Putting everything in one JSONB column and losing types, constraints and good statistics.
+- Querying JSON fields with no GIN or expression index.
+- Large documents updated often. Every change rewrites the whole value.
 
 #### How it works
 ```mermaid
@@ -570,8 +766,27 @@ When most of the data is relational (orders, users, payments with constraints an
 #### Interview angle
 > "Core fields are typed columns with constraints. Category-specific attributes go in JSONB with a GIN index, and any attribute that becomes hot gets promoted to a generated column with its own index."
 
+#### Sources
+- [JSON types](https://www.postgresql.org/docs/current/datatype-json.html) — PostgreSQL docs
+- [JSON functions and operators](https://www.postgresql.org/docs/current/functions-json.html) — PostgreSQL docs
+
 ### Full-text search in PostgreSQL — tsvector, tsquery, GIN index, ts_rank
 PostgreSQL has built-in full-text search: text is normalised into a **tsvector** (stemmed lexemes with positions), queries become a **tsquery**, a **GIN** index makes matching fast, and **ts_rank** orders results by relevance. For many apps it's good enough to skip Elasticsearch entirely.
+
+#### Intuition
+The index at the back of a book, built automatically. Each word is reduced to its root ("running" becomes "run") and listed with the pages where it appears, so a search looks up words instead of reading every page.
+
+#### Must know
+- `tsvector` = the document as normalised words. `tsquery` = the search. `@@` matches them.
+- A **GIN index** on a stored tsvector column makes it fast. `ts_rank` orders by relevance.
+- It is transactional with your data and needs no extra system or sync pipeline.
+- Good up to a few million documents. Add `pg_trgm` for typos and substring search.
+- Move to Elasticsearch when you need better relevance, facets or much larger scale.
+
+#### Common mistakes
+- Calling `to_tsvector` at query time instead of storing and indexing it.
+- Using `LIKE '%word%'` and calling it search.
+- Adding Elasticsearch for a few hundred thousand rows.
 
 #### How it works
 ```mermaid
@@ -634,8 +849,31 @@ Precompute the document vector in a stored generated column (with weights), inde
 #### Interview angle
 > "For a moderate catalogue I'd start with Postgres full-text search plus pg_trgm. I'd move to Elasticsearch via CDC only once relevance tuning, facets or scale require it."
 
+#### Sources
+- [Full text search: introduction](https://www.postgresql.org/docs/current/textsearch-intro.html) — PostgreSQL docs
+- [Full text search: tables and indexes](https://www.postgresql.org/docs/current/textsearch-tables.html) — PostgreSQL docs
+- [pg_trgm](https://www.postgresql.org/docs/current/pgtrgm.html) — PostgreSQL docs
+
 ### Write-Ahead Log (WAL) — every change written to log before applied, enables crash recovery and replication
 The write-ahead log is an append-only record of every change. The rule: **log the change durably before modifying data pages**. That single rule gives databases crash recovery, durability, physical replication, point-in-time recovery and change data capture.
+
+#### Intuition
+An aircraft's flight recorder. Every action is written to it first. Whatever happens to the aircraft, the recorder lets you replay events exactly, and anyone listening to it live can follow along.
+
+#### Must know
+- Rule: **write the change to the log, durably, before touching the data pages**.
+- Sequential log appends make commits cheap.
+- The same log gives **crash recovery, replication, point-in-time recovery and CDC**.
+- Each record has a position, the **LSN**, used to measure replication lag.
+- MySQL has two logs: the InnoDB redo log (recovery) and the binlog (replication, CDC).
+
+#### Numbers to quote
+- PostgreSQL WAL segment size: 16 MB.
+
+#### Common mistakes
+- Leaving an inactive replication slot (dead replica or CDC connector), which keeps WAL until the disk fills.
+- Taking backups without archiving WAL, so point-in-time recovery is impossible.
+- Never testing a restore.
 
 #### How it works
 ```mermaid
@@ -687,8 +925,31 @@ A replication slot whose consumer stopped (a dead Debezium connector, a removed 
 #### Interview angle
 > "The WAL is the database's source of truth for changes. It gives us durability and replicas, point-in-time recovery from archived WAL, and Debezium CDC into Kafka without dual writes."
 
+#### Sources
+- [Write-ahead logging (WAL)](https://www.postgresql.org/docs/current/wal-intro.html) — PostgreSQL docs
+- [Continuous archiving and point-in-time recovery](https://www.postgresql.org/docs/current/continuous-archiving.html) — PostgreSQL docs
+- [Redo log](https://dev.mysql.com/doc/refman/8.4/en/innodb-redo-log.html) — MySQL reference manual
+
 ### Checkpointing — periodically flush dirty pages to disk, bound WAL replay on restart
 A checkpoint flushes all modified ("dirty") pages from memory to the data files and records a point in the WAL from which recovery would start. Checkpoints **bound crash-recovery time** and let old WAL be recycled, but they're a burst of I/O that has to be smoothed out.
+
+#### Intuition
+A save point in a long game. Without one, a crash means replaying from the very start. With regular save points you replay only the last few minutes.
+
+#### Must know
+- A checkpoint **writes all dirty pages to the data files** and marks a position in the WAL.
+- Crash recovery replays the WAL only from the last checkpoint, so checkpoints bound recovery time.
+- WAL older than the checkpoint can be recycled.
+- Checkpoints are an I/O burst, so the writes are spread over the interval.
+- Trade-off: frequent checkpoints mean faster recovery but more I/O and more WAL.
+
+#### Numbers to quote
+- PostgreSQL defaults: `checkpoint_timeout` 5 min, `max_wal_size` 1 GB, `checkpoint_completion_target` 0.9.
+
+#### Common mistakes
+- Thinking a checkpoint is what makes a commit durable. The WAL fsync does that.
+- Leaving `max_wal_size` tiny under heavy writes, so checkpoints run every few seconds.
+- Missing that latency spikes every few minutes line up with checkpoints.
 
 #### How it works
 ```mermaid
@@ -744,3 +1005,8 @@ Checkpoint I/O bursts: every `checkpoint_timeout` the database flushes many dirt
 
 #### Interview angle
 > "Checkpoints trade recovery time against I/O. I size max_wal_size so checkpoints are time-based and spread their writes, which keeps latency smooth while bounding crash recovery to a few minutes."
+
+#### Sources
+- [WAL configuration](https://www.postgresql.org/docs/current/wal-configuration.html) — PostgreSQL docs
+- [Write ahead log settings: checkpoints](https://www.postgresql.org/docs/current/runtime-config-wal.html#RUNTIME-CONFIG-WAL-CHECKPOINTS) — PostgreSQL docs
+

@@ -3,6 +3,20 @@
 ### Atomicity — all operations in a transaction succeed or all roll back
 Atomicity means a transaction is **all or nothing**. If any statement fails, or the server crashes halfway, every change made by the transaction is undone, so the database never shows a half-finished operation.
 
+#### Intuition
+An ATM transfer: either your account is debited and your friend's is credited, or the machine cancels and nothing moves. There is no outcome where the money leaves you and never arrives.
+
+#### Must know
+- A transaction is **all or nothing**: any failure or crash undoes every change it made.
+- The database does this with its log: undo information for rollback, WAL replay for crash recovery.
+- Auto-commit mode makes every statement its own transaction, so two statements are not atomic together.
+- Atomicity **ends at the database boundary**. DB + Kafka or DB + another service needs an outbox or a saga.
+
+#### Common mistakes
+- Saying "atomic" to mean "isolated". Atomicity is about failure, not about concurrency.
+- Saving to the DB and then publishing to Kafka, and assuming both always happen (dual write).
+- Catching an exception inside a Spring `@Transactional` method, which makes the half-done work commit.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -60,8 +74,27 @@ If the exception is caught inside the transactional method and not rethrown, Spr
 #### Interview angle
 > "Within one database a transaction gives me atomicity. As soon as a second system is involved (Kafka, another service) I use an outbox or a saga, because there's no shared transaction."
 
+#### Sources
+- [Transactions](https://www.postgresql.org/docs/current/tutorial-transactions.html) — PostgreSQL tutorial
+- [Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) — microservices.io
+- [Rolling back a declarative transaction](https://docs.spring.io/spring-framework/reference/data-access/transaction/declarative/rolling-back.html) — Spring Framework docs
+
 ### Consistency — DB moves from one valid state to another, constraints always satisfied
 In ACID, consistency means a transaction takes the database from one **valid state to another valid state**: all declared rules (primary keys, foreign keys, unique, check constraints, triggers) hold after every commit. Not to be confused with the "C" in CAP, which is about replicas agreeing.
+
+#### Intuition
+A bouncer with a rulebook at the door. Any transaction that would leave the data breaking a written rule is turned away. Rules you never wrote down, the bouncer cannot enforce.
+
+#### Must know
+- ACID consistency = every commit leaves all **declared** rules true: PK, FK, UNIQUE, CHECK, NOT NULL.
+- It is a different word from CAP consistency, which is about replicas returning the latest write.
+- A unique constraint is the only race-free way to stop duplicates. Check-then-insert in code is a race.
+- Rules the database cannot express are the application's job.
+
+#### Common mistakes
+- Mixing up the C in ACID with the C in CAP.
+- Enforcing uniqueness or "balance ≥ 0" only in application code.
+- Assuming constraints still hold across shards or services. They do not, the app has to enforce them.
 
 #### How it works
 ```mermaid
@@ -115,8 +148,28 @@ ACID consistency: each transaction preserves the database's integrity rules (con
 #### Interview angle
 > "I encode invariants as constraints (unique wallet per user and currency, non-negative balance), so correctness doesn't depend on every code path being bug-free or on race timing."
 
+#### Sources
+- [Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html) — PostgreSQL docs
+- [ACID](https://en.wikipedia.org/wiki/ACID) — Wikipedia
+- [Consistency models](https://jepsen.io/consistency) — Jepsen
+
 ### Isolation — concurrent transactions don't see each other's intermediate state
 Isolation controls **what a transaction can see of other concurrent transactions**. Perfect isolation (serializable) makes concurrent transactions behave as if they ran one after another. Weaker levels trade correctness anomalies for performance, and choosing the right level per operation is a classic interview topic.
+
+#### Intuition
+Several people editing one spreadsheet. Isolation decides how much of each other's unfinished typing they can see. Perfect isolation feels as if each person had the sheet alone, one after another.
+
+#### Must know
+- Four levels, weakest to strongest: Read Uncommitted → Read Committed → Repeatable Read → Serializable.
+- Each level removes anomalies: dirty read, non-repeatable read, phantom, lost update, write skew.
+- Defaults: **Read Committed** in PostgreSQL, Oracle and SQL Server. **Repeatable Read** in MySQL InnoDB.
+- Most systems stay on the default and protect the few critical paths with a conditional `UPDATE`, `SELECT … FOR UPDATE` or a constraint.
+- Serializable code must retry on serialization failure.
+
+#### Common mistakes
+- Believing the default level prevents double booking. Check-then-write is unsafe at Read Committed.
+- Assuming the same level name behaves the same in every database. PG Repeatable Read is snapshot isolation, InnoDB's uses gap locks.
+- Reaching for Serializable everywhere instead of fixing the one racy statement.
 
 #### How it works
 ```mermaid
@@ -167,8 +220,31 @@ Serializable costs throughput: lock-based implementations block more, and SSI ab
 #### Interview angle
 > "I run Read Committed by default and protect invariants explicitly with conditional updates, row locks or unique constraints. I'd only use Serializable with a retry loop where a rule spans multiple rows."
 
+#### Sources
+- [Transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — PostgreSQL docs
+- [Transaction isolation levels](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html) — MySQL reference manual
+- [Hermitage: testing transaction isolation levels](https://github.com/ept/hermitage) — Martin Kleppmann
+
 ### Durability — committed data survives crashes (WAL-based)
 Durability means once the database says **COMMIT succeeded, the data survives** crashes, power loss and restarts. Databases achieve it cheaply with a **write-ahead log (WAL)** that's flushed (`fsync`) to disk before acknowledging the commit. Data pages are written later.
+
+#### Intuition
+A shopkeeper writes every sale in the ledger before handing over the receipt. If the shop burns down a minute later, the ledger still proves the sale. The neat stock register can be updated later from the ledger.
+
+#### Must know
+- COMMIT returns only after the **WAL record is fsynced** to disk. Data pages are written later at checkpoints.
+- After a crash, the database replays the WAL from the last checkpoint.
+- One machine's disk can still die: **RPO 0 needs synchronous replication** to another node or AZ.
+- Async replication loses whatever had not shipped yet (the replica lag).
+
+#### Numbers to quote
+- Local fsync on SSD: roughly 0.1–2 ms per commit.
+- Synchronous standby in the same region: about +1–2 ms. Cross-region: +50–150 ms.
+
+#### Common mistakes
+- Thinking durable means "safe from everything". It survives a crash, not the loss of the only disk.
+- Turning off `fsync` or `synchronous_commit` for speed on data that matters.
+- Promising zero data loss on async replication.
 
 #### How it works
 ```mermaid
@@ -223,8 +299,28 @@ The WAL is an append-only sequential file, so one sequential write and fsync cov
 #### Interview angle
 > "Commits are durable once the WAL is fsynced. For payment data I'd add a synchronous standby in another AZ, so losing the primary loses nothing (RPO 0), at the cost of ~1–2 ms per commit."
 
+#### Sources
+- [Write-ahead logging (WAL)](https://www.postgresql.org/docs/current/wal-intro.html) — PostgreSQL docs
+- [Asynchronous commit](https://www.postgresql.org/docs/current/wal-async-commit.html) — PostgreSQL docs
+- [Write-ahead logging](https://en.wikipedia.org/wiki/Write-ahead_logging) — Wikipedia
+
 ### BEGIN, COMMIT, ROLLBACK, SAVEPOINT — transaction control
 These statements define transaction boundaries. `BEGIN` starts one, `COMMIT` makes its changes permanent and visible, `ROLLBACK` discards them, and `SAVEPOINT` marks a point you can roll back to **without abandoning the whole transaction**.
+
+#### Intuition
+A video game. BEGIN starts the level, COMMIT saves the game, ROLLBACK quits without saving, and SAVEPOINT is a checkpoint inside the level you can return to without restarting it.
+
+#### Must know
+- `BEGIN` … `COMMIT` or `ROLLBACK` mark the boundary. Without `BEGIN`, each statement auto-commits.
+- `SAVEPOINT` + `ROLLBACK TO` undoes part of a transaction and keeps the rest.
+- In PostgreSQL an error aborts the whole transaction until you roll back.
+- Keep transactions **short**. No HTTP calls or user waits inside one.
+- Spring `Propagation.NESTED` is a savepoint underneath.
+
+#### Common mistakes
+- Calling a remote service inside a transaction, which holds locks and a connection while it is slow.
+- Leaving sessions "idle in transaction", which blocks VACUUM and causes bloat.
+- Assuming the statements after a failed one still ran in PostgreSQL.
 
 #### How it works
 ```mermaid
@@ -284,8 +380,27 @@ When part of a larger transaction may fail and you want to recover without losin
 #### Interview angle
 > "Transactions stay short and only touch the database: no HTTP calls inside. Optional steps use savepoints, and the database kills sessions left idle in a transaction."
 
+#### Sources
+- [SAVEPOINT](https://www.postgresql.org/docs/current/sql-savepoint.html) — PostgreSQL docs
+- [Transactions](https://www.postgresql.org/docs/current/tutorial-transactions.html) — PostgreSQL tutorial
+- [Transaction propagation](https://docs.spring.io/spring-framework/reference/data-access/transaction/declarative/tx-propagation.html) — Spring Framework docs
+
 ### Read Uncommitted — dirty reads allowed, fastest but rarely useful
 The weakest isolation level: a transaction may read rows **other transactions have changed but not committed**. If those transactions roll back, you've acted on data that never existed. Almost no production system should use it.
+
+#### Intuition
+Reading over someone's shoulder while they draft an email. You may act on a sentence they delete a second later.
+
+#### Must know
+- The weakest level: you can read data another transaction has **not committed** (a dirty read).
+- PostgreSQL does not implement it. Asking for it gives you Read Committed.
+- SQL Server's `WITH (NOLOCK)` is Read Uncommitted and can also skip or double-count rows.
+- If readers block writers, the fix is MVCC / snapshot reads, not dirty reads.
+
+#### Common mistakes
+- Adding `NOLOCK` as a performance fix and then trusting the numbers.
+- Saying it is "faster" on PostgreSQL or InnoDB, where plain reads already do not block.
+- Using it for anything involving money or user-visible state.
 
 #### How it works
 ```mermaid
@@ -335,8 +450,27 @@ PostgreSQL's MVCC only shows row versions created by committed transactions (plu
 #### Interview angle
 > "I'd never use Read Uncommitted for business data. If readers are blocking writers, the answer is MVCC or snapshot isolation, not dirty reads."
 
+#### Sources
+- [Transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — PostgreSQL docs
+- [SET TRANSACTION ISOLATION LEVEL](https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql) — Microsoft SQL Server docs
+- [Read uncommitted](https://jepsen.io/consistency/models/read-uncommitted) — Jepsen
+
 ### Read Committed — no dirty reads, default in PostgreSQL and Oracle
 Under Read Committed each **statement** sees only data committed **before that statement started**. There are no dirty reads, but two statements in the same transaction can see different data, because others committed in between. It's the default in PostgreSQL, Oracle and SQL Server.
+
+#### Intuition
+Every time you look up, you see the latest published edition of the newspaper. You never see a draft, but two looks a minute apart may show different editions.
+
+#### Must know
+- Each **statement** sees only data committed before that statement began.
+- No dirty reads. Non-repeatable reads, phantoms and lost updates are still possible.
+- Default in PostgreSQL, Oracle and SQL Server.
+- Make check-and-change **one statement**: `UPDATE … SET stock = stock - 1 WHERE id = ? AND stock > 0`, then check rows affected.
+
+#### Common mistakes
+- Read in the app, decide, then write back. Two requests both read the old value (overselling).
+- Assuming a multi-statement report sees one consistent picture.
+- Forgetting to check the affected-row count after a conditional update.
 
 #### How it works
 ```mermaid
@@ -394,8 +528,28 @@ Non-repeatable reads, phantom reads, lost updates (with app-level read-modify-wr
 #### Interview angle
 > "Postgres defaults to Read Committed. I keep it and make every check-and-update a single conditional statement or an explicit row lock, which removes the races without paying for Serializable."
 
+#### Sources
+- [Read Committed isolation level](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED) — PostgreSQL docs
+- [Read committed](https://jepsen.io/consistency/models/read-committed) — Jepsen
+- [A Critique of ANSI SQL Isolation Levels](https://www.microsoft.com/en-us/research/publication/a-critique-of-ansi-sql-isolation-levels/) — Berenson et al., Microsoft Research
+
 ### Repeatable Read — same row read twice gives same result within transaction (MySQL default)
 Under Repeatable Read, a transaction reads from **one consistent snapshot taken at its first query**: rows you read won't change underneath you, no matter what others commit. It's the MySQL/InnoDB default and is called **snapshot isolation** in PostgreSQL.
+
+#### Intuition
+You take a photo of the whiteboard when you walk in and work from the photo. People keep editing the board, but your photo does not change.
+
+#### Must know
+- The whole transaction reads from **one snapshot** taken at its first query.
+- PostgreSQL: this is snapshot isolation. No phantoms, and a concurrent update to your row gives error 40001, so retry.
+- MySQL InnoDB (its default): snapshot for plain SELECTs, **next-key (gap) locks** for locking reads and writes.
+- It does **not** prevent write skew.
+- Good for reports, exports and backups. `pg_dump` uses it.
+
+#### Common mistakes
+- Treating it as equal to Serializable.
+- Running write transactions at this level in PostgreSQL without a retry loop.
+- Holding a long snapshot open on the primary, which blocks cleanup and bloats tables.
 
 #### How it works
 ```mermaid
@@ -447,8 +601,28 @@ MVCC must keep every old row version that your snapshot might still need, so VAC
 #### Interview angle
 > "For consistent multi-query reads (reports, exports, backups) I use Repeatable Read snapshots, ideally on a replica. Write transactions at that level need a retry loop for serialization errors."
 
+#### Sources
+- [Repeatable Read isolation level](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-REPEATABLE-READ) — PostgreSQL docs
+- [InnoDB locking: next-key locks](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html) — MySQL reference manual
+- [Snapshot isolation](https://jepsen.io/consistency/models/snapshot-isolation) — Jepsen
+
 ### Serializable — strictest, prevents all anomalies including phantoms (SSI in PostgreSQL)
 Serializable guarantees the result of concurrent transactions equals **some serial (one-at-a-time) order**. Every anomaly is impossible: lost updates, phantoms, write skew. The price is aborts or blocking, so applications must **retry** failed transactions.
+
+#### Intuition
+A single-lane bridge. However many cars arrive together, the result is the same as if they had crossed one at a time. Sometimes a car is told to reverse and try again.
+
+#### Must know
+- The outcome equals **some one-at-a-time order**. No anomaly is possible, including write skew.
+- PostgreSQL uses **SSI**: optimistic, no extra blocking, aborts one transaction with SQLSTATE 40001.
+- MySQL and SQL Server use locking (2PL): conflicts block and can deadlock.
+- The application **must retry** the whole transaction, so keep side effects (emails, HTTP, Kafka) out of it.
+- Use it for rules that span many rows or rows that do not exist yet.
+
+#### Common mistakes
+- Turning it on without a retry loop.
+- Sending an email or a payment call inside the transaction, which then repeats on retry.
+- Assuming Oracle's SERIALIZABLE is truly serializable. It is snapshot isolation.
 
 #### How it works
 ```mermaid
@@ -502,8 +676,27 @@ It must be safe to **retry**: deterministic, no external side effects (emails, H
 #### Interview angle
 > "For rules that span several rows, like on-call coverage or no overlapping bookings, I'd use Serializable with a retry loop and push side effects to an outbox. For single-row rules, a conditional update at Read Committed is cheaper."
 
+#### Sources
+- [Serializable isolation level](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE) — PostgreSQL docs
+- [Serializable Snapshot Isolation (SSI)](https://wiki.postgresql.org/wiki/SSI) — PostgreSQL wiki
+- [Serializability](https://jepsen.io/consistency/models/serializable) — Jepsen
+
 ### Dirty read — reading uncommitted data from a concurrent transaction
 A dirty read happens when a transaction reads a value **another transaction has written but not committed**. If that writer rolls back, the reader has acted on data that never officially existed. Only Read Uncommitted allows it.
+
+#### Intuition
+A cashier hands over the goods while the card machine still says "processing". The payment then fails, and the goods are already gone.
+
+#### Must know
+- A dirty read = reading a write that another transaction has **not committed** and may roll back.
+- Only Read Uncommitted allows it. Read Committed and above prevent it.
+- The same bug appears outside the database: publishing an event or updating a cache **before commit**.
+- Fix those with an outbox or after-commit hooks.
+
+#### Common mistakes
+- Thinking Read Committed makes the whole system safe while events are published before the commit.
+- Updating the cache inside the transaction, then rolling back.
+- Confusing a dirty read with a non-repeatable read. In the second one the other transaction did commit.
 
 #### How it works
 ```mermaid
@@ -551,8 +744,27 @@ Read Committed, Repeatable Read and Serializable. Only Read Uncommitted allows t
 #### Interview angle
 > "The DB already prevents dirty reads at Read Committed. The real risk is side effects before commit, so events go through an outbox and caches are invalidated in after-commit hooks."
 
+#### Sources
+- [Transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — PostgreSQL docs
+- [Isolation (database systems)](https://en.wikipedia.org/wiki/Isolation_%28database_systems%29) — Wikipedia
+- [Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) — microservices.io
+
 ### Non-repeatable read — same row returns different value on second read in same transaction
 A non-repeatable read happens when a transaction reads the **same row twice and gets different values**, because another transaction committed an update in between. It's allowed under Read Committed and prevented under Repeatable Read and Serializable.
+
+#### Intuition
+You check a price tag, walk to the counter, and the tag has been changed by the time you look again. The item is the same, the value is not.
+
+#### Must know
+- Same **row**, read twice in one transaction, two different values, because someone committed in between.
+- Allowed at Read Committed. Prevented at Repeatable Read and Serializable.
+- Best fix is design: **read once and carry the value** (snapshot the price onto the order).
+- Or verify on write: `… WHERE price = :seen`.
+
+#### Common mistakes
+- Re-reading a mutable value later in the same request and assuming it is unchanged.
+- Raising the isolation level when simply not reading twice would do.
+- Mixing it up with a phantom, which is about a set of rows appearing or vanishing.
 
 #### How it works
 ```mermaid
@@ -602,8 +814,27 @@ A non-repeatable read is about an **existing row** whose value changes between t
 #### Interview angle
 > "I avoid depending on re-reads: the price is snapshotted onto the order with a quote id and verified at payment, so a concurrent price change can't alter what the customer agreed to."
 
+#### Sources
+- [Transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — PostgreSQL docs
+- [Isolation (database systems)](https://en.wikipedia.org/wiki/Isolation_%28database_systems%29) — Wikipedia
+- [Repeatable read](https://jepsen.io/consistency/models/repeatable-read) — Jepsen
+
 ### Phantom read — same range query returns different set of rows in same transaction
 A phantom read happens when a transaction re-runs a **query with a condition** and sees **new rows** (or misses deleted ones), because another transaction inserted or deleted matching rows and committed. Row locks can't prevent it, because the phantom row didn't exist when you locked.
+
+#### Intuition
+You count the people in a room, turn around, and count again. Someone walked in meanwhile. You could not have stopped them by watching the people who were already there.
+
+#### Must know
+- Re-running a **query with a condition** returns new rows, or misses deleted ones.
+- Row locks cannot stop it, because the new row did not exist when you locked.
+- Fixes: range / next-key locks (InnoDB), Serializable, locking a parent "guard" row, or a constraint.
+- A **unique or exclusion constraint** is the cheapest and most reliable fix for double booking.
+
+#### Common mistakes
+- "Check there is no booking, then insert" at Read Committed.
+- Locking the existing rows and thinking the range is protected.
+- Forgetting that snapshot isolation hides the phantom from your reads but still lets the conflicting insert commit.
 
 #### How it works
 ```mermaid
@@ -662,8 +893,28 @@ You can only lock rows that exist. The conflicting row is inserted after your qu
 #### Interview angle
 > "For no-double-booking rules I'd let the database enforce it, with a unique or exclusion constraint, or serialise on a parent row with FOR UPDATE, rather than trusting a check-then-insert."
 
+#### Sources
+- [Transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — PostgreSQL docs
+- [Phantom rows](https://dev.mysql.com/doc/refman/8.4/en/innodb-next-key-locking.html) — MySQL reference manual
+- [Constraints on ranges (exclusion constraints)](https://www.postgresql.org/docs/current/rangetypes.html#RANGETYPES-CONSTRAINT) — PostgreSQL docs
+
 ### Lost update — two transactions read-modify-write the same row, one overwrites the other
 A lost update happens when two transactions **read the same value, both modify it in application code and both write it back**. The second write silently overwrites the first, and one change disappears. It's one of the most common concurrency bugs in real applications.
+
+#### Intuition
+Two people open the same shared document, each adds a line, and each presses "save". The second save replaces the file, and the first person's line is gone.
+
+#### Must know
+- Pattern: read a value, change it in app code, write it back. Two requests doing this lose one change.
+- Fix 1, atomic SQL: `UPDATE … SET likes = likes + 1`.
+- Fix 2, pessimistic: `SELECT … FOR UPDATE`, then update.
+- Fix 3, optimistic: `WHERE id = ? AND version = ?`, and retry when 0 rows change (JPA `@Version`).
+- Over HTTP: `ETag` + `If-Match`, answering 412 on a mismatch.
+
+#### Common mistakes
+- Assuming a transaction alone prevents it. At Read Committed it does not.
+- Letting the ORM save the whole entity from a stale copy, overwriting fields other requests changed.
+- Using optimistic locking on a hot row, where retries keep spinning.
 
 #### How it works
 ```mermaid
@@ -732,8 +983,28 @@ Optimistic (version column) when conflicts are rare and transactions may involve
 #### Interview angle
 > "I never read-modify-write in application code without protection: arithmetic goes into an atomic UPDATE, user edits use a version column with If-Match, and hot contended rows get FOR UPDATE inside short transactions."
 
+#### Sources
+- [Explicit locking](https://www.postgresql.org/docs/current/explicit-locking.html) — PostgreSQL docs
+- [A beginner's guide to database locking and the lost update phenomena](https://vladmihalcea.com/a-beginners-guide-to-database-locking-and-the-lost-update-phenomena/) — Vlad Mihalcea
+- [If-Match header](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/If-Match) — MDN
+
 ### Write skew — two transactions read overlapping data and make conflicting writes (e.g., on-call scheduling)
 Write skew is a subtle anomaly: two transactions **read the same set of rows, each decides it's safe to proceed based on what it read, then each writes to different rows**. Neither overwrote the other, but together they violate a rule that spans those rows. Snapshot isolation (PG Repeatable Read, Oracle "serializable") does **not** prevent it.
+
+#### Intuition
+Two flatmates each look in the fridge, see two cartons of milk, and each takes one to work "because one is left". Both were right when they looked, and the fridge is empty.
+
+#### Must know
+- Two transactions read the same rows, each decides it is safe, and each writes a **different** row. Together they break a rule.
+- No row is written twice, so snapshot isolation (PG Repeatable Read) does **not** catch it.
+- Fix 1: Serializable with a retry loop.
+- Fix 2: make the conflict real. Lock the rows you read with `FOR UPDATE`, or update one shared guard row conditionally.
+- Fix 3: a constraint, when the rule fits one.
+
+#### Common mistakes
+- Thinking Repeatable Read or `@Version` on the rows you write is enough.
+- Summing rows to check a limit and then inserting, with nothing locked.
+- Forgetting one code path that touches the same rule and does not take the lock.
 
 #### How it works
 ```mermaid
@@ -795,3 +1066,9 @@ Make the conflict explicit: keep a per-user daily `spend_limits` row and in each
 
 #### Interview angle
 > "When a rule spans several rows, I either give it a single guard row that every transaction updates conditionally, or run that path under Serializable with retries, because snapshot isolation lets write skew through."
+
+#### Sources
+- [Serializable isolation level](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE) — PostgreSQL docs
+- [Snapshot isolation](https://en.wikipedia.org/wiki/Snapshot_isolation) — Wikipedia
+- [A Critique of ANSI SQL Isolation Levels](https://www.microsoft.com/en-us/research/publication/a-critique-of-ansi-sql-isolation-levels/) — Berenson et al., Microsoft Research
+

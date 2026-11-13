@@ -3,6 +3,20 @@
 ### Shared lock (S) — multiple readers can hold simultaneously
 A shared (read) lock lets a transaction **read** a resource while guaranteeing nobody **modifies** it until the lock is released. Many transactions can hold S locks on the same row at once, but a writer needing an exclusive lock must wait.
 
+#### Intuition
+A museum exhibit. Any number of visitors can look at it at the same time, but while anyone is looking, the curator is not allowed to swap it out.
+
+#### Must know
+- Many transactions can hold a shared lock on the same row together. A writer has to wait for all of them.
+- SQL: `SELECT … FOR SHARE`.
+- In MVCC databases (PostgreSQL, InnoDB) a **plain SELECT takes no row lock**. It reads a snapshot.
+- Two transactions that both take S and then try to write will deadlock. If you plan to write, take `FOR UPDATE` first.
+
+#### Common mistakes
+- Saying "reads take shared locks" for PostgreSQL or InnoDB. Only explicit locking reads do.
+- Read with `FOR SHARE`, then update the same row (the S → X upgrade deadlock).
+- Forgetting that foreign key checks also lock the parent row.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -64,8 +78,27 @@ No. With MVCC, plain SELECTs read a snapshot of committed versions and take no r
 #### Interview angle
 > "Reads use MVCC snapshots, so they don't lock. If a transaction will read and then modify a row, it takes FOR UPDATE immediately to avoid the S-to-X upgrade deadlock."
 
+#### Sources
+- [Explicit locking: row-level locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS) — PostgreSQL docs
+- [InnoDB locking](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html) — MySQL reference manual
+
 ### Exclusive lock (X) — single writer holds, blocks all readers and writers
 An exclusive (write) lock gives one transaction sole right to **modify** a resource. Under pure locking it blocks both readers and writers. Under MVCC it blocks other **writers and lockers**, while plain readers keep reading the previous committed version.
+
+#### Intuition
+A fitting room with a latch. One person at a time, and everyone else who wants that room queues until the door opens.
+
+#### Must know
+- Every `UPDATE`, `DELETE` and `SELECT … FOR UPDATE` takes a row X lock, held **until commit or rollback**.
+- Under MVCC it blocks other writers and lockers. Plain readers still read the old committed version.
+- One hot row caps throughput at about 1 ÷ transaction time.
+- DDL such as `ALTER TABLE` takes a **table-level** exclusive lock that blocks even reads.
+- Run migrations with `lock_timeout` and retry.
+
+#### Common mistakes
+- Thinking the lock is released when the statement ends. It lasts for the whole transaction.
+- Running `ALTER TABLE` without a lock timeout. It queues behind a long query, and every new query queues behind it.
+- One global counter or "platform account" row that every request updates.
 
 #### How it works
 ```mermaid
@@ -119,8 +152,28 @@ The X lock on that one row serialises every transaction. Options: split it into 
 #### Interview angle
 > "Writes take row X locks until commit, so I keep transactions tiny, avoid single hot rows by sharding them, and run every migration with a lock_timeout."
 
+#### Sources
+- [Explicit locking](https://www.postgresql.org/docs/current/explicit-locking.html) — PostgreSQL docs
+- [When Postgres blocks: 7 tips for dealing with locks](https://www.citusdata.com/blog/2018/02/22/seven-tips-for-dealing-with-postgres-locks/) — Citus Data
+- [InnoDB locking](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html) — MySQL reference manual
+
 ### Intention locks (IS, IX, SIX) — hierarchical locking for efficiency
 Databases lock at several granularities (table → page → row). Intention locks are placed on a **parent** (the table) to announce "I hold or will hold S or X locks on some children (rows)". That lets the engine check a table-level lock request in O(1) instead of scanning every row lock.
+
+#### Intuition
+A "work in progress inside" sign on a building's front door. Someone who wants to close the whole building reads the sign instead of checking every room.
+
+#### Must know
+- Before locking a row, a transaction puts an **intention lock on the table**: IS for reading rows, IX for writing rows.
+- A table-level lock request then needs one check on the table instead of scanning every row lock.
+- IX is compatible with IX, so many row writers run in parallel.
+- IX conflicts with a table-level S or X lock.
+- They are automatic. You meet them when reading lock dumps.
+
+#### Common mistakes
+- Reading `IX` in a lock dump as "the table is locked". It only announces row locks.
+- Using explicit table locks in a batch job, which blocks all normal row traffic.
+- Huge single-transaction batches on SQL Server, which escalate to a table lock.
 
 #### How it works
 ```mermaid
@@ -176,8 +229,28 @@ Some engines (SQL Server, DB2) convert many fine-grained row locks into one tabl
 #### Interview angle
 > "Intention locks are what let row-level writers run in parallel while table-level operations still detect conflicts cheaply. In practice I avoid explicit table locks and big batches that cause escalation."
 
+#### Sources
+- [InnoDB locking: intention locks](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html#innodb-intention-locks) — MySQL reference manual
+- [Multiple granularity locking](https://en.wikipedia.org/wiki/Multiple_granularity_locking) — Wikipedia
+- [Transaction locking and row versioning guide](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide) — Microsoft SQL Server docs
+
 ### Two-Phase Locking (2PL) — growing phase (acquire only), shrinking phase (release only)
 Two-Phase Locking is the classic protocol that guarantees **serializability** with locks: each transaction first only **acquires** locks (growing phase), and once it releases any lock it can never acquire another (shrinking phase). It's how lock-based databases implement Serializable.
+
+#### Intuition
+Packing for a trip and unpacking at home. First you only put things into the bag. Once you start taking things out, you never put anything back in.
+
+#### Must know
+- Phase 1 (growing): only acquire locks. Phase 2 (shrinking): only release them.
+- That one rule guarantees **serializability**.
+- It does **not** prevent deadlocks.
+- Readers and writers block each other, which is why MVCC databases avoid it for plain reads.
+- Not the same thing as two-phase commit (2PC), which is about distributed commit.
+
+#### Common mistakes
+- Confusing 2PL with 2PC.
+- Claiming 2PL is deadlock-free.
+- Forgetting that lock-based Serializable in MySQL and SQL Server is 2PL, so reads block writes there.
 
 #### How it works
 ```mermaid
@@ -230,8 +303,28 @@ Each transaction has a lock point (when it holds all its locks). Any two conflic
 #### Interview angle
 > "2PL is how lock-based engines get serializability. Its weaknesses are blocking and deadlocks, which is why I keep lock order consistent and why MVCC databases prefer snapshot-based approaches."
 
+#### Sources
+- [Two-phase locking](https://en.wikipedia.org/wiki/Two-phase_locking) — Wikipedia
+- [Two-phase locking lecture notes](https://15445.courses.cs.cmu.edu/fall2023/notes/16-twophaselocking.pdf) — CMU 15-445 Database Systems
+- [InnoDB transaction isolation levels](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html) — MySQL reference manual
+
 ### Strict 2PL — hold all exclusive locks until commit/abort (prevents cascading aborts)
 Strict 2PL is 2PL with one extra rule: **exclusive (write) locks are held until the transaction commits or aborts**. Nobody can read or overwrite your uncommitted writes, which prevents dirty reads and **cascading aborts**. It's what practically every lock-based database implements. *Rigorous* 2PL holds all locks, shared too, until commit.
+
+#### Intuition
+You do not let anyone copy from your exam paper until you have handed it in. If you later tear up your draft, nobody has copied an answer that no longer exists.
+
+#### Must know
+- 2PL plus one rule: **write locks are held until commit or abort**.
+- Nobody can read your uncommitted write, so no dirty reads and no cascading aborts.
+- This is what real lock-based databases implement.
+- Practical lesson: **lock time = transaction time**. Short transactions mean less blocking.
+- Rigorous 2PL holds read locks until commit as well.
+
+#### Common mistakes
+- Thinking locks are released as soon as the statement finishes.
+- Doing an HTTP call or heavy computation between the first write and the commit.
+- Mixing up strict (write locks held) and rigorous (all locks held).
 
 #### How it works
 ```mermaid
@@ -277,8 +370,30 @@ Under strict 2PL (and MVCC row locks), write locks are held until commit, so the
 #### Interview angle
 > "Because write locks live until commit, transaction duration is lock duration. I keep remote calls and heavy computation outside the transaction boundary."
 
+#### Sources
+- [Two-phase locking: strict and rigorous variants](https://en.wikipedia.org/wiki/Two-phase_locking) — Wikipedia
+- [Two-phase locking lecture notes](https://15445.courses.cs.cmu.edu/fall2023/notes/16-twophaselocking.pdf) — CMU 15-445 Database Systems
+
 ### Deadlock — circular wait: T1 holds A waits B, T2 holds B waits A
 A deadlock is a cycle of transactions each waiting for a lock held by another in the cycle. None can proceed, ever, unless the database breaks the cycle by aborting one of them.
+
+#### Intuition
+Two cars meet on a one-lane bridge, each blocking the other's way out. Neither can move until one reverses.
+
+#### Must know
+- A cycle of transactions, each waiting for a lock the next one holds.
+- The database detects it and **aborts one victim**. The application must retry it.
+- Main prevention: always lock rows in the **same order** (for example lowest account id first).
+- Short transactions and locking up front (`FOR UPDATE`) reduce the chance.
+- Error codes: PostgreSQL `40P01`, MySQL `1213`.
+
+#### Numbers to quote
+- PostgreSQL waits `deadlock_timeout` (default 1 s) before checking for a cycle.
+
+#### Common mistakes
+- Treating a deadlock error as fatal instead of retrying.
+- Transfers that lock "from" then "to", so A→B and B→A cross.
+- Believing deadlocks need two rows. Two S locks on one row, both upgrading, also deadlock.
 
 #### How it works
 ```mermaid
@@ -334,8 +449,31 @@ Yes. Two transactions hold S locks on the same row (`FOR SHARE`, or FK checks) a
 #### Interview angle
 > "Deadlocks are inevitable at scale. I prevent most with a global lock ordering (always the lower account id first) and retry the rest automatically on the deadlock error code."
 
+#### Sources
+- [Explicit locking: deadlocks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-DEADLOCKS) — PostgreSQL docs
+- [Deadlocks in InnoDB](https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks.html) — MySQL reference manual
+- [Deadlock](https://en.wikipedia.org/wiki/Deadlock_%28computer_science%29) — Wikipedia
+
 ### Deadlock detection — wait-for graph cycle detection
 Databases detect deadlocks by building a **wait-for graph**: a node per transaction, and an edge T1 → T2 when T1 waits for a lock T2 holds. A **cycle** means deadlock, and the database picks a victim to abort.
+
+#### Intuition
+Draw an arrow from each person to the person they are waiting for. If the arrows ever form a circle, nobody in the circle can move, so someone has to be sent away.
+
+#### Must know
+- The database builds a **wait-for graph**: an edge T1 → T2 means T1 waits for a lock T2 holds.
+- A cycle means deadlock. One transaction is chosen as the victim and rolled back.
+- PostgreSQL checks only after a wait of `deadlock_timeout`. InnoDB checks at once.
+- InnoDB picks the transaction that changed the fewest rows.
+- The application retries on `40P01` (PostgreSQL) or `1213` (MySQL).
+
+#### Numbers to quote
+- PostgreSQL `deadlock_timeout` default: 1 s. InnoDB `innodb_lock_wait_timeout` default: 50 s.
+
+#### Common mistakes
+- No retry around the deadlock error, so users see a failure.
+- Ignoring the deadlock report in the server log, which names the exact statements.
+- Proposing a global wait-for graph for a distributed system, where timeouts or ordering are simpler.
 
 #### How it works
 ```mermaid
@@ -390,8 +528,27 @@ The one cheapest to roll back and retry: fewest rows modified (InnoDB's choice),
 #### Interview angle
 > "The database finds deadlocks with a wait-for graph and aborts a victim. My job is to retry on the deadlock error code and remove the root cause, usually inconsistent lock ordering."
 
+#### Sources
+- [Deadlock detection](https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlock-detection.html) — MySQL reference manual
+- [Lock management settings (deadlock_timeout)](https://www.postgresql.org/docs/current/runtime-config-locks.html) — PostgreSQL docs
+- [Wait-for graph](https://en.wikipedia.org/wiki/Wait-for_graph) — Wikipedia
+
 ### Deadlock prevention — lock ordering (always acquire in same order), timeout + retry
 Instead of detecting cycles after they form, prevention makes them **impossible or short-lived**: acquire locks in a global order, acquire all locks at once, or bound waits with timeouts and retry.
+
+#### Intuition
+A rule that everyone picks up the left fork first. With one agreed order, no two people can ever each hold the fork the other needs.
+
+#### Must know
+- **One global lock order** makes a cycle impossible. This is the main technique.
+- Lock a set of rows in order with one statement: `SELECT … WHERE id IN (…) ORDER BY id FOR UPDATE`.
+- Bound the wait with `lock_timeout` (PostgreSQL) or `innodb_lock_wait_timeout` (MySQL), then retry.
+- `NOWAIT` fails at once instead of waiting. `SKIP LOCKED` moves on to other rows.
+
+#### Common mistakes
+- Fixing the order in one code path while an ORM cascade or trigger locks in another order.
+- A batch job that walks rows in random order while online traffic uses id order.
+- Treating a lock timeout as proof of a deadlock. It may only be a slow transaction.
 
 #### How it works
 ```mermaid
@@ -447,8 +604,28 @@ When waiting is worse than an immediate "busy" answer: interactive flows like se
 #### Interview angle
 > "All multi-row locking goes through one ordered SELECT … ORDER BY id FOR UPDATE, so cycles can't form. Interactive paths use NOWAIT or a short lock_timeout so users never sit waiting on a lock."
 
+#### Sources
+- [Explicit locking: deadlocks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-DEADLOCKS) — PostgreSQL docs
+- [How to minimize and handle deadlocks](https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks-handling.html) — MySQL reference manual
+- [SELECT: the locking clause](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE) — PostgreSQL docs
+
 ### Deadlock resolution — abort the youngest transaction (wound-wait scheme)
 When concurrency control must decide **who waits and who dies**, timestamp-based schemes give each transaction a priority by start time. **Wait-die** and **wound-wait** guarantee no cycles and no starvation, and are used in distributed databases (Spanner uses wound-wait).
+
+#### Intuition
+Seniority at a narrow door. In one version the senior person pushes through and the junior steps back to try later. In the other, the junior never waits for a senior and simply leaves. Either way people only ever wait in one direction, so a circle cannot form.
+
+#### Must know
+- Each transaction gets a timestamp. **Older = higher priority.**
+- **Wait-die**: an older requester waits, a younger requester aborts.
+- **Wound-wait**: an older requester aborts the younger holder, a younger requester waits.
+- Waits only go one way, so no cycle and **no global detector** is needed.
+- A restarted transaction keeps its original timestamp, so it cannot starve.
+
+#### Common mistakes
+- Swapping the two schemes. Name who the requester is first, then apply the rule.
+- Giving a retry a fresh timestamp, which lets it lose forever.
+- Saying these are what PostgreSQL or MySQL use. Those use a wait-for graph. Spanner uses wound-wait.
 
 #### How it works
 Each transaction has a timestamp (older = smaller = higher priority). When Ti requests a lock held by Tj:
@@ -500,8 +677,28 @@ The younger requester dies when it asks for a lock held by an older transaction.
 #### Interview angle
 > "In distributed transactions I'd rely on timestamp priorities like wound-wait, as Spanner does: waits only go one way, so there's no global deadlock detection, and retries keep their timestamp so nothing starves."
 
+#### Sources
+- [Deadlock prevention: wait-die and wound-wait](https://en.wikipedia.org/wiki/Deadlock_prevention_algorithms) — Wikipedia
+- [Spanner: Google's globally distributed database](https://research.google/pubs/spanner-googles-globally-distributed-database-2/) — Google Research
+- [Two-phase locking lecture notes (deadlock prevention)](https://15445.courses.cs.cmu.edu/fall2023/notes/16-twophaselocking.pdf) — CMU 15-445 Database Systems
+
 ### MVCC — Multi-Version Concurrency Control: readers don't block writers, writers don't block readers
 MVCC keeps **multiple versions of each row**. A writer creates a new version instead of overwriting in place, and each reader sees the version that was committed as of its **snapshot**. Readers never wait for writers and writers never wait for readers. Writers still lock each other on the same row.
+
+#### Intuition
+Version history in a shared document. While someone is typing a new version, you keep reading the last saved one. Nobody waits, and old versions are tidied up later.
+
+#### Must know
+- A write creates a **new version** of the row. Each reader sees the version committed as of its snapshot.
+- **Readers do not block writers, writers do not block readers.**
+- Two writers on the same row still block each other.
+- Old versions need garbage collection: VACUUM in PostgreSQL, purge of undo logs in InnoDB.
+- A long transaction keeps old versions alive, which causes bloat.
+
+#### Common mistakes
+- Saying MVCC removes all locking.
+- Running a long report on the primary and then wondering why tables bloat.
+- Assuming all engines store versions the same way. PostgreSQL keeps them in the table, InnoDB and Oracle in undo logs.
 
 #### How it works
 ```mermaid
@@ -554,8 +751,32 @@ No. Reads take no row locks, but writes to the same row still take row locks (th
 #### Interview angle
 > "MVCC is why our reads never block checkout writes. I protect it by keeping transactions short and moving long analytical queries to replicas, so old versions get cleaned up."
 
+#### Sources
+- [Concurrency control: introduction to MVCC](https://www.postgresql.org/docs/current/mvcc-intro.html) — PostgreSQL docs
+- [InnoDB multi-versioning](https://dev.mysql.com/doc/refman/8.4/en/innodb-multi-versioning.html) — MySQL reference manual
+- [Multiversion concurrency control](https://en.wikipedia.org/wiki/Multiversion_concurrency_control) — Wikipedia
+
 ### MVCC in PostgreSQL — each row has xmin/xmax visibility markers
 PostgreSQL implements MVCC by storing **every row version (tuple) in the table**, stamped with the transaction ids that created it (`xmin`) and deleted or replaced it (`xmax`). Visibility rules compare these ids with each transaction's snapshot. Updates are effectively insert-new + mark-old-dead.
+
+#### Intuition
+Every row version carries two stamps: "created by transaction X" and "removed by transaction Y". To decide whether you can see it, PostgreSQL compares the stamps with the moment your snapshot was taken.
+
+#### Must know
+- Each tuple stores `xmin` (creating transaction) and `xmax` (deleting or replacing transaction).
+- An **UPDATE writes a whole new tuple** and leaves the old one dead.
+- **VACUUM / autovacuum** reclaims dead tuples. If it falls behind, tables bloat.
+- A **HOT update** skips index writes when no indexed column changed and the page has room.
+- Transaction ids are 32-bit, so old rows must be **frozen** to avoid wraparound.
+
+#### Numbers to quote
+- Wraparound horizon: about 2 billion transactions (2³¹).
+- Autovacuum triggers by default at 20% dead rows (`autovacuum_vacuum_scale_factor = 0.2`), too lax for big hot tables.
+
+#### Common mistakes
+- Thinking an UPDATE changes the row in place in PostgreSQL.
+- Indexing a column that changes on every request, which defeats HOT updates.
+- Leaving an idle transaction or an unused replication slot open, so VACUUM can clean nothing.
 
 #### How it works
 ```mermaid
@@ -612,8 +833,28 @@ PostgreSQL transaction ids are 32-bit and compared modulo 2^32. If old tuples ar
 #### Interview angle
 > "In Postgres every update leaves a dead tuple, so for high-churn tables I tune autovacuum per table, use fillfactor for HOT updates, and watch long transactions and replication slots that block cleanup."
 
+#### Sources
+- [Routine vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html) — PostgreSQL docs
+- [Heap-only tuples (HOT)](https://www.postgresql.org/docs/current/storage-hot.html) — PostgreSQL docs
+- [System columns (xmin, xmax, ctid)](https://www.postgresql.org/docs/current/ddl-system-columns.html) — PostgreSQL docs
+
 ### Optimistic locking — read with version, update with WHERE version=N, check affected rows
 Optimistic locking assumes conflicts are rare: read the row **with its version number**, do your work without holding locks, then update **only if the version is unchanged**. If someone else changed it first, your update affects 0 rows, and you retry or report a conflict.
+
+#### Intuition
+Editing a wiki page. Nobody locks the page while you type. When you press save, the wiki checks whether the page changed since you opened it, and if it did, you are asked to merge.
+
+#### Must know
+- Read the row with its `version`. Update with `WHERE id = ? AND version = ?` and set `version = version + 1`.
+- **0 rows affected = someone else won.** Reload and retry, or return a conflict.
+- No lock is held, so it suits rare conflicts and user think-time (forms).
+- JPA `@Version` does it for you. Over HTTP it is `ETag` + `If-Match` → 412.
+- Under heavy contention it wastes work. Use an atomic update or a pessimistic lock there.
+
+#### Common mistakes
+- Not checking the affected-row count.
+- Using it on a hot row, such as flash-sale stock, where almost every attempt fails.
+- A bulk SQL update that forgets to bump the version, so ORM users overwrite it.
 
 #### How it works
 ```mermaid
@@ -669,8 +910,28 @@ Thousands of concurrent buyers update the same row, so nearly every optimistic a
 #### Interview angle
 > "User-edited entities use a version column surfaced as an ETag. A stale save gets a 412 and a merge screen instead of silently overwriting someone else's change."
 
+#### Sources
+- [Optimistic concurrency control](https://en.wikipedia.org/wiki/Optimistic_concurrency_control) — Wikipedia
+- [Optimistic locking with version number](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBMapper.OptimisticLocking.html) — Amazon DynamoDB developer guide
+- [ETag header](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/ETag) — MDN
+
 ### Pessimistic locking — SELECT FOR UPDATE (acquires row-level lock)
 Pessimistic locking assumes conflicts are likely: **lock the row when you read it**, so nobody else can modify it (or lock it) until you commit. In SQL that's `SELECT … FOR UPDATE`. Competing transactions wait in line instead of failing at the end.
+
+#### Intuition
+Taking the only key to the meeting room before you go in. Anyone else who wants the room waits at the door until you bring the key back.
+
+#### Must know
+- `SELECT … FOR UPDATE` locks the rows it returns until commit. Others wait in line.
+- Use it for **short, contended, must-not-fail** sections such as a wallet debit.
+- `NOWAIT` errors at once. `SKIP LOCKED` skips locked rows.
+- **Never hold it across user think-time or a remote call.** A 10-minute seat hold is a status column with an expiry, not a database lock.
+- The WHERE clause needs an index, or InnoDB locks far more rows than intended.
+
+#### Common mistakes
+- Keeping the transaction open while the user pays.
+- Locking several rows in different orders in different code paths (deadlock).
+- Using it for low-contention edit forms, where optimistic locking is simpler.
 
 #### How it works
 ```mermaid
@@ -731,8 +992,32 @@ Postings are short, high-value and must not fail spuriously, and some accounts a
 #### Interview angle
 > "For short, contended critical sections like a wallet debit, I lock with FOR UPDATE in a millisecond transaction. Longer business holds become status columns with expiry, never DB locks held across user actions."
 
+#### Sources
+- [SELECT: the locking clause](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE) — PostgreSQL docs
+- [Locking reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html) — MySQL reference manual
+- [Explicit locking: row-level locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS) — PostgreSQL docs
+
 ### SELECT FOR UPDATE SKIP LOCKED — queue-like pattern for job workers
 `SKIP LOCKED` tells the database to **ignore rows already locked by other transactions** instead of waiting. Many workers can run the same "grab the next N pending jobs" query concurrently, and each gets a different set of rows. It turns a plain table into a reliable job queue.
+
+#### Intuition
+Supermarket checkouts. A new shopper does not queue behind a busy till. They walk to the next free one, so no two cashiers ever serve the same shopper.
+
+#### Must know
+- `FOR UPDATE SKIP LOCKED` **skips rows other transactions have locked** instead of waiting.
+- Many workers run the same "next N pending jobs" query and each gets different rows.
+- It turns a table into a job queue that is transactional with your business data, as in an outbox relay.
+- A crashed worker's transaction rolls back, so its jobs become available again.
+- Jobs can still run twice, so handlers must be idempotent.
+
+#### Numbers to quote
+- Comfortable up to roughly thousands of jobs per second. Beyond that use Kafka or SQS.
+- Available since PostgreSQL 9.5 and MySQL 8.0.
+
+#### Common mistakes
+- Using it for normal business queries. It silently returns incomplete results.
+- No index on the pending rows, so every poll scans the table.
+- Claim-and-commit with no lease timeout, leaving jobs stuck in RUNNING after a crash.
 
 #### How it works
 ```mermaid
@@ -762,7 +1047,7 @@ RETURNING jobs.*;
 ```
 
 #### Example
-An outbox relay: `outbox` rows are written in business transactions. Several relay instances each claim 100 unpublished rows with SKIP LOCKED, publish to Kafka and mark them sent. There's no double-processing within a claim, and a crashed worker's transaction rolls back, so its rows become claimable again. Libraries like **Quartz**, **db-scheduler**, **Solid Queue**, **pg-boss** and **Oban** use this pattern.
+An outbox relay: `outbox` rows are written in business transactions. Several relay instances each claim 100 unpublished rows with SKIP LOCKED, publish to Kafka and mark them sent. There's no double-processing within a claim, and a crashed worker's transaction rolls back, so its rows become claimable again. Libraries like **Solid Queue**, **pg-boss**, **Oban**, **River** and **db-scheduler** (in its lock-and-fetch mode) use this pattern.
 
 Two styles:
 1. **Process inside the transaction** (lock held while working): simple, a crash auto-releases, but long jobs hold transactions open.
@@ -798,8 +1083,27 @@ It silently returns an incomplete result: rows locked by others are omitted. Tha
 #### Interview angle
 > "For moderate job volumes I'd use a Postgres table queue with FOR UPDATE SKIP LOCKED and leases. It's transactional with the business data and needs no extra infrastructure. I'd move to Kafka or SQS only when volume demands it."
 
+#### Sources
+- [SELECT: the locking clause (SKIP LOCKED)](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE) — PostgreSQL docs
+- [Locking reads: NOWAIT and SKIP LOCKED](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html) — MySQL reference manual
+
 ### Predicate locks — Serializable Snapshot Isolation (SSI) in PostgreSQL 9.1+
 PostgreSQL's Serializable level uses **SSI**: transactions run on snapshots as usual, but the database records **what each transaction read** (as "SIRead" predicate locks, which never block) and looks for read-write dependency patterns that could make the result non-serializable. When it finds a dangerous pattern, it aborts one transaction.
+
+#### Intuition
+A librarian who notes which shelves each reader looked at. Nobody is stopped from reading. If two readers' notes show that each changed something the other relied on, one of them is asked to start again.
+
+#### Must know
+- PostgreSQL Serializable = snapshot isolation **plus tracking of what each transaction read**.
+- Those "SIRead" predicate locks **never block**. They are bookkeeping.
+- When the read/write dependencies could form a cycle, one transaction is aborted with SQLSTATE 40001.
+- False positives happen, so a retry loop is mandatory.
+- Sequential scans lock the whole table for tracking purposes, so missing indexes mean more aborts.
+
+#### Common mistakes
+- Expecting predicate locks to make other transactions wait. They only cause aborts.
+- Running Serializable with no retry on 40001.
+- Running big reports at Serializable instead of `READ ONLY DEFERRABLE`.
 
 #### How it works
 ```mermaid
@@ -848,3 +1152,9 @@ Predicate locks follow how data was read. An index scan locks just the relevant 
 
 #### Interview angle
 > "For invariants across rows I'd turn on Postgres Serializable. SSI tracks what we read without blocking, so I just need indexed predicates and a retry loop for 40001."
+
+#### Sources
+- [Serializable isolation level](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE) — PostgreSQL docs
+- [Serializable Snapshot Isolation (SSI)](https://wiki.postgresql.org/wiki/SSI) — PostgreSQL wiki
+- [Serializable Snapshot Isolation in PostgreSQL](https://drkp.net/papers/ssi-vldb12.pdf) — Ports and Grittner, VLDB 2012
+

@@ -3,6 +3,25 @@
 ### B+ tree index — leaf nodes contain data/row pointers linked in sorted order, O(log N) seek + range
 The B+ tree is the default index in almost every relational database (PostgreSQL, MySQL, Oracle, SQL Server). It keeps keys **sorted** in a shallow, wide tree. Finding one key takes a handful of page reads, and because leaves are linked, **range scans and ORDER BY** are cheap too.
 
+#### Intuition
+The index at the back of a textbook, itself with a table of contents. You jump to the right section in three or four steps, and because the entries are in order you can keep reading forward for a whole range.
+
+#### Must know
+- The default index in every relational database. Keys are kept **sorted** in a wide, shallow tree.
+- A lookup is O(log N): about 3–4 page reads even for billions of rows.
+- Leaves are linked, so **ranges, ORDER BY and prefix `LIKE 'abc%'`** are cheap.
+- Every index slows writes, because each insert or update must also update the tree.
+- Random keys (UUIDv4) scatter inserts and split pages. Time-ordered keys (bigint, UUIDv7) append at the end.
+
+#### Numbers to quote
+- Page size: 8 KB in PostgreSQL, 16 KB in InnoDB. Fan-out: a few hundred keys per page.
+- With fan-out 300: 3 levels ≈ 27 million rows, 4 levels ≈ 8 billion.
+
+#### Common mistakes
+- Expecting `LIKE '%term'` to use it. A leading wildcard cannot seek in sorted order.
+- Adding an index for every column and then wondering why writes are slow.
+- Calling it a binary tree. It is wide on purpose, to match disk pages.
+
 #### How it works
 ```mermaid
 flowchart TD
@@ -60,8 +79,27 @@ Random keys land on random leaf pages, so each insert touches a different page. 
 #### Interview angle
 > "A B+ tree index on (user_id, created_at) serves the user's order history with one seek plus a sequential leaf walk, already sorted. I'd use time-ordered ids so inserts append instead of splitting random pages."
 
+#### Sources
+- [Anatomy of an index: the search tree (B-tree)](https://use-the-index-luke.com/sql/anatomy/the-tree) — Use The Index, Luke
+- [Index types: B-tree](https://www.postgresql.org/docs/current/indexes-types.html) — PostgreSQL docs
+- [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) — Wikipedia
+
 ### Hash index — O(1) exact match, no range queries, used in Hash join, pg_trgm GIN
 A hash index maps `hash(key) → bucket → row pointers`. It answers **exact equality** lookups in roughly constant time, but because hashing destroys order it can't do ranges, sorting or prefix matches. In practice B+ trees usually win anyway, and hashing shines more inside query execution (hash joins) and in key-value stores.
+
+#### Intuition
+A coat check. Hand over your ticket number and the attendant goes straight to the right hook. Ask for "all coats from ticket 40 to 60" and they have no way to do it, because the hooks are not in order.
+
+#### Must know
+- Maps `hash(key)` to a bucket: **exact equality only**, in about constant time.
+- No range, no sorting, no prefix match, because hashing destroys order.
+- In practice the B+ tree is the default. Hash indexes are a niche choice for long keys queried only by equality.
+- A **hash join** is where hashing matters most: build a hash table on the smaller input, probe with the larger one.
+
+#### Common mistakes
+- Using a hash index and then needing `ORDER BY` or a range on that column.
+- Saying InnoDB lets you create hash indexes. It only has an internal adaptive hash index.
+- Forgetting that a hash join spills to disk when the hash table does not fit in `work_mem`.
 
 #### How it works
 ```mermaid
@@ -72,7 +110,7 @@ flowchart LR
 ```
 
 - **PostgreSQL**: `CREATE INDEX … USING hash (col)`. Crash-safe and replicated since PG 10. Can be smaller than a B+ tree for long keys (stores only the 4-byte hash).
-- **MySQL InnoDB**: no user hash indexes, but an **adaptive hash index** is built automatically in memory for hot B+ tree lookups. The MEMORY engine has hash indexes.
+- **MySQL InnoDB**: no user hash indexes, but an **adaptive hash index** can be built in memory for hot B+ tree lookups (on by default up to MySQL 8.0, off by default since 8.4). The MEMORY engine has hash indexes.
 - **Hash join**: the planner builds an in-memory hash table on the smaller input, then probes it with each row of the larger one. O(N + M) for equality joins.
 
 #### Example
@@ -121,8 +159,28 @@ It builds an in-memory hash table on the join key of the smaller input, then sca
 #### Interview angle
 > "Hashing gives O(1) equality but loses order, so I default to B-trees for indexes. Hash joins are what the planner uses for big equality joins, as long as work_mem fits the hash table."
 
+#### Sources
+- [Index types: hash](https://www.postgresql.org/docs/current/indexes-types.html#INDEXES-TYPES-HASH) — PostgreSQL docs
+- [Adaptive hash index](https://dev.mysql.com/doc/refman/8.4/en/innodb-adaptive-hash.html) — MySQL reference manual
+- [Hash join](https://use-the-index-luke.com/sql/join/hash-join-partial-objects) — Use The Index, Luke
+
 ### Composite index — column order matters: WHERE a=1 AND b=2 uses (a,b) but not (b,a) for a-only query
 A composite (multi-column) index sorts rows by the first column, then by the second within equal first values, and so on, like a phone book sorted by last name then first name. It can only be used efficiently from the **leftmost columns onward** (the **leftmost-prefix rule**).
+
+#### Intuition
+A phone book sorted by last name, then first name. Finding "Sharma, Asha" is instant. Finding everyone called "Asha" means reading the whole book.
+
+#### Must know
+- Rows are sorted by the first column, then the second inside it, and so on.
+- **Leftmost-prefix rule**: an index on (a, b, c) serves a, (a, b) and (a, b, c). It does not serve b alone.
+- Column order: **equality columns first, then the range or ORDER BY column**.
+- A range condition on one column stops the columns after it from being used to seek.
+- One good composite index replaces several single-column ones.
+
+#### Common mistakes
+- Ordering columns by "most selective first" instead of by how the query filters and sorts.
+- Keeping (a), (a, b) and (a, b, c) all at once. The last one covers the first two.
+- Putting the range column in the middle, as in (a, created_at, status).
 
 #### How it works
 ```mermaid
@@ -177,8 +235,28 @@ The planner can use one index and filter, or combine both via a bitmap AND, and 
 #### Interview angle
 > "I design composite indexes from the query: equality columns first, then the range or sort column, so the hot query is a single seek plus an ordered read with no sort step."
 
+#### Sources
+- [Concatenated keys](https://use-the-index-luke.com/sql/where-clause/the-equals-operator/concatenated-keys) — Use The Index, Luke
+- [Multicolumn indexes](https://www.postgresql.org/docs/current/indexes-multicolumn.html) — PostgreSQL docs
+- [Multiple-column indexes](https://dev.mysql.com/doc/refman/8.4/en/multiple-column-indexes.html) — MySQL reference manual
+
 ### Covering index — index includes all queried columns, avoids table heap lookup (index-only scan)
 A covering index contains **every column a query needs**, so the database can answer from the index alone without visiting the table rows. That's an **index-only scan**, which saves a random I/O per row and often speeds queries up 2–10×.
+
+#### Intuition
+A library catalogue card that already prints the summary you wanted. You read the card and never walk to the shelf.
+
+#### Must know
+- The index holds **every column the query needs**, so the table is never visited (an index-only scan).
+- It saves one random read per row, which matters most on hot list endpoints.
+- PostgreSQL: `CREATE INDEX … (key cols) INCLUDE (payload cols)`.
+- InnoDB: every secondary index already carries the primary key.
+- `SELECT *` defeats it. Select only the columns you need.
+
+#### Common mistakes
+- Making every index covering. The index grows and writes slow down.
+- In PostgreSQL, seeing "Index Only Scan" with many heap fetches and not realising the table needs VACUUM.
+- Including a large or frequently updated column.
 
 #### How it works
 ```mermaid
@@ -234,8 +312,27 @@ The index likely doesn't contain all columns, so every matching row needs a heap
 #### Interview angle
 > "For the hottest list endpoint I'd add a covering index with INCLUDE for the displayed columns, so it's an index-only scan, and select only those columns instead of SELECT *."
 
+#### Sources
+- [Index-only scans and covering indexes](https://www.postgresql.org/docs/current/indexes-index-only-scans.html) — PostgreSQL docs
+- [Index-only scan: avoiding table access](https://use-the-index-luke.com/sql/clustering/index-only-scan-covering-index) — Use The Index, Luke
+
 ### Partial index — index on subset of rows with WHERE clause (e.g. WHERE status='active')
 A partial index only includes rows matching a predicate. When queries target a small, hot subset (pending jobs, active users, unprocessed events), the index stays **tiny**, fits in memory and costs nothing to maintain for the other rows.
+
+#### Intuition
+A to-do list that only shows unfinished tasks. It stays one page long however many thousands of tasks you have completed.
+
+#### Must know
+- `CREATE INDEX … WHERE <condition>` indexes only the rows that match.
+- Ideal when queries hit a **small hot subset**: pending jobs, unpublished outbox rows, active users.
+- The query must contain the same condition, or the planner cannot use it.
+- A **partial unique index** enforces rules such as "one ACTIVE subscription per user" or "unique email among non-deleted users".
+- PostgreSQL has it. MySQL does not.
+
+#### Common mistakes
+- Writing the condition as a bind parameter (`status = $1`), so the planner cannot match the index.
+- Enforcing "only one active" in application code instead of a partial unique index.
+- A full unique index on email with soft deletes, which blocks re-registration.
 
 #### How it works
 ```mermaid
@@ -292,8 +389,27 @@ A partial index on the polling columns restricted to pending rows, e.g. `ON jobs
 #### Interview angle
 > "Hot subsets get partial indexes (pending jobs, unpublished outbox rows), and business rules like one active subscription per user become partial unique indexes."
 
+#### Sources
+- [Partial indexes](https://www.postgresql.org/docs/current/indexes-partial.html) — PostgreSQL docs
+- [Partial indexes](https://use-the-index-luke.com/sql/where-clause/partial-and-filtered-indexes) — Use The Index, Luke
+
 ### Expression / functional index — index on LOWER(email), EXTRACT(year FROM created_at)
 An expression index stores the **result of an expression** rather than a raw column, so queries that filter on that same expression can use an index. Without it, `WHERE lower(email) = ?` can't use a plain index on `email`, because the index is sorted by the raw values.
+
+#### Intuition
+A dictionary is sorted by the words as written. If you want to look things up ignoring capital letters, you need a second listing that was sorted after lowercasing everything.
+
+#### Must know
+- It indexes the **result of an expression**, for example `lower(email)`.
+- A function around a column in WHERE (`lower(email) = ?`, `date(created_at) = ?`) **disables a plain index** on that column.
+- The query must use exactly the same expression as the index.
+- Often the better fix is to keep the column bare: a range on `created_at` instead of `date(created_at)`.
+- A unique index on `lower(email)` gives case-insensitive uniqueness.
+
+#### Common mistakes
+- `WHERE date(created_at) = '2026-11-09'` on an indexed column, then blaming the database.
+- Indexing an expression that is not immutable, such as one that depends on the time zone.
+- A case-sensitive unique constraint on email, which allows `A@x.com` and `a@x.com`.
 
 #### How it works
 ```mermaid
@@ -348,8 +464,31 @@ A unique expression index on `lower(email)` (or the `citext` type in PostgreSQL)
 #### Interview angle
 > "I keep predicates sargable (ranges instead of functions on columns). Where a function is inherent, like case-insensitive email, I index that exact expression, often as a unique index."
 
+#### Sources
+- [Indexes on expressions](https://www.postgresql.org/docs/current/indexes-expressional.html) — PostgreSQL docs
+- [Case-insensitive search using UPPER or LOWER](https://use-the-index-luke.com/sql/where-clause/functions/case-insensitive-search) — Use The Index, Luke
+- [CREATE INDEX: functional key parts](https://dev.mysql.com/doc/refman/8.4/en/create-index.html#create-index-functional-key-parts) — MySQL reference manual
+
 ### Index selectivity — high cardinality = high selectivity = more useful index
 Selectivity measures how much an index narrows the search: the **fraction of rows** matching a typical value. An index on a column with many distinct values (email, order id) is highly selective and very useful. An index on a boolean or a status with 3 values usually isn't, because reading half the table through an index is slower than scanning it.
+
+#### Intuition
+"Find the person with this Aadhaar number" narrows a crowd to one. "Find the people wearing shoes" narrows almost nothing, so you may as well check everyone.
+
+#### Must know
+- Selectivity = the fraction of rows a condition matches. Smaller fraction, more useful index.
+- High-cardinality columns (email, order id) index well. Booleans and small status sets usually do not.
+- When a condition matches a large share of the table, a sequential scan is cheaper and the planner picks it.
+- **Skew** changes the answer: `status = 'FAILED'` at 1% is selective even if status has three values.
+- Low-cardinality columns still help as a later column of a composite index or as a partial index.
+
+#### Numbers to quote
+- Rough tipping point: once a condition matches more than about 5–20% of the table, expect a scan instead of the index.
+
+#### Common mistakes
+- Indexing `is_active` or `gender` on its own.
+- Assuming the planner is broken when it ignores an index. It is usually right.
+- Forgetting skew: a plan that suits a small tenant can be terrible for a huge one.
 
 #### How it works
 ```mermaid
@@ -395,8 +534,27 @@ Data skew: a large merchant has millions of rows while a small one has a few. A 
 #### Interview angle
 > "I index columns that cut results to a small fraction. For skewed status columns I use partial indexes on the rare values, rather than a plain low-cardinality index the planner will ignore."
 
+#### Sources
+- [Row estimation examples](https://www.postgresql.org/docs/current/row-estimation-examples.html) — PostgreSQL docs
+- [Myth: the most selective column goes first](https://use-the-index-luke.com/sql/myth-directory/most-selective-first) — Use The Index, Luke
+
 ### Clustered index (InnoDB) vs heap storage (PostgreSQL) — physical row ordering differs
 Where the actual row lives differs fundamentally between engines. **InnoDB** stores rows *inside* the primary-key B+ tree (a **clustered index**): the table *is* the index, sorted by PK. **PostgreSQL** stores rows in an unordered **heap**, and every index, including the PK, points to a row's physical location (TID).
+
+#### Intuition
+InnoDB is a dictionary: the entries themselves are stored in key order. PostgreSQL is a pile of pages with a separate index card for each entry telling you which page it is on.
+
+#### Must know
+- **InnoDB**: the table is the primary-key B+ tree. Rows live in its leaves, sorted by PK.
+- **PostgreSQL**: rows live in an unordered heap. Every index, including the PK, points to a row location.
+- An InnoDB secondary index stores the PK, so a lookup walks **two trees**.
+- InnoDB primary keys should be **small and increasing**. A random or wide PK fragments the table and bloats every secondary index.
+- PK range scans are very fast in InnoDB because the rows sit together.
+
+#### Common mistakes
+- A UUIDv4 string primary key in MySQL.
+- Assuming PostgreSQL keeps rows in primary-key order. `CLUSTER` sorts once and is not maintained.
+- Forgetting the extra PK lookup when estimating InnoDB secondary index cost.
 
 #### How it works
 ```mermaid
@@ -455,8 +613,28 @@ InnoDB: traverse the secondary B+ tree to get the PK value, then traverse the cl
 #### Interview angle
 > "In InnoDB the primary key is the physical layout, so I keep it small and increasing (bigint or UUIDv7). In Postgres I lean on covering indexes, because heap rows have no order."
 
+#### Sources
+- [Clustered and secondary indexes](https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html) — MySQL reference manual
+- [The index-organized table (clustered index)](https://use-the-index-luke.com/sql/clustering/index-organized-clustered-index) — Use The Index, Luke
+- [CLUSTER](https://www.postgresql.org/docs/current/sql-cluster.html) — PostgreSQL docs
+
 ### EXPLAIN / EXPLAIN ANALYZE — read execution plans: seq scan vs index scan vs bitmap
 `EXPLAIN` shows the plan the database **intends** to run with estimated costs and row counts. `EXPLAIN ANALYZE` **runs** the query and adds actual times and row counts. Comparing estimated vs actual rows is the fastest way to find why a query is slow.
+
+#### Intuition
+`EXPLAIN` is the route your maps app plans before you leave. `EXPLAIN ANALYZE` is the trip log afterwards, with how long each stretch really took.
+
+#### Must know
+- `EXPLAIN` shows the planned steps with **estimates**. `EXPLAIN ANALYZE` runs the query and adds **actual** rows and time.
+- First check: **estimated rows vs actual rows**. A 10× gap means bad statistics and a bad plan.
+- Seq Scan with a large "Rows Removed by Filter" means a missing index.
+- A sort that spills to disk means too little `work_mem` or a missing index for the ORDER BY.
+- Scans: Seq, Index, Index Only, Bitmap. Joins: Nested Loop, Hash, Merge.
+
+#### Common mistakes
+- Running `EXPLAIN ANALYZE` on an UPDATE or DELETE in production. It really executes.
+- Reading only the total cost and not the row estimates.
+- Testing on a small staging table and assuming the production plan is the same.
 
 #### How it works
 ```mermaid
@@ -530,8 +708,31 @@ The planner chose operators suited for 10 rows (nested loop index lookups), whic
 #### Interview angle
 > "I diagnose with EXPLAIN (ANALYZE, BUFFERS): estimated vs actual rows first, then filtered-out rows and disk sorts. Most fixes are a better composite index or fresh statistics."
 
+#### Sources
+- [Using EXPLAIN](https://www.postgresql.org/docs/current/using-explain.html) — PostgreSQL docs
+- [PostgreSQL execution plan operations](https://use-the-index-luke.com/sql/explain-plan/postgresql/operations) — Use The Index, Luke
+- [EXPLAIN output format](https://dev.mysql.com/doc/refman/8.4/en/explain-output.html) — MySQL reference manual
+
 ### Query planner statistics — ANALYZE command, pg_statistic, histograms
 The planner chooses plans by **estimating how many rows each step produces**, using statistics sampled from the data: distinct counts, most-common values, histograms, null fractions and physical correlation. Wrong statistics lead to wrong plans, which is a top cause of "the query suddenly got slow".
+
+#### Intuition
+A delivery planner choosing a route from last month's traffic survey. If the survey is out of date, the "fastest" route is the jammed one.
+
+#### Must know
+- The planner picks a plan by **estimating row counts** from sampled statistics: distinct values, most common values, histograms.
+- `ANALYZE` (run by autovacuum) refreshes them.
+- Stale statistics are a top cause of "the query suddenly got slow with no code change".
+- Run `ANALYZE` after bulk loads and migrations.
+- The planner assumes columns are independent. Correlated columns need `CREATE STATISTICS`.
+
+#### Numbers to quote
+- PostgreSQL samples about 30,000 rows per table by default (`default_statistics_target = 100`).
+
+#### Common mistakes
+- Debugging the query text when the real change was the data distribution.
+- Forgetting `ANALYZE` in a bulk-load script.
+- Treating `ANALYZE` (statistics) and `EXPLAIN ANALYZE` (run and time a query) as the same thing.
 
 #### How it works
 ```mermaid
@@ -591,8 +792,28 @@ It assumes columns are independent and multiplies their selectivities: P(city) �
 #### Interview angle
 > "When a plan regresses with no code change, I check statistics first: ANALYZE after bulk loads, higher targets for skewed tenants, and extended statistics for correlated columns."
 
+#### Sources
+- [Statistics used by the planner](https://www.postgresql.org/docs/current/planner-stats.html) — PostgreSQL docs
+- [ANALYZE](https://www.postgresql.org/docs/current/sql-analyze.html) — PostgreSQL docs
+- [ANALYZE TABLE](https://dev.mysql.com/doc/refman/8.4/en/analyze-table.html) — MySQL reference manual
+
 ### N+1 query problem — fetch N parents then 1 query per parent; fix with JOIN or DataLoader batching
 The N+1 problem happens when code fetches a list of N parent records with one query, then runs **one more query per parent** to load related data. 1 + N round trips instead of 1–2. It hides easily behind ORMs' lazy loading and is one of the most common causes of slow endpoints.
+
+#### Intuition
+Going to the shop once for a list of 50 recipes, and then making a separate trip for each recipe's ingredients. Fifty-one trips where two would do.
+
+#### Must know
+- One query loads N parents, then **one extra query per parent** loads its children.
+- ORMs hide it behind lazy loading. It shows up as thousands of tiny queries per request.
+- Fix 1: a JOIN / fetch join.
+- Fix 2: one batched query, `WHERE parent_id IN (…)`. This is what `@BatchSize`, `@EntityGraph` and DataLoader do.
+- The same problem exists between services: one HTTP call per item. Fix it with a batch endpoint.
+
+#### Common mistakes
+- Fetch-joining a collection together with pagination, which makes Hibernate paginate in memory.
+- Joining two collections at once and getting a row explosion.
+- Fixing it once with no query-count test, so it comes back.
 
 #### How it works
 ```mermaid
@@ -659,8 +880,28 @@ A service that gets 50 orders then calls the user service once per order to fetc
 #### Interview angle
 > "I watch for N+1 in code review and tests: parents are paginated, then children loaded in one IN query. Across services the same rule means batch endpoints, not one call per item."
 
+#### Sources
+- [N+1 query problem with JPA and Hibernate](https://vladmihalcea.com/n-plus-1-query-problem/) — Vlad Mihalcea
+- [Nested loops and the N+1 problem](https://use-the-index-luke.com/sql/join/nested-loops-join-n1-problem) — Use The Index, Luke
+- [DataLoader](https://github.com/graphql/dataloader) — GraphQL Foundation
+
 ### JOIN types — INNER, LEFT OUTER, RIGHT OUTER, FULL OUTER, CROSS, SELF JOIN
 Joins combine rows from two tables based on a condition. The type decides **what happens to rows without a match**: drop them (INNER), keep them with NULLs from one side (LEFT/RIGHT), keep both sides (FULL), or produce every combination (CROSS).
+
+#### Intuition
+Matching a guest list with a gift list. INNER keeps only guests who brought a gift. LEFT keeps every guest, with a blank where there is no gift. FULL also keeps the gifts nobody claims.
+
+#### Must know
+- The join type decides what happens to **rows with no match**.
+- INNER drops them. LEFT keeps all left rows with NULLs. FULL keeps both sides. CROSS is every combination.
+- Anti-join ("users with no orders"): `NOT EXISTS`, or `LEFT JOIN … WHERE right.id IS NULL`.
+- A filter on the right table in WHERE turns a LEFT JOIN into an INNER JOIN. Put it in ON.
+- Index foreign key columns. PostgreSQL does not create those indexes for you.
+
+#### Common mistakes
+- Joining two one-to-many tables and summing, which double-counts (fan-out).
+- A missing join condition, which silently produces a cartesian product.
+- Expecting joins to work across shards or services.
 
 #### How it works
 ```mermaid
@@ -733,8 +974,28 @@ Each order row is multiplied by its number of items and by its number of payment
 #### Interview angle
 > "I pick the join by what should happen to unmatched rows, index every foreign key, and aggregate child tables before joining so one-to-many fan-out doesn't inflate totals."
 
+#### Sources
+- [Joins between tables](https://www.postgresql.org/docs/current/tutorial-join.html) — PostgreSQL tutorial
+- [Table expressions: joined tables](https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-JOIN) — PostgreSQL docs
+- [Join (SQL)](https://en.wikipedia.org/wiki/Join_%28SQL%29) — Wikipedia
+
 ### Window functions — ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, SUM/AVG OVER PARTITION
 Window functions compute values **across a set of rows related to the current row** (its "window") **without collapsing rows** the way GROUP BY does. They solve ranking, running totals, moving averages, top-N per group and comparisons with the previous or next row in one pass.
+
+#### Intuition
+A class marksheet where each row also shows the student's rank and the running total. GROUP BY would give one line per class. A window keeps every student and adds the extra columns.
+
+#### Must know
+- `fn() OVER (PARTITION BY … ORDER BY …)` computes across related rows **without collapsing them**.
+- Ranking: `ROW_NUMBER` gives 1,2,3,4. `RANK` gives 1,2,2,4. `DENSE_RANK` gives 1,2,2,3.
+- `LAG` / `LEAD` read the previous or next row.
+- **Top-N per group**: number the rows in a subquery, then filter `rn <= N` outside it.
+- Running total: `SUM(x) OVER (PARTITION BY … ORDER BY …)`.
+
+#### Common mistakes
+- Filtering on the window result in the same WHERE. It needs a subquery or CTE.
+- No tiebreaker in ORDER BY, so the "latest" row is not deterministic.
+- Mixing up RANK and DENSE_RANK when asked for the "second highest salary".
 
 #### How it works
 ```mermaid
@@ -805,8 +1066,28 @@ Use `ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at DESC, id DE
 #### Interview angle
 > "For top-N per group, running balances and change detection I use window functions: one ordered pass instead of self-joins, backed by an index on the partition and order columns."
 
+#### Sources
+- [Window functions tutorial](https://www.postgresql.org/docs/current/tutorial-window.html) — PostgreSQL docs
+- [Window functions reference](https://www.postgresql.org/docs/current/functions-window.html) — PostgreSQL docs
+- [Window function concepts and syntax](https://dev.mysql.com/doc/refman/8.4/en/window-functions-usage.html) — MySQL reference manual
+
 ### CTEs (Common Table Expressions) — WITH clause, readability, recursive CTEs for tree traversal
 A CTE (`WITH name AS (…)`) names a subquery so complex SQL reads top-down like steps. A **recursive CTE** repeatedly joins a query to its own previous output, which lets SQL walk **hierarchies and graphs**: org charts, category trees, comment threads, bill of materials.
+
+#### Intuition
+Naming the steps of a long calculation so it reads top to bottom. The recursive kind is like tracing a family tree: start with one person, find their children, then the children's children, until nobody new turns up.
+
+#### Must know
+- `WITH name AS (…)` names a subquery so complex SQL reads as steps.
+- `WITH RECURSIVE` = an anchor query `UNION ALL` a step that joins back to the previous result.
+- It walks hierarchies stored as `parent_id`: org charts, category trees, comment threads.
+- Always add a **depth limit or cycle guard**.
+- For read-heavy trees, a closure table or materialised path avoids recursing on every request.
+
+#### Common mistakes
+- No guard against cycles, so the query never ends.
+- No index on `parent_id`.
+- Assuming a CTE is always an optimisation barrier. PostgreSQL 12+ inlines simple ones.
 
 #### How it works
 ```mermaid
@@ -875,8 +1156,27 @@ Historically (PostgreSQL before 12), a CTE was computed fully and stored before 
 #### Interview angle
 > "Hierarchies stay as a parent_id with recursive CTEs, which include a depth guard. If subtree queries get hot, I add a closure table or materialised path instead of recursing on every request."
 
+#### Sources
+- [WITH queries (common table expressions)](https://www.postgresql.org/docs/current/queries-with.html) — PostgreSQL docs
+- [WITH (common table expressions)](https://dev.mysql.com/doc/refman/8.4/en/with.html) — MySQL reference manual
+
 ### Lateral joins — correlated subquery in FROM clause, row-by-row evaluation
 A `LATERAL` join lets a subquery in the FROM clause **refer to columns of tables listed before it**, so it's evaluated **once per outer row**, like a for-each loop. Its killer use: **top-N per group with an index**, and calling set-returning functions per row.
+
+#### Intuition
+A for-each loop written in SQL: "for each user, go and fetch that user's three latest orders".
+
+#### Must know
+- A `LATERAL` subquery in FROM can **refer to the earlier tables**, so it runs once per outer row.
+- Best use: **top-N per group** with `ORDER BY … LIMIT N` and an index on (group column, sort column).
+- `LEFT JOIN LATERAL … ON true` keeps outer rows that have no match.
+- Also used to expand arrays or JSON per row.
+- SQL Server calls it `CROSS APPLY` / `OUTER APPLY`.
+
+#### Common mistakes
+- Using it with a large outer set and no supporting index. It is a nested loop.
+- `CROSS JOIN LATERAL` when users with no orders must still appear.
+- Reaching for it when a plain join or a window function is simpler.
 
 #### How it works
 ```mermaid
@@ -933,3 +1233,8 @@ LATERAL + LIMIT with an index on `(user_id, created_at DESC)` reads only 3 index
 
 #### Interview angle
 > "For top-N per group over large partitions I use LATERAL with LIMIT on a (group, sort) index: a few index entries per group instead of ranking every row."
+
+#### Sources
+- [Table expressions: LATERAL subqueries](https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-LATERAL) — PostgreSQL docs
+- [Lateral derived tables](https://dev.mysql.com/doc/refman/8.4/en/lateral-derived-tables.html) — MySQL reference manual
+
