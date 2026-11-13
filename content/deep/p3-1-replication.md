@@ -3,6 +3,21 @@
 ### Read replicas — offload read traffic, replicate asynchronously from primary
 A read replica is a copy of the primary database that **continuously applies the primary's changes** (WAL/binlog) and serves **read-only** queries. Most applications read far more than they write, so adding replicas scales reads horizontally and isolates heavy queries from the write path.
 
+#### Intuition
+A popular teacher writes the notes once on the main board, and photocopies go to several rooms. Students read whichever copy is nearest. Only the teacher writes, and a copy can be a few lines behind.
+
+#### Must know
+- A replica is a read-only copy that keeps applying the primary's change log.
+- It **scales reads, not writes**. Every write still goes to the one primary.
+- Replication is asynchronous by default, so a replica can be **stale**.
+- Route read-only work to replicas. Keep reads that must be fresh on the primary.
+- Give analytics and reports their own replica.
+
+#### Common mistakes
+- Adding replicas to fix a write bottleneck.
+- Reading a user's own just-written data from a replica.
+- Reaching for replicas before fixing slow queries or adding a cache.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -55,8 +70,27 @@ Configure writer and reader datasources behind an `AbstractRoutingDataSource` (o
 #### Interview angle
 > "Reads go to a pool of async replicas behind a reader endpoint, and analytics gets its own replica. Flows that must show the user's own fresh writes stay on the primary."
 
+#### Sources
+- [High availability, load balancing, and replication](https://www.postgresql.org/docs/current/high-availability.html) — PostgreSQL docs
+- [Working with DB instance read replicas](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.html) — Amazon RDS user guide
+
 ### Replication lag — async replica may be seconds behind; affects read-your-writes
 Replication lag is the delay between a commit on the primary and that change becoming visible on a replica. Normally milliseconds, it can grow to seconds or minutes under heavy writes, long transactions or replica resource limits, and it produces confusing **stale reads**.
+
+#### Intuition
+A live match on a streaming app runs a few seconds behind the stadium. Usually nobody notices, until your friend at the ground messages "goal!" before you see it.
+
+#### Must know
+- Lag = the time between a commit on the primary and that change being visible on a replica.
+- Normally milliseconds. It grows to seconds or minutes under write bursts, huge transactions or a weak replica.
+- The symptom is a **stale read**: "I saved it and it is not there."
+- Lag on the replica you promote is **data lost on failover**.
+- Batch jobs should work in small chunks and pause when lag crosses a threshold.
+
+#### Common mistakes
+- One giant backfill transaction. Replicas apply it as a unit and fall minutes behind.
+- No alert on lag, so stale replicas keep serving traffic.
+- Assuming lag is always a few milliseconds when designing a read path.
 
 #### How it works
 ```mermaid
@@ -116,8 +150,30 @@ Process in small batches (thousands of rows per transaction), sleep between batc
 #### Interview angle
 > "Replica reads must tolerate a few seconds of lag. Flows that show a user their own write read from the primary, and batch jobs throttle themselves on replication lag."
 
+#### Sources
+- [Monitoring: pg_stat_replication](https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW) — PostgreSQL docs
+- [Log-shipping standby servers: streaming replication](https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION) — PostgreSQL docs
+
 ### Synchronous replication — write not confirmed until replica acks (low lag, higher latency)
 With synchronous replication, a commit returns to the client **only after at least one replica has durably received (or applied) the change**. If the primary dies, a synchronous replica has every acknowledged transaction, so **RPO = 0**. The price is added commit latency, and availability depends on the replica.
+
+#### Intuition
+A bank clerk who will not hand you the receipt until a second clerk has also written your deposit in their own ledger. Slower by a moment, but one ledger can be lost and your money is still recorded.
+
+#### Must know
+- A commit returns only after **at least one replica has the change durably**.
+- If the primary dies, nothing acknowledged is lost: **RPO = 0**.
+- The cost is one network round trip plus a remote fsync on every commit.
+- With a single sync replica, its failure **blocks all writes**. Use a quorum such as "any 1 of 2".
+- Synchronous inside a region across AZs, asynchronous across regions.
+
+#### Numbers to quote
+- Cross-AZ sync adds about 1–2 ms per commit. Cross-region adds about 50–150 ms.
+
+#### Common mistakes
+- Making cross-region replication synchronous and adding a round trip to every write.
+- One sync standby and no plan for when it goes down.
+- Assuming a sync standby always returns fresh reads. That needs `remote_apply`.
 
 #### How it works
 ```mermaid
@@ -179,8 +235,26 @@ Every commit would wait a cross-region round trip (50–150+ ms), cutting throug
 #### Interview angle
 > "Inside a region I'd use quorum synchronous replication across AZs, which gives zero data loss for about a millisecond per commit. Cross-region stays async for disaster recovery, with a documented RPO."
 
+#### Sources
+- [Synchronous replication](https://www.postgresql.org/docs/current/warm-standby.html#SYNCHRONOUS-REPLICATION) — PostgreSQL docs
+- [Replication settings: synchronous_standby_names](https://www.postgresql.org/docs/current/runtime-config-replication.html) — PostgreSQL docs
+
 ### Semi-synchronous replication — at least one replica must ack (MySQL)
 MySQL's semi-synchronous replication sits between async and fully synchronous: the primary waits until **at least one replica has received and logged** the transaction (in its relay log) before acknowledging the commit, but doesn't wait for the replica to **apply** it. If no replica answers within a timeout, it **falls back to async**.
+
+#### Intuition
+A courier who waits for the receiver's signature before telling you "delivered", but does not wait for them to open the parcel. If nobody answers the door for a while, the courier leaves it and moves on.
+
+#### Must know
+- MySQL waits until **one replica has received and logged** the transaction, not until it has applied it.
+- If no replica answers within the timeout, it **silently falls back to async**.
+- `AFTER_SYNC` is the lossless mode: no client can see data that no replica has.
+- Alert when semi-sync is off, or the guarantee disappears exactly during network trouble.
+
+#### Common mistakes
+- Treating semi-sync as a zero-data-loss guarantee without monitoring the fallback.
+- Using the older `AFTER_COMMIT` wait point.
+- Confusing "received" with "applied". The replica can still be behind for reads.
 
 #### How it works
 ```mermaid
@@ -232,8 +306,30 @@ With AFTER_COMMIT, the primary commits in InnoDB (other sessions can already see
 #### Interview angle
 > "On MySQL I'd run lossless semi-sync (AFTER_SYNC) with an alert on fallback to async, so failover to the acknowledging replica loses nothing that was confirmed to users."
 
+#### Sources
+- [Semisynchronous replication](https://dev.mysql.com/doc/refman/8.4/en/replication-semisync.html) — MySQL reference manual
+- [Replication](https://dev.mysql.com/doc/refman/8.4/en/replication.html) — MySQL reference manual
+
 ### Single-leader replication — all writes go to leader, replicated to followers
 In single-leader (primary-replica, master-slave) replication, **one node accepts all writes** and streams changes to followers, which serve reads. It's the default model for PostgreSQL, MySQL, MongoDB replica sets and Redis. It's simple and there are no write conflicts, but the leader is a write bottleneck and failover needs care.
+
+#### Intuition
+One editor holds the master copy of a document. Everyone sends changes to that editor, and everyone else reads the distributed copies. There are never two conflicting edits, but everything waits on one person.
+
+#### Must know
+- **One node takes all writes** and streams them to followers that serve reads.
+- The default for PostgreSQL, MySQL, MongoDB replica sets and Redis.
+- No write conflicts, but write throughput is capped by one machine.
+- Failover: detect → promote the most up-to-date follower → **fence the old leader** → repoint clients.
+- The classic danger is **split brain**: two nodes both believing they are the leader.
+
+#### Numbers to quote
+- Automated failover with Patroni or a managed Multi-AZ setup typically takes about 30–60 seconds.
+
+#### Common mistakes
+- Promoting a follower without fencing the old leader.
+- Promoting an async follower that was behind and losing acknowledged writes.
+- Relying on DNS with a long TTL to repoint clients.
 
 #### How it works
 ```mermaid
@@ -282,8 +378,28 @@ Keep at least one synchronous (or semi-sync) replica in another AZ as the prefer
 #### Interview angle
 > "A single leader with followers handles most systems. I'd automate failover through a consensus-held leader lock so the old primary is fenced, and keep a synchronous replica as the failover target so no acknowledged write is lost."
 
+#### Sources
+- [High availability, load balancing, and replication](https://www.postgresql.org/docs/current/high-availability.html) — PostgreSQL docs
+- [Patroni documentation](https://patroni.readthedocs.io/en/latest/) — Patroni
+- [Split-brain](https://en.wikipedia.org/wiki/Split-brain_%28computing%29) — Wikipedia
+
 ### Multi-leader replication — writes to any datacenter, conflicts must be resolved
 In multi-leader (active-active) replication, **several nodes, usually one per region, accept writes** and replicate them to each other asynchronously. Users write to their nearest region with low latency, and regions survive each other's outages, but **concurrent writes to the same data conflict** and must be resolved.
+
+#### Intuition
+Two branch offices each keep an editable copy of the same price list and sync every evening. Both can keep working when the link is down, but if both changed the same price that day, someone has to decide which one stands.
+
+#### Must know
+- **Several nodes accept writes**, usually one per region, and replicate to each other asynchronously.
+- Benefits: local write latency everywhere, and a region can fail without stopping writes.
+- Cost: **concurrent writes to the same record conflict**.
+- Best strategy is to avoid conflicts: give each record a **home region**.
+- Global constraints such as unique usernames or balance ≥ 0 cannot be enforced this way.
+
+#### Common mistakes
+- Using last-write-wins on money.
+- Auto-increment ids on both leaders, which collide.
+- Choosing multi-leader for latency when read replicas and one writer would do.
 
 #### How it works
 ```mermaid
@@ -336,8 +452,28 @@ LWW keeps only one of two concurrent writes. If user A changes the phone number 
 #### Interview angle
 > "I avoid multi-leader conflicts by giving each record a home region. Where concurrent edits are inherent, like carts or collaborative docs, I use merge-friendly structures (CRDTs) rather than last-write-wins."
 
+#### Sources
+- [Global tables: multi-active, multi-Region replication](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html) — Amazon DynamoDB developer guide
+- [Multi-master replication](https://en.wikipedia.org/wiki/Multi-master_replication) — Wikipedia
+- [Group replication](https://dev.mysql.com/doc/refman/8.4/en/group-replication.html) — MySQL reference manual
+
 ### Leaderless replication — Dynamo style (Cassandra, Riak), any node accepts writes
 In leaderless replication there's no primary: the client (or a coordinator node) sends each write to **N replicas** and considers it successful when **W** acknowledge, and reads query **R** replicas, taking the newest version. With **W + R > N**, read and write sets overlap, so a read sees the latest acknowledged write (with caveats).
+
+#### Intuition
+Telling a piece of news to three friends and counting it as shared once two confirm. Later you ask any two friends, and at least one of them is sure to have heard the latest.
+
+#### Must know
+- No primary. A write goes to **N** replicas and succeeds when **W** acknowledge. A read asks **R** replicas.
+- **W + R > N** means the read set and write set overlap, so a read normally sees the latest write.
+- Typical setup: N = 3, W = 2, R = 2 (Cassandra `QUORUM` / `LOCAL_QUORUM`).
+- Replicas converge through hinted handoff, read repair and anti-entropy repair.
+- Highly available and write-scalable, but no multi-key transactions.
+
+#### Common mistakes
+- Claiming W + R > N gives linearizability. Concurrent writes and sloppy quorums break that.
+- Reading at `ONE` and expecting fresh data.
+- Skipping regular repairs, so deleted rows come back.
 
 #### How it works
 ```mermaid
@@ -392,8 +528,27 @@ No. With concurrent writes, LWW conflict resolution, sloppy quorums, partially f
 #### Interview angle
 > "For a high-volume, always-writable store like chat messages I'd use leaderless Cassandra with RF 3 and LOCAL_QUORUM reads and writes, with regular repairs. I wouldn't use it where I need transactions or compare-and-set on money."
 
+#### Sources
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+- [Dynamo architecture in Cassandra](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+
 ### Conflict resolution — last-write-wins (LWW), merge functions, custom CRDT
 When replicas accept writes independently (multi-leader, leaderless, offline-first apps), the same data can be changed concurrently in two places. Conflict resolution decides the converged value: **pick one** (LWW), **merge** them with app logic, or use data types whose merges are **mathematically conflict-free** (CRDTs).
+
+#### Intuition
+Two people edit the same contact offline. When the phones sync you can keep whichever was saved last, combine both changes field by field, or use a data type built so that merging always gives the same answer whatever order the changes arrive in.
+
+#### Must know
+- **Last-write-wins**: keep the newest timestamp. Simple, but it silently drops the other write.
+- **Merge function**: application logic combines the versions, for example a union of cart items.
+- **CRDTs**: data types whose merge is automatic and always converges (counters, sets, text).
+- Version vectors tell you whether two writes were truly concurrent.
+- **Invariants need coordination.** A CRDT cannot enforce balance ≥ 0 or uniqueness.
+
+#### Common mistakes
+- Whole-record LWW when the two users changed different fields.
+- Trusting wall-clock timestamps for LWW across machines with clock skew.
+- Proposing a CRDT for a bank balance.
 
 #### How it works
 ```mermaid
@@ -453,8 +608,32 @@ CRDTs guarantee convergence, not invariants. Two regions could each approve a �
 #### Interview angle
 > "I decide resolution per data type: counters and carts use CRDTs, profile fields use per-field last-write-wins, and anything with an invariant, like balances or unique handles, goes through a single authority."
 
+#### Sources
+- [Conflict-free replicated data type](https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type) — Wikipedia
+- [About CRDTs](https://crdt.tech/) — crdt.tech
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+
 ### Replication factor — number of replicas (typically 3 for fault tolerance)
 The replication factor (RF) is **how many copies** of each piece of data the system keeps. RF determines how many failures you can survive for reads, writes and durability, and how much storage and write traffic you pay. **RF = 3 across 3 failure domains** is the industry default.
+
+#### Intuition
+Keeping three copies of an important document in three different buildings. One building can burn down and you still have two copies that agree with each other.
+
+#### Must know
+- RF = how many copies of each piece of data exist.
+- **RF 3 across 3 AZs** is the standard. A majority quorum is 2, so one failure is survivable.
+- Quorum = floor(RF / 2) + 1. Use odd numbers: RF 4 tolerates no more failures than RF 3.
+- Copies must sit in **different failure domains** (racks or AZs).
+- Storage needed = raw data × RF, plus headroom.
+
+#### Numbers to quote
+- RF 3 tolerates 1 failure, RF 5 tolerates 2.
+- Kafka durable setup: `replication.factor=3`, `min.insync.replicas=2`, `acks=all`.
+
+#### Common mistakes
+- RF 2, where a single failure already blocks majority operations.
+- Three replicas in the same AZ or rack.
+- Forgetting to multiply by RF in storage estimates.
 
 #### How it works
 ```mermaid
@@ -508,8 +687,27 @@ With RF 2 a majority (quorum) needs both copies, so any single failure blocks qu
 #### Interview angle
 > "Default is replication factor 3 across three AZs with majority quorums: one AZ can fail with no data loss and no downtime, and storage is planned as raw data × 3 plus headroom."
 
+#### Sources
+- [Replication](https://kafka.apache.org/documentation/#replication) — Apache Kafka docs
+- [Dynamo architecture in Cassandra: replication](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+
 ### Read-your-writes consistency — user always sees their own writes, route writes and reads to same node
 Read-your-writes (read-after-write) consistency guarantees that **after a user writes something, that same user's subsequent reads reflect it**. Other users may still see stale data. It's the minimum guarantee users expect ("I just changed my name, why is the old one showing?"), and async replicas or caches break it unless you design for it.
+
+#### Intuition
+You change your profile photo and refresh. You expect to see the new photo, even if your friends see the old one for a few more seconds.
+
+#### Must know
+- Guarantee: **after I write, my own reads show that write.** Other users may still see stale data.
+- Async replicas and caches break it unless you design for it.
+- Fix 1: read the user's own data, or anything they wrote recently, from the primary.
+- Fix 2: remember the commit position and read only from a replica that has caught up.
+- Fix 3: return the saved object in the write response and invalidate the cache before responding.
+
+#### Common mistakes
+- Redirecting to a confirmation page that reads from a lagging replica.
+- A stickiness cookie only, which fails when the user switches device.
+- Updating the database and leaving the old value in the cache.
 
 #### How it works
 ```mermaid
@@ -560,8 +758,28 @@ From the user's perspective the action failed: they saved something and it isn't
 #### Interview angle
 > "Replicas can lag, but a user must always see their own changes. So I route a user's reads to the primary for a few seconds after they write, invalidate caches before responding, and return the saved state in the response."
 
+#### Sources
+- [Read your writes](https://jepsen.io/consistency/models/read-your-writes) — Jepsen
+- [Eventually consistent](https://www.allthingsdistributed.com/2008/12/eventually_consistent.html) — Werner Vogels
+- [Causal consistency and read and write concerns](https://www.mongodb.com/docs/manual/core/causal-consistency-read-write-concerns/) — MongoDB manual
+
 ### Monotonic reads — user never reads older data after reading newer data
 Monotonic reads guarantees that once a user has seen a value, **later reads never show an older value**: time doesn't go backwards. Without it, a user refreshing a page can see a comment appear, disappear, then appear again, because successive requests hit replicas with different lag.
+
+#### Intuition
+You refresh a cricket score and it shows 150, then 140, then 150 again. Each number was true at some point, but going backwards is confusing. Monotonic reads means your view only moves forward.
+
+#### Must know
+- Guarantee: **once I have seen a value, I never later see an older one.**
+- It breaks when successive requests hit replicas with different lag.
+- Fix 1: sticky routing. Pin each user to one replica, for example by hashing the user id.
+- Fix 2: the client sends the latest version it has seen, and only a caught-up replica answers.
+- It is a different guarantee from read-your-writes. You can have either one without the other.
+
+#### Common mistakes
+- Round-robin load balancing across replicas for a page users refresh often.
+- Mixing it up with read-your-writes.
+- Forgetting the failover case, where the new replica may be further behind.
 
 #### How it works
 ```mermaid
@@ -612,3 +830,8 @@ The client stores the highest data version or LSN it has seen (in a header or co
 
 #### Interview angle
 > "To stop data jumping back in time on refresh, I pin each user to one replica by consistent hashing, or pass a version token so only caught-up replicas answer."
+
+#### Sources
+- [Monotonic reads](https://jepsen.io/consistency/models/monotonic-reads) — Jepsen
+- [Eventually consistent](https://www.allthingsdistributed.com/2008/12/eventually_consistent.html) — Werner Vogels
+

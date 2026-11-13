@@ -3,6 +3,24 @@
 ### Cassandra data model — keyspace, table, partition key (distributes data), clustering key (orders within partition)
 Cassandra is a wide-column, leaderless database built for massive write throughput and always-on availability. Its data model is **query-first**: you design one table per query pattern. The **partition key** decides which nodes store the data, and **clustering columns** decide the sort order of rows inside a partition.
 
+#### Intuition
+A filing room where the label on a folder decides which cabinet it goes in, and the pages inside are kept in date order. You can fetch a folder and read its latest pages instantly. You cannot ask the room "which folders mention X" without opening all of them.
+
+#### Must know
+- **Query-first modelling**: design one table per query, and denormalise.
+- Primary key = ((partition key), clustering columns).
+- The **partition key** decides which nodes hold the data. **Clustering columns** set the sort order inside a partition.
+- Every query must give the full partition key. There are no joins.
+- **Bound the partition size** by adding a time bucket to the partition key.
+
+#### Numbers to quote
+- Keep a partition under roughly 100 MB.
+
+#### Common mistakes
+- Modelling tables as in SQL and then needing `ALLOW FILTERING`.
+- An unbounded partition, such as every message of a channel for all time.
+- A low-cardinality partition key, which creates a hot node.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -71,8 +89,27 @@ A partition lives entirely on its replica nodes. Huge partitions (millions of ro
 #### Interview angle
 > "In Cassandra I model one table per query, partitioned by something like (conversation_id, month) to bound partition size and clustered by time descending, so every read is one partition slice."
 
+#### Sources
+- [Data modeling](https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/index.html) — Apache Cassandra docs
+- [How Discord stores billions of messages](https://discord.com/blog/how-discord-stores-billions-of-messages) — Discord engineering
+
 ### Cassandra write path — commit log → memtable → SSTable flush (LSM tree)
 Cassandra writes are extremely fast because they never update data in place. Each write is appended to a **commit log** (durability), applied to an in-memory **memtable**, and acknowledged. Memtables are later flushed to immutable on-disk **SSTables**, merged over time by compaction. This is the **LSM-tree** design.
+
+#### Intuition
+A busy shopkeeper jots every sale at the end of a notebook and keeps today's sales sorted on a slate. When the slate fills, it is copied neatly onto a page that is never edited again. Nothing is looked up or corrected while customers are waiting.
+
+#### Must know
+- A write is an **append to the commit log** plus an **insert into the in-memory memtable**. Then it is acknowledged.
+- A full memtable is flushed to an immutable **SSTable** on disk.
+- **No read before write** and no in-place update, which is why writes are so fast.
+- An update is a new version with a newer timestamp. A delete writes a tombstone.
+- The cost is paid later: compaction, and reads that must merge several SSTables.
+
+#### Common mistakes
+- Saying Cassandra updates rows in place.
+- Forgetting that the default commit log sync is periodic, so durability comes from replication.
+- Ignoring the read-side cost of an append-only design.
 
 #### How it works
 ```mermaid
@@ -129,8 +166,27 @@ It's an insert of new cell values with a newer timestamp, so there's no in-place
 #### Interview angle
 > "Cassandra's write path is append-only (commit log plus memtable, flushed to immutable SSTables), so it absorbs huge write volumes. The cost is paid later in compaction and on reads."
 
+#### Sources
+- [Storage engine](https://cassandra.apache.org/doc/latest/cassandra/architecture/storage-engine.html) — Apache Cassandra docs
+- [Log-structured merge-tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) — Wikipedia
+
 ### Cassandra read path — bloom filter check → SSTable cache → data files (from multiple SSTables)
 Because a row's data may be spread over the memtable and several SSTables, a Cassandra read must **find and merge** all versions. It uses in-memory structures (bloom filters, partition summaries and indexes, caches) to skip SSTables and seek directly, then merges cells by timestamp.
+
+#### Intuition
+Your notes on one topic are spread across several notebooks. Each notebook has a quick checklist on its cover saying "definitely not in here" or "maybe". You skip most of them, open the few that might have it, and keep the newest version of each line.
+
+#### Must know
+- One row's data can sit in the memtable and in several SSTables, so a read must **find and merge** them.
+- A **bloom filter** per SSTable says "definitely not here", so most files are skipped without touching disk.
+- The newest timestamp wins when versions are merged.
+- Read latency depends on SSTables touched, tombstones scanned and partition size.
+- Reads are slower and less predictable than writes.
+
+#### Common mistakes
+- Assuming reads are as cheap as writes.
+- Size-tiered compaction on a read-heavy, frequently updated table.
+- Delete-heavy patterns, which make every read scan tombstones.
 
 #### How it works
 ```mermaid
@@ -182,8 +238,30 @@ Likely tombstones accumulating (frequent deletes or TTL expiry, especially with 
 #### Interview angle
 > "Cassandra reads merge the memtable and SSTables, with bloom filters skipping most files. Read latency comes down to partition size, SSTables per read and tombstones, so I pick the compaction strategy per table."
 
+#### Sources
+- [Storage engine](https://cassandra.apache.org/doc/latest/cassandra/architecture/storage-engine.html) — Apache Cassandra docs
+- [Bloom filters](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/bloom_filters.html) — Apache Cassandra docs
+
 ### Cassandra consistency levels — ONE, QUORUM, ALL, LOCAL_QUORUM, LOCAL_ONE
 Cassandra lets each query choose **how many replicas must respond** for it to succeed: its consistency level (CL). That trades consistency against latency and availability per operation. With replication factor RF, choosing read CL + write CL > RF gives overlapping quorums (strong-ish reads).
+
+#### Intuition
+Asking three friends for a fact. Trust the first to answer (fast, sometimes outdated), wait for two to agree (reliable), or insist on all three (and if one is asleep you get no answer at all).
+
+#### Must know
+- Each query chooses **how many replicas must respond**.
+- `ONE` is fastest and may be stale. `QUORUM` is a majority. `ALL` fails if any replica is down.
+- **`LOCAL_QUORUM`** (a majority in the local datacenter) is the standard choice.
+- Read level + write level > replication factor means the read overlaps the latest write.
+- A quorum write is still a blind write. Compare-and-set needs a **lightweight transaction** (`IF …`).
+
+#### Numbers to quote
+- RF 3 with `LOCAL_QUORUM` needs 2 replicas and tolerates 1 node down.
+
+#### Common mistakes
+- Using `QUORUM` in a multi-datacenter cluster and paying cross-datacenter latency.
+- Using `ALL` "for safety", which makes one down node an outage.
+- Reserving a seat with a quorum write. Two writers both succeed.
 
 #### How it works
 | CL | Replicas required (RF = 3) | Notes |
@@ -236,8 +314,27 @@ No. QUORUM writes are blind writes with last-write-wins. Two concurrent reservat
 #### Interview angle
 > "Reads and writes run at LOCAL_QUORUM with RF 3 per region, which gives read-your-writes locally and tolerates a node failure. Uniqueness or compare-and-set uses lightweight transactions."
 
+#### Sources
+- [Dynamo architecture: tunable consistency](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+- [Guarantees](https://cassandra.apache.org/doc/latest/cassandra/architecture/guarantees.html) — Apache Cassandra docs
+
 ### Cassandra gossip protocol — peer-to-peer O(log N) node state propagation
 Cassandra has no master node. Each node learns about the cluster through **gossip**: every second it exchanges state (who's up, load, schema version, tokens) with a few random peers. Information spreads epidemically and reaches all N nodes in about **O(log N)** rounds.
+
+#### Intuition
+Office gossip. Each person tells a couple of colleagues what they know, those colleagues tell a couple more, and within a few rounds the whole office has heard, with no announcement from the boss.
+
+#### Must know
+- There is no master. Every second each node swaps state with a few random peers.
+- News reaches all N nodes in about **O(log N) rounds**.
+- The state carries version numbers, so newer information wins.
+- Seed nodes only help new nodes find the cluster.
+- Failure detection uses a suspicion level (phi accrual), not a fixed timeout.
+
+#### Common mistakes
+- Thinking seed nodes are leaders.
+- Expecting every node to have the same view at every instant. Membership is eventually consistent.
+- Confusing gossip, which spreads cluster state, with replication of data.
 
 #### How it works
 ```mermaid
@@ -288,8 +385,30 @@ Instead of a binary "no heartbeat for X seconds means dead", it models the stati
 #### Interview angle
 > "Cassandra nodes gossip their state peer to peer and converge in O(log N) rounds, with phi accrual failure detection, so there's no master to fail or overload."
 
+#### Sources
+- [Dynamo architecture: gossip](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+- [Gossip protocol](https://en.wikipedia.org/wiki/Gossip_protocol) — Wikipedia
+
 ### Cassandra hinted handoff — store writes for down nodes, replay when node recovers
 When a replica is down during a write, the coordinator stores a **hint**: the write plus its intended target. When the replica comes back, the coordinator **replays the hints** to it. This lets writes succeed during short outages and speeds up convergence without waiting for a full repair.
+
+#### Intuition
+A neighbour takes in your parcels while you are away and hands them over when you return. If you are away too long, they stop collecting, and you must go to the depot and check everything yourself.
+
+#### Must know
+- When a replica is down, the coordinator **stores the write as a hint** and replays it when the replica returns.
+- It covers **short outages**, such as rolling restarts.
+- Hints are kept only for a limited window. After that the node needs a **repair**.
+- A hint does **not** count toward the consistency level.
+- It is best-effort. It does not replace repair.
+
+#### Numbers to quote
+- Default hint window: 3 hours.
+
+#### Common mistakes
+- Relying on hints after a node was down for half a day.
+- Thinking hints help a QUORUM write succeed.
+- Bringing back a node that was down longer than `gc_grace_seconds`. Replace it.
 
 #### How it works
 ```mermaid
@@ -342,8 +461,26 @@ No. Hints are stored for replicas that didn't acknowledge, so they don't count t
 #### Interview angle
 > "Hinted handoff covers short replica outages during restarts. Anything longer than the hint window needs a repair before the node serves reads again."
 
+#### Sources
+- [Hints](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/hints.html) — Apache Cassandra docs
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+
 ### Cassandra read repair — detect and fix stale replicas on read path
 Read repair fixes inconsistencies **opportunistically during reads**: when the coordinator queries multiple replicas (per the consistency level) and their responses disagree, it returns the newest data and writes it back to the stale replicas, so frequently read data converges quickly.
+
+#### Intuition
+You ask two colleagues for a phone number and get two different answers. You go with the more recently updated one, and tell the other colleague to correct their notes.
+
+#### Must know
+- On a read that consults several replicas, a mismatch is detected and the **newest version is written back** to the stale replica.
+- It fixes **only data that is actually read**, and only at a consistency level above ONE.
+- The coordinator requests full data from one replica and a hash (digest) from the others.
+- Cold data still needs scheduled anti-entropy repair.
+
+#### Common mistakes
+- Treating read repair as enough to keep replicas consistent.
+- Reading at ONE and expecting any repair to happen.
+- Quoting `read_repair_chance`. It was removed in Cassandra 4.0.
 
 #### How it works
 ```mermaid
@@ -398,8 +535,29 @@ The coordinator asks one replica for the full data and the others only for a has
 #### Interview angle
 > "Read repair converges hot data at quorum reads. Cold data relies on scheduled anti-entropy repairs within gc_grace_seconds."
 
+#### Sources
+- [Read repair](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/read_repair.html) — Apache Cassandra docs
+- [Dynamo architecture](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+
 ### Cassandra anti-entropy — periodic Merkle tree comparison between replicas
 Anti-entropy repair (`nodetool repair`) systematically synchronises replicas: each replica builds a **Merkle tree** (a hash tree) over its data for a token range, the trees are compared, and only the **ranges whose hashes differ** are streamed between replicas. It's the guarantee that all replicas eventually match, including data that's never read.
+
+#### Intuition
+Two librarians checking that their catalogues match. They do not read out every entry. They compare one checksum per shelf, and only where a checksum differs do they go through that shelf book by book.
+
+#### Must know
+- `nodetool repair` compares replicas with **Merkle trees** (trees of hashes) and streams only the ranges that differ.
+- It is the only mechanism that fixes data nobody reads.
+- It must finish on every node **within `gc_grace_seconds`**, or deleted data can come back.
+- It is I/O-heavy, so run it in small throttled sub-ranges with a scheduler such as Reaper.
+
+#### Numbers to quote
+- `gc_grace_seconds` default: 10 days.
+
+#### Common mistakes
+- Never scheduling repairs.
+- One huge full repair at peak time.
+- Thinking hints and read repair make repair optional.
 
 #### How it works
 ```mermaid
@@ -453,8 +611,30 @@ Replicas drift (missed writes beyond the hint window are never fixed for unread 
 #### Interview angle
 > "Repairs are non-negotiable in Cassandra. Reaper runs throttled subrange repairs so every node completes a cycle inside gc_grace_seconds, otherwise deletes can come back from the dead."
 
+#### Sources
+- [Repair](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/repair.html) — Apache Cassandra docs
+- [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree) — Wikipedia
+
 ### Cassandra compaction — SizeTiered (write-heavy), Leveled (read-heavy), TWCS (time-series)
 Compaction merges immutable SSTables: it combines versions of the same partition, drops overwritten cells and expired tombstones, and keeps the number of SSTables per read low. The **compaction strategy** is a per-table choice that trades write cost, read latency and disk space.
+
+#### Intuition
+Merging many scribbled notebooks into fewer clean ones. You can merge rarely (cheap to write, slow to look things up), keep everything in tidy levels (fast to look up, lots of rewriting), or keep one notebook per day and throw old days away whole.
+
+#### Must know
+- Compaction merges immutable SSTables, drops overwritten data and expired tombstones, and keeps reads fast.
+- **STCS** (size-tiered): write-heavy tables. Cheap writes, reads touch many SSTables.
+- **LCS** (leveled): read-heavy or frequently updated tables. Fast reads, heavy rewriting.
+- **TWCS** (time-window): time series with TTL. A whole expired window is dropped at once.
+- The strategy is chosen **per table**.
+
+#### Numbers to quote
+- STCS can need up to about 50% free disk during a merge. LCS rewrites data roughly 10×.
+
+#### Common mistakes
+- LCS on a write-heavy table, so compaction never catches up.
+- STCS on an update-heavy, read-heavy table.
+- Updates or deletes on a TWCS table, which stop old windows from being dropped.
 
 #### How it works
 ```mermaid
@@ -512,8 +692,31 @@ LCS keeps SSTables non-overlapping within each level, so new data is repeatedly 
 #### Interview angle
 > "I choose compaction per table: TWCS for TTL'd time series, LCS for read-heavy updated data, and STCS for write-mostly logs, and I monitor pending compactions and SSTables per read."
 
+#### Sources
+- [Compaction overview](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/index.html) — Apache Cassandra docs
+- [TWCS part 1: how does it work and when should you use it?](https://thelastpickle.com/blog/2016/12/08/TWCS-part1.html) — The Last Pickle
+
 ### Cassandra tombstones — deleted data marked with timestamp, GC after gc_grace_seconds
 Cassandra can't delete in place: SSTables are immutable, and other replicas may still hold the data. A delete writes a **tombstone**, a marker with a timestamp that shadows older data. Tombstones are only purged by compaction after **`gc_grace_seconds`** (default 10 days), so every replica has a chance to learn about the delete through repair.
+
+#### Intuition
+You cannot erase a line in a notebook that has been photocopied to three offices. So you write "line 12 is cancelled" and send that note round. The note has to stay until every office has seen it. Throw it away too early and one office still believes line 12.
+
+#### Must know
+- A delete writes a **tombstone**: a timestamped marker that hides older data.
+- Tombstones are purged only after **`gc_grace_seconds`** plus a compaction.
+- If a replica misses the tombstone and it is purged elsewhere, the deleted data **comes back**.
+- Reads must scan past tombstones, so many of them make reads slow and eventually fail.
+- TTL expiry and writing `null` also create tombstones.
+
+#### Numbers to quote
+- `gc_grace_seconds` default: 10 days.
+- A query warns at 1,000 tombstones scanned and fails at 100,000.
+
+#### Common mistakes
+- Using a Cassandra table as a queue (insert, read the oldest, delete).
+- An ORM writing nulls for unset fields on every insert.
+- Lowering `gc_grace_seconds` without making repairs faster.
 
 #### How it works
 ```mermaid
@@ -568,8 +771,31 @@ It's how long a tombstone must be kept before compaction can purge it (default 1
 #### Interview angle
 > "Deletes in Cassandra are tombstones that live for gc_grace_seconds, so I avoid delete-heavy and queue-like models, expire time series with TTL plus TWCS, and repair inside the grace window."
 
+#### Sources
+- [About deletes and tombstones in Cassandra](https://thelastpickle.com/blog/2016/07/27/about-deletes-and-tombstones.html) — The Last Pickle
+- [Tombstones](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html) — Apache Cassandra docs
+
 ### DynamoDB — AWS managed, key-value + document, single-table design pattern
 DynamoDB is AWS's fully managed key-value and document database: single-digit-millisecond latency at any scale, automatic partitioning, multi-AZ replication and serverless pricing. You design around **access patterns** with partition and sort keys, often putting multiple entity types in **one table** ("single-table design") so related items can be fetched in one query.
+
+#### Intuition
+A valet key cabinet run by someone else. Hand over a ticket number and the key comes back immediately, however many cars there are. But you can only ask by ticket number, so you must decide in advance how you will ask.
+
+#### Must know
+- A fully managed key-value and document store with single-digit-millisecond reads at any scale.
+- **List the access patterns first**, then design the partition key and sort key around them.
+- `Query` by key is cheap. `Scan` reads the whole table and is expensive.
+- **Single-table design**: several entity types share one table, so one Query returns an item and its related items.
+- Conditional writes handle concurrency. Streams provide change data capture.
+
+#### Numbers to quote
+- Maximum item size: 400 KB.
+- A transaction can cover up to 100 items.
+
+#### Common mistakes
+- Designing the table like a relational schema and then needing joins.
+- Using `Scan` with a filter for a regular query.
+- Choosing it when access patterns are still unknown or reporting is ad hoc.
 
 #### How it works
 ```mermaid
@@ -632,8 +858,30 @@ Store multiple entity types (users, orders, items) in one table with generic `PK
 #### Interview angle
 > "In DynamoDB I list access patterns first, then design PK/SK and GSIs so each pattern is a single Query. Conditional writes handle concurrency, and Streams feed search and analytics."
 
+#### Sources
+- [Core components of Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html) — Amazon DynamoDB developer guide
+- [The what, why, and when of single-table design with DynamoDB](https://www.alexdebrie.com/posts/dynamodb-single-table/) — Alex DeBrie
+
 ### DynamoDB partition key + sort key, GSI (Global Secondary Index), LSI (Local)
 DynamoDB's primary key is either a **partition key** alone or **partition key + sort key**. The partition key picks the partition (hashed), and the sort key orders items within it and enables range queries. **GSIs** create alternate keys for other access patterns (asynchronously maintained), while **LSIs** offer an alternate sort key within the same partition.
+
+#### Intuition
+A library shelves books by author (partition key) and then by year (sort key). To find books by subject, the library keeps a second catalogue arranged by subject. That second catalogue is updated a moment after the shelves are.
+
+#### Must know
+- **Partition key**: hashed to pick the partition. **Sort key**: orders items inside it and allows range queries (`BETWEEN`, `begins_with`).
+- **GSI**: an index with completely different keys, for another access pattern. Maintained asynchronously, so reads are eventually consistent.
+- **LSI**: same partition key, different sort key. Must be created with the table.
+- Each GSI costs extra write capacity. A starved GSI throttles writes to the base table.
+- A **sparse GSI** contains only items that have the indexed attribute.
+
+#### Numbers to quote
+- Default limits: 20 GSIs and 5 LSIs per table. An LSI caps each partition key at 10 GB.
+
+#### Common mistakes
+- Reading from a GSI immediately after a write and expecting to see it.
+- A low-cardinality GSI key such as status, which creates a hot index partition.
+- Planning to add an LSI later. It cannot be added after table creation.
 
 #### How it works
 ```mermaid
@@ -686,8 +934,30 @@ Every base-table write that touches indexed attributes must also be written to t
 #### Interview angle
 > "The base key serves the main access pattern. Each extra pattern gets a projected, sometimes sparse, GSI, with capacity planned for it and eventual consistency accepted."
 
+#### Sources
+- [Using global secondary indexes in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html) — Amazon DynamoDB developer guide
+- [Local secondary indexes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/LSI.html) — Amazon DynamoDB developer guide
+
 ### DynamoDB hot partition — high-cardinality partition key is essential; write sharding for counters
 DynamoDB spreads data across partitions by hashing the partition key. Each partition has limits (about **3,000 RCU and 1,000 WCU per second**, and 10 GB). If many requests target one key, that partition throttles even though the table has plenty of total capacity. **Adaptive capacity** helps somewhat, but key design is the real fix.
+
+#### Intuition
+A toll plaza with twenty lanes where every car insists on lane 3. Building more lanes changes nothing. You have to send the cars to different lanes.
+
+#### Must know
+- All traffic for one partition key lands on **one partition**, which has a fixed ceiling.
+- Raising table capacity does not help a single hot key.
+- Use a **high-cardinality partition key** (userId, orderId), not status, date or country.
+- **Write sharding**: add a suffix (`key#0…N`) and sum on read, or aggregate through Streams.
+- Cache hot reads, and use CloudWatch Contributor Insights to find hot keys.
+
+#### Numbers to quote
+- Per-partition ceiling: about 1,000 write units and 3,000 read units per second, and 10 GB.
+
+#### Common mistakes
+- A partition key of `"GLOBAL_COUNTER"` or today's date.
+- Answering throttling with "increase provisioned capacity".
+- Relying on adaptive capacity to rescue a bad key design.
 
 #### How it works
 ```mermaid
@@ -743,8 +1013,27 @@ Capacity is spread across partitions, and a single partition key maps to one par
 #### Interview angle
 > "In DynamoDB the partition key must have high cardinality. Known-hot keys like counters get write-sharded suffixes, with totals aggregated through Streams, and Contributor Insights shows where the hot keys are."
 
+#### Sources
+- [Using write sharding to distribute workloads evenly](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-sharding.html) — Amazon DynamoDB developer guide
+- [Best practices for designing and using partition keys effectively](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html) — Amazon DynamoDB developer guide
+
 ### Graph DB (Neo4j) — nodes, relationships, properties, Cypher query language
 A graph database stores **nodes** (entities), **relationships** (typed, directed edges) and **properties** on both, with relationships as first-class stored pointers (**index-free adjacency**). Multi-hop traversals ("friends of friends who bought X") stay fast regardless of total data size, which is where relational joins struggle.
+
+#### Intuition
+A map of who knows whom drawn with string between pins. To find friends of friends you follow the strings from one pin. You do not search a list of every friendship in the city.
+
+#### Must know
+- Data is **nodes, typed relationships and properties**. Relationships are stored as direct links.
+- Following a link costs the same however big the database is, so **multi-hop queries stay fast**.
+- Cypher pattern: `MATCH (a)-[:FRIEND*1..3]->(b)`.
+- Good for fraud rings, recommendations, social graphs and dependency or permission graphs.
+- Hard to shard, and weak at bulk aggregation. Usually fed from the system of record.
+
+#### Common mistakes
+- Choosing a graph database for ordinary CRUD with one-hop joins.
+- Ignoring **super nodes** (a celebrity with millions of edges), which make traversals explode.
+- Making it the transactional source of truth for money.
 
 #### How it works
 ```mermaid
@@ -781,7 +1070,7 @@ MATCH path = shortestPath((x:Account {id:'A1'})-[:TRANSFERRED*..6]-(y:Account {i
 |---|---|---|
 | Traversal explodes in time | super nodes (a node with millions of edges, like a celebrity) | relationship types/properties to filter, cap depth, model super nodes differently |
 | Slow start of queries | no index on lookup property | index/constraint on `:Person(id)` |
-| Graph too big for one machine | Neo4j primarily scales reads via replicas | sharding (Fabric), or a distributed graph DB (JanusGraph, Neptune, TigerGraph) |
+| Graph too big for one machine | Neo4j primarily scales reads via replicas | sharding (composite databases, formerly Fabric), or a distributed graph DB (JanusGraph, Neptune, TigerGraph) |
 
 #### Cheat sheet
 - Nodes + typed relationships + properties. Index-free adjacency means fast hops.
@@ -802,8 +1091,30 @@ A node with an enormous number of relationships (a celebrity followed by 50M peo
 #### Interview angle
 > "For fraud-ring detection I'd stream accounts, devices and cards into a graph database and run bounded multi-hop pattern queries, while the transactional source of truth stays relational."
 
+#### Sources
+- [What is a graph database?](https://neo4j.com/docs/getting-started/graph-database/) — Neo4j docs
+- [Cypher manual: introduction](https://neo4j.com/docs/cypher-manual/current/introduction/) — Neo4j docs
+
 ### Time-series DB — InfluxDB, TimescaleDB (Postgres extension), Prometheus TSDB
 Time-series databases are optimised for **timestamped measurements**: heavy append-only writes, queries over time ranges with aggregations (avg per minute, p99 per hour), downsampling and retention-based deletion. Compression exploits the regularity of time series, often reaching 10–20× smaller than generic storage.
+
+#### Intuition
+A hospital chart that records temperature every few minutes. Nobody edits old readings. People ask "what was the average this morning?", last year's minute-by-minute detail is summarised to hourly, and very old charts are shredded by the boxful.
+
+#### Must know
+- Built for **timestamped, append-only data** queried by time range with aggregation.
+- Three core features: **compression, downsampling (rollups) and retention**.
+- Prometheus: pull-based metrics with labels. InfluxDB: push-based. TimescaleDB: SQL on PostgreSQL.
+- **High cardinality kills them**: every unique label combination is a separate series.
+- Old data is dropped a whole chunk at a time, which is cheap.
+
+#### Numbers to quote
+- Compression brings a data point down to roughly 1–2 bytes, often 10× or more smaller than raw.
+
+#### Common mistakes
+- Putting `user_id` or `request_id` in a metric label.
+- Querying months of raw points for a dashboard when a rollup would do.
+- Using a time-series database as a general-purpose store with updates.
 
 #### How it works
 ```mermaid
@@ -818,7 +1129,7 @@ flowchart LR
 | System | Model | Notes |
 |---|---|---|
 | **Prometheus** | pull-based metrics, labels, PromQL | local TSDB (2 h blocks), long-term storage via Thanos/Mimir/Cortex |
-| **InfluxDB** | measurements, tags, fields, line protocol | push-based, retention policies, Flux/SQL |
+| **InfluxDB** | measurements, tags, fields, line protocol | push-based, retention policies, SQL and InfluxQL in InfluxDB 3 (Flux is in maintenance mode) |
 | **TimescaleDB** | Postgres extension: hypertables auto-partitioned by time | full SQL + joins, continuous aggregates, compression |
 | Others | ClickHouse, QuestDB, Druid, VictoriaMetrics | analytics-oriented / very high ingest |
 
@@ -863,3 +1174,9 @@ Each unique combination of metric name and label values is a separate series wit
 
 #### Interview angle
 > "Metrics go into a TSDB with low-cardinality labels, compression, retention and rollups, which is Prometheus with Mimir for infrastructure metrics. For device telemetry that needs joins, I'd use TimescaleDB on Postgres."
+
+#### Sources
+- [Storage](https://prometheus.io/docs/prometheus/latest/storage/) — Prometheus docs
+- [Gorilla: a fast, scalable, in-memory time series database](https://www.vldb.org/pvldb/vol8/p1816-teller.pdf) — Pelkonen et al., VLDB 2015
+- [Metric and label naming](https://prometheus.io/docs/practices/naming/) — Prometheus docs
+

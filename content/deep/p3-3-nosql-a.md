@@ -3,6 +3,25 @@
 ### MongoDB — documents, collections, BSON, replica sets, sharding (mongos + config servers)
 MongoDB is a document database: records are **JSON-like documents (stored as BSON)** in **collections**, with flexible schemas, rich secondary indexes and a powerful query language. It scales with **replica sets** (HA) and **sharding** (horizontal scale) coordinated by `mongos` routers and config servers.
 
+#### Intuition
+A filing cabinet of folders, where each folder holds everything about one thing: the product, its specs and its seller details together. You pull one folder and have the whole picture, with no need to collect pages from five drawers.
+
+#### Must know
+- Data is stored as **JSON-like documents** (BSON) in collections, with a flexible schema and secondary indexes.
+- **Model for your queries**: embed what is read together and bounded, reference what is large or unbounded.
+- A **replica set** (one primary, secondaries) gives high availability with automatic election.
+- A **sharded cluster** = `mongos` routers + config servers + several replica sets.
+- A single-document update is atomic. Use `w: "majority"` for writes you cannot lose.
+
+#### Numbers to quote
+- Maximum document size: 16 MB.
+- A replica set elects a new primary in roughly 10–12 seconds.
+
+#### Common mistakes
+- Embedding an unbounded array, such as every comment inside the post.
+- Saying MongoDB has "no schema". The schema simply moves into the application.
+- Using `w: 1` for important writes and losing them on failover.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -68,8 +87,28 @@ Embed only a bounded summary (comment count, maybe the latest 3 comments) in the
 #### Interview angle
 > "I'd use MongoDB for document-shaped aggregates like the catalogue: embed what's read together, reference unbounded collections, majority write concern, and pick the shard key from the main query."
 
+#### Sources
+- [Replication](https://www.mongodb.com/docs/manual/replication/) — MongoDB manual
+- [Sharding](https://www.mongodb.com/docs/manual/sharding/) — MongoDB manual
+- [Data modeling](https://www.mongodb.com/docs/manual/data-modeling/) — MongoDB manual
+
 ### MongoDB shard key selection — cardinality, write distribution, query isolation
 In MongoDB the shard key determines **which shard owns each document** (via chunks), so it drives write scalability, query routing and future pain. A good shard key has **high cardinality**, **spreads writes**, and lets common queries target **one shard** instead of broadcasting.
+
+#### Intuition
+Choosing which counter each customer queues at. Send them by city and the Bangalore counter is swamped. Send them by arrival time and only the newest counter is busy. Send them by customer number and the queues stay even.
+
+#### Must know
+- The shard key decides which shard owns each document, and it is on every routing decision.
+- Good key: **high cardinality, no dominant value, not monotonic, present in the hot queries**.
+- A query that includes the shard key is **targeted** to one shard. One that does not is broadcast to all.
+- Hashed key = even writes, no range targeting. Compound ranged key = locality plus spread.
+- A timestamp or plain ObjectId as a ranged key sends every insert to one shard.
+
+#### Common mistakes
+- Sharding on `createdAt` or on `_id` (ObjectId) as a range.
+- A low-cardinality key such as country, which produces chunks too big to split.
+- Picking the key before knowing the top queries.
 
 #### How it works
 ```mermaid
@@ -126,8 +165,27 @@ A compound key like `{ tenantId: 1, eventId: "hashed" }` (compound hashed, Mongo
 #### Interview angle
 > "I pick the MongoDB shard key so hot queries are targeted and writes spread evenly. A hashed or compound key with a high-cardinality prefix, never a timestamp alone."
 
+#### Sources
+- [Choose a shard key](https://www.mongodb.com/docs/manual/core/sharding-choose-a-shard-key/) — MongoDB manual
+- [Shard keys](https://www.mongodb.com/docs/manual/core/sharding-shard-key/) — MongoDB manual
+
 ### MongoDB aggregation pipeline — $match, $group, $sort, $lookup, $project, $unwind
 The aggregation pipeline processes documents through a sequence of **stages**, each transforming the stream: filter, reshape, unwind arrays, group, join and sort. It's MongoDB's equivalent of SQL's `WHERE … GROUP BY … JOIN … ORDER BY`, and it runs inside the database, close to the data.
+
+#### Intuition
+A factory conveyor belt. Documents pass through stations in order: one throws out what you do not need, one splits bundles apart, one groups and adds up, one sorts. The earlier you discard, the less every later station has to handle.
+
+#### Must know
+- Documents flow through **stages in order**. It is MongoDB's WHERE / GROUP BY / JOIN / ORDER BY.
+- Core stages: `$match` filter, `$group` aggregate, `$sort`, `$project` reshape, `$unwind` one document per array element, `$lookup` join.
+- Put **`$match` first** so it can use an index and shrink the stream.
+- `$limit` right after `$sort` lets the engine keep only the top rows.
+- For dashboards, precompute with `$merge` instead of aggregating on every view.
+
+#### Common mistakes
+- A `$match` placed after `$unwind` or `$group`, which forces a full collection scan.
+- Heavy pipelines on the primary competing with user traffic.
+- `$lookup` on a field with no index.
 
 #### How it works
 ```mermaid
@@ -189,8 +247,30 @@ A `$match` for the search filters followed by `$facet` with sub-pipelines: `{ br
 #### Interview angle
 > "For seller analytics I'd run an aggregation pipeline that filters on an index first, and materialise the results hourly with $merge, so dashboards never aggregate live on the primary."
 
+#### Sources
+- [Aggregation pipeline](https://www.mongodb.com/docs/manual/core/aggregation-pipeline/) — MongoDB manual
+- [Aggregation pipeline optimization](https://www.mongodb.com/docs/manual/core/aggregation-pipeline-optimization/) — MongoDB manual
+
 ### MongoDB transactions — multi-document ACID since v4.0 (distributed since v4.2)
 MongoDB was originally atomic only **per document**. Since 4.0 it supports **multi-document ACID transactions** on replica sets, and since 4.2 across **sharded clusters** (distributed transactions using two-phase commit internally). They work, but they cost more than single-document operations, so schema design should still make most operations single-document.
+
+#### Intuition
+Paying for one item is a single tap. Paying for a basket from two shops needs both to agree before the money moves, which takes longer. MongoDB can do the second kind, but it is built to be fastest at the first.
+
+#### Must know
+- A **single-document write is always atomic** and is the cheap path.
+- Multi-document ACID transactions exist: replica sets since 4.0, sharded clusters since 4.2.
+- They cost more, especially across shards, where a two-phase commit runs underneath.
+- Design so that what must change together **lives in one document**.
+- Prevent overselling with a conditional update and no transaction: filter `stock >= qty`, `$inc` by `-qty`, check that one document changed.
+
+#### Numbers to quote
+- Default transaction lifetime limit: 60 seconds.
+
+#### Common mistakes
+- Saying "MongoDB has no transactions". That stopped being true in 2018.
+- Using transactions everywhere, as if it were a relational schema.
+- No retry on transient transaction errors. `withTransaction` handles that.
 
 #### How it works
 ```mermaid
@@ -257,8 +337,31 @@ A conditional atomic update on the product document: `updateOne({ _id: sku, stoc
 #### Interview angle
 > "In MongoDB I design so critical updates are single-document atomic operations. Multi-document transactions are reserved for genuine cross-entity cases, with withTransaction retries and majority write concern."
 
+#### Sources
+- [Transactions](https://www.mongodb.com/docs/manual/core/transactions/) — MongoDB manual
+- [Production considerations for transactions](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/) — MongoDB manual
+
 ### Redis data structures — string, list, hash, set, sorted set, stream, HyperLogLog, bitmap, geo
 Redis is an in-memory data-structure server: beyond plain key-value strings it offers **lists, hashes, sets, sorted sets, streams, HyperLogLog, bitmaps and geo indexes**, each with atomic O(1)/O(log N) operations. Picking the right structure turns many system-design features into a few commands.
+
+#### Intuition
+A toolbox, not a single tool. A scoreboard, a to-do queue, a guest list and a map of nearby shops are each one ready-made tool, kept in memory so every operation is instant.
+
+#### Must know
+- **String**: cache values, counters (`INCR`), rate limits, simple locks.
+- **Hash**: an object's fields. **Set**: unique members. **List**: a simple queue.
+- **Sorted set**: leaderboards, timelines, delay queues, sliding-window rate limits.
+- **HyperLogLog**: approximate unique counts. **Bitmap**: one bit per user. **Geo**: nearby search.
+- Each command is atomic, because commands run one at a time.
+
+#### Numbers to quote
+- A HyperLogLog uses about 12 KB with roughly 0.81% error.
+- Sorted set insert and rank are O(log N).
+
+#### Common mistakes
+- Using only strings and re-implementing a sorted set in application code.
+- Big keys and `KEYS *`, which block every other client.
+- A separate GET then SET, which is a race. Use an atomic command or a Lua script.
 
 #### How it works
 | Structure | Commands | Use case |
@@ -316,8 +419,27 @@ One HyperLogLog per page per day: `PFADD uv:{page}:{date} {visitorId}` and `PFCO
 #### Interview angle
 > "I reach for Redis structures directly: sorted sets for leaderboards and timelines, HyperLogLog for unique counts, geo sets for nearby search, and Lua scripts when a multi-step update must be atomic."
 
+#### Sources
+- [Redis data types](https://redis.io/docs/latest/develop/data-types/) — Redis docs
+- [Sorted sets](https://redis.io/docs/latest/develop/data-types/sorted-sets/) — Redis docs
+
 ### Redis persistence — RDB (point-in-time snapshot) vs AOF (append-only log, fsync: always/everysec/no)
 Redis keeps data in memory but can persist it to disk two ways: **RDB** snapshots (compact point-in-time dumps) and **AOF** (an append-only log of every write). They can be combined. The choice sets how much data you can lose on a crash and how fast restarts are.
+
+#### Intuition
+RDB is a photo of the whiteboard taken every few minutes. AOF is a diary that records every stroke. After a crash, the photo restores quickly but misses the latest minutes. The diary replays everything but takes longer.
+
+#### Must know
+- **RDB**: periodic snapshot. Compact and fast to restart, but you lose everything since the last one.
+- **AOF**: a log of every write. With `appendfsync everysec` you lose at most about one second.
+- For data you care about, use both (AOF with an RDB preamble).
+- For a pure cache, no persistence or RDB only.
+- A snapshot **forks** the process, so leave memory headroom for copy-on-write.
+
+#### Common mistakes
+- Treating Redis with AOF as a safe primary store for money. Replication is still asynchronous.
+- Running at 95% memory and being OOM-killed during a snapshot.
+- Enabling `appendfsync always` on a cache and wondering where the throughput went.
 
 #### How it works
 ```mermaid
@@ -370,8 +492,27 @@ Risky. Even with AOF `always`, replication to replicas is asynchronous, so a fai
 #### Interview angle
 > "As a pure cache, Redis runs with no persistence or RDB only. For state we can't cheaply rebuild, I'd use AOF everysec plus RDB and leave memory headroom for forks. The source of truth stays in the database."
 
+#### Sources
+- [Redis persistence](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/) — Redis docs
+- [Redis replication](https://redis.io/docs/latest/operate/oss_and_stack/management/replication/) — Redis docs
+
 ### Redis Sentinel — HA: monitors master, auto-failover to replica on failure
 Redis Sentinel provides **high availability for non-clustered Redis**: a group of Sentinel processes monitors a master and its replicas, agrees (by quorum) when the master is down, **promotes a replica**, reconfigures the others, and tells clients where the new master is.
+
+#### Intuition
+Three watchmen keep an eye on the main gate. If one thinks the gatekeeper has collapsed, he checks with the others. Once two agree, they appoint a deputy and tell everyone which gate to use.
+
+#### Must know
+- Sentinel gives **high availability to non-clustered Redis**: monitoring, automatic failover and discovery of the current master.
+- A failover starts only when a **quorum** of Sentinels agrees the master is down.
+- Run **at least 3 Sentinels** in separate failure domains.
+- Clients must be Sentinel-aware to find the new master.
+- It does **not shard**, and async replication means a failover can lose recent writes.
+
+#### Common mistakes
+- Two Sentinels, or all of them on one host.
+- Confusing Sentinel with Redis Cluster. Cluster shards and has its own failover.
+- Assuming a failover loses nothing.
 
 #### How it works
 ```mermaid
@@ -424,8 +565,27 @@ Sentinel when the dataset and throughput fit on one master and you only need HA 
 #### Interview angle
 > "For a single-node-sized Redis I'd run one master and two replicas across AZs with three Sentinels and Sentinel-aware clients, plus min-replicas-to-write to limit write loss in a partition."
 
+#### Sources
+- [High availability with Redis Sentinel](https://redis.io/docs/latest/operate/oss_and_stack/management/sentinel/) — Redis docs
+- [Redis replication](https://redis.io/docs/latest/operate/oss_and_stack/management/replication/) — Redis docs
+
 ### Redis Cluster — shards data across 16384 hash slots, each node owns a range
 Redis Cluster shards the keyspace into **16,384 hash slots** (`CRC16(key) mod 16384`). Each master owns a subset of slots, and each master has replicas for failover. Clients route commands directly to the node owning the key's slot, and nodes redirect clients when slots move.
+
+#### Intuition
+A post office with 16,384 numbered pigeonholes shared out among several clerks. A key's hash says which pigeonhole it belongs to, and the pigeonhole says which clerk has it. To add a clerk, you hand over some pigeonholes.
+
+#### Must know
+- The key space is split into **16,384 hash slots**: `CRC16(key) mod 16384`.
+- Each master owns a set of slots and has replicas for failover.
+- Clients route directly to the right node and follow `MOVED` / `ASK` redirects.
+- Multi-key commands work only when all keys are in **one slot**. A hash tag `{user:42}` forces that.
+- A hot key still sits on one node.
+
+#### Common mistakes
+- `CROSSSLOT` errors from a multi-key command or Lua script with no hash tags.
+- Putting everything under one hash tag, which creates a hot slot.
+- Using a client that is not cluster-aware.
 
 #### How it works
 ```mermaid
@@ -477,8 +637,27 @@ Rename the keys with a hash tag so they hash to the same slot: `{user:42}:cart` 
 #### Interview angle
 > "For a large Redis I'd use Cluster: 16,384 slots spread over masters with replicas, hash tags to co-locate a user's keys for atomic multi-key operations, and cluster-aware clients."
 
+#### Sources
+- [Scale with Redis Cluster](https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/) — Redis docs
+- [Redis cluster specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/) — Redis docs
+
 ### Redis Streams — persistent ordered log with consumer groups (Kafka-lite)
 Redis Streams (`XADD`, `XREADGROUP`) are an **append-only log** with ids, **consumer groups**, acknowledgements and pending-entry tracking, a lightweight Kafka-like model inside Redis. It's good for moderate-volume event processing and task queues when you already run Redis.
+
+#### Intuition
+A ticket-numbered order rail in a restaurant kitchen. Orders hang in sequence, each cook takes a different ticket, and a ticket stays "in progress" until the cook marks it done. If a cook walks out, someone else picks up their unfinished tickets.
+
+#### Must know
+- An **append-only log** with ordered ids: `XADD` to write, `XREADGROUP` to read, `XACK` to acknowledge.
+- A **consumer group** gives each entry to one consumer and tracks what is still unacknowledged.
+- A crashed consumer's entries are reclaimed with `XAUTOCLAIM`.
+- Delivery is **at-least-once**, so handlers must be idempotent.
+- It is memory-bound. Trim with `MAXLEN`. For long retention or very high volume, use Kafka.
+
+#### Common mistakes
+- Never trimming the stream, so memory grows without limit.
+- No reclaim job, so entries from a dead consumer stay pending forever.
+- Treating it as equal to Kafka for durability. Redis replication is asynchronous.
 
 #### How it works
 ```mermaid
@@ -538,8 +717,27 @@ The entry stays in the group's pending entries list (unacked). Another consumer 
 #### Interview angle
 > "For moderate-volume async work where Redis is already in the stack, Streams with consumer groups give at-least-once processing with acks and reclaiming. I'd move to Kafka when we need long retention, replay or very high throughput."
 
+#### Sources
+- [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/) — Redis docs
+- [XREADGROUP command](https://redis.io/docs/latest/commands/xreadgroup/) — Redis docs
+
 ### Distributed lock with Redlock — acquire lock on N/2+1 nodes with short TTL, quorum-based safety
 A distributed lock ensures only one process across many machines performs an action at a time. The simple Redis lock is `SET key token NX PX ttl`. **Redlock** extends it across N (usually 5) independent Redis masters: you hold the lock only if you acquire it on a **majority** within a time bound. Its safety under clock jumps and GC pauses is debated, so for correctness-critical locks use **fencing tokens** or a consensus system.
+
+#### Intuition
+A meeting-room booking that expires after 30 minutes. If you nod off and wake late, you may still believe the room is yours while the next group is already inside. A numbered pass that the door checks stops the older pass from getting back in.
+
+#### Must know
+- Basic lock: `SET key token NX PX ttl`. Release with a Lua script that deletes only if the token matches.
+- **Redlock**: take the lock on a majority of N independent Redis nodes within a time limit.
+- A lock holder can pause (GC, network) past the TTL, so **two clients can both believe they hold it**.
+- Correctness needs a **fencing token**: an increasing number that the protected resource checks.
+- Use Redis locks to avoid duplicate work. For money, rely on database constraints and idempotency keys.
+
+#### Common mistakes
+- No TTL, so a crashed holder blocks everyone forever.
+- Releasing with a plain `DEL`, which can delete someone else's lock.
+- Relying on a Redis lock alone to guarantee a payment happens once.
 
 #### How it works
 ```mermaid
@@ -601,3 +799,8 @@ Each time the lock is granted, the lock service returns an increasing number. Th
 
 #### Interview angle
 > "Redis locks are fine for avoiding duplicate work. For correctness I rely on idempotency keys and conditional writes in the database, or an etcd lock with fencing tokens that the storage layer checks."
+
+#### Sources
+- [Distributed locks with Redis](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/) — Redis docs
+- [How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html) — Martin Kleppmann
+

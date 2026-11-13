@@ -3,6 +3,21 @@
 ### Horizontal sharding — distribute rows of a table across multiple DB instances
 Horizontal sharding splits **one table's rows across several independent databases** (shards) by a shard key. Each shard holds a subset of the data and handles that subset's reads and writes, so storage and **write throughput** scale beyond one machine.
 
+#### Intuition
+A school register that has grown too thick for one book, so surnames A–F go in one book, G–M in another, and so on. Each book is small and fast, and several clerks can write at once. The cost is that a question about every student now means opening every book.
+
+#### Must know
+- Split **one table's rows across several independent databases**, chosen by a shard key.
+- It is the way to scale **writes and storage** past one machine. Replicas only scale reads.
+- Keep related data on the same shard (all of a user's rows by `user_id`), so most queries and transactions touch one shard.
+- Costs: cross-shard queries and transactions, rebalancing, globally unique ids, N databases to operate.
+- Shard last. Try indexes, a bigger machine, replicas, caching and archiving first.
+
+#### Common mistakes
+- Proposing sharding in the first minute of a design, before the numbers demand it.
+- Per-shard auto-increment ids, which collide across shards.
+- Forgetting how queries that do not carry the shard key will be answered.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -50,8 +65,28 @@ Maintain a global lookup (secondary index) table `email → user_id`, either a s
 #### Interview angle
 > "I'd shard by user_id so each user's data and transactions stay on one shard, with global lookup tables for other access paths and globally unique ids. I'd only shard after replicas, caching and partitioning stop being enough."
 
+#### Sources
+- [Sharding pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/sharding) — Azure Architecture Center
+- [Herding elephants: lessons learned from sharding Postgres at Notion](https://www.notion.com/blog/sharding-postgres-at-notion) — Notion engineering
+- [Sharding](https://www.mongodb.com/docs/manual/sharding/) — MongoDB manual
+
 ### Vertical partitioning — split different tables into different DBs by domain
 Vertical partitioning splits a database **by tables or columns** instead of by rows: different domains (users, orders, payments, analytics) move to separate databases, or rarely used wide columns move to a side table. It's usually the first scaling step, and it naturally aligns with microservice boundaries.
+
+#### Intuition
+A general store that has outgrown one room. Groceries stay, the pharmacy moves next door and the stationery upstairs. Each room is less crowded, but one bill covering all three now needs coordination.
+
+#### Must know
+- Split by **table or domain**, not by row: users, orders, payments and audit logs each get their own database.
+- Usually the **first scaling step**, done before sharding. It matches microservice ownership.
+- It isolates workloads and compliance scope (payments for PCI).
+- Joins across domains move to the application or a warehouse.
+- Transactions across domains become sagas.
+
+#### Common mistakes
+- Confusing it with horizontal sharding. Here whole tables move, and no table is split.
+- Splitting domains and still expecting SQL joins between them.
+- Skipping this step and sharding a table that only needed its neighbours moved out.
 
 #### How it works
 ```mermaid
@@ -101,8 +136,27 @@ Use a saga: the order service creates a PENDING order and publishes an event (vi
 #### Interview angle
 > "I'd first split the database by domain so each service owns its tables, with payments isolated for PCI. Horizontal sharding comes later, only for the domain that outgrows a single node."
 
+#### Sources
+- [The growing pains of database architecture](https://www.figma.com/blog/how-figma-scaled-to-multiple-databases/) — Figma engineering
+- [Partition (database)](https://en.wikipedia.org/wiki/Partition_%28database%29) — Wikipedia
+
 ### Range-based sharding — shard by key range (user_id 1–1M on shard 1), easy range queries but hotspots
 Range sharding assigns **contiguous key ranges** to shards: A–F on shard 1, G–M on shard 2, or by time (January on shard 1). Range queries and ordered scans stay on one or few shards, but **sequential or popular keys concentrate load** on the shard owning the "current" range.
+
+#### Intuition
+Encyclopedia volumes: A–C, D–F, and so on. Looking up everything from "Ca" to "Co" means one volume. But if every new article starts with "Z", the last volume keeps growing while the others gather dust.
+
+#### Must know
+- Each shard owns a **contiguous range** of the key.
+- **Range scans and ordered reads stay on one shard.**
+- A monotonically increasing key (timestamp, auto-increment id) sends **every new write to the last shard**.
+- Fix: lead the key with something well spread, such as `(tenant_id, created_at)`.
+- Used by HBase, Bigtable, Spanner, CockroachDB and TiKV, which split and move ranges automatically.
+
+#### Common mistakes
+- Range-sharding on `created_at` or an auto-increment id.
+- Assuming ranges stay equal in size. Popular prefixes grow much faster.
+- Choosing it when the hot queries are point lookups and not ranges.
 
 #### How it works
 ```mermaid
@@ -155,8 +209,31 @@ When the dominant queries are range scans or ordered reads on the key (time rang
 #### Interview angle
 > "Range sharding suits range scans like a tenant's invoices by date, but I'd never range-shard on a monotonically increasing key. New writes would all hit the last shard."
 
+#### Sources
+- [Ranged sharding](https://www.mongodb.com/docs/manual/core/ranged-sharding/) — MongoDB manual
+- [Schema design best practices](https://cloud.google.com/bigtable/docs/schema-design) — Google Cloud Bigtable docs
+
 ### Hash-based sharding — hash(key) % N, even distribution, range queries hard
 Hash sharding applies a hash function to the shard key and maps the result to a shard. Good hashes spread keys **uniformly**, eliminating sequential-key hotspots. The cost: **range queries scatter** across all shards, and naive `hash % N` reshuffles almost everything when N changes.
+
+#### Intuition
+Dealing a deck of cards to four players. The cards end up evenly spread whatever order they came in. But if you want all the hearts in sequence, you have to ask every player.
+
+#### Must know
+- `hash(key)` decides the shard, so keys spread **evenly** and sequential keys cause no hotspot.
+- **Range queries scatter** across every shard.
+- Never use `hash % number_of_nodes`. Changing the node count remaps most keys.
+- Hash into a **fixed number of virtual buckets** and map buckets to nodes. Redis Cluster does this with its hash slots.
+- Hashing does not fix one extremely hot key. It still lands on one shard.
+
+#### Numbers to quote
+- Going from 4 to 5 shards with `hash % N` moves about 80% of keys.
+- Redis Cluster has 16,384 hash slots.
+
+#### Common mistakes
+- `hash(user_id) % N` with N equal to the physical node count.
+- Expecting "all rows from yesterday" to be cheap on a hash-sharded table.
+- Claiming hashing solves a celebrity key.
 
 #### How it works
 ```mermaid
@@ -210,8 +287,30 @@ It solves hotspots caused by **many** sequential or clustered keys, but not a si
 #### Interview angle
 > "I'd hash the shard key into a fixed set of virtual buckets mapped to physical shards. Load stays even and adding capacity moves buckets, not the whole keyspace."
 
+#### Sources
+- [Hashed sharding](https://www.mongodb.com/docs/manual/core/hashed-sharding/) — MongoDB manual
+- [Redis cluster specification: key distribution model](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/) — Redis docs
+
 ### Consistent hashing for sharding — only K/N keys migrate when adding/removing nodes
 Consistent hashing places both **nodes and keys on a hash ring** (0 … 2³²−1). Each key belongs to the next node clockwise. Adding or removing a node only moves the keys in that node's arc, about **K/N keys** instead of nearly all of them. Virtual nodes smooth out the distribution.
+
+#### Intuition
+Guests and waiters standing around a round table. Each guest is served by the next waiter clockwise. When a waiter joins or leaves, only the guests next to that spot change waiter. Everyone else keeps the same one.
+
+#### Must know
+- Nodes and keys are hashed onto the same **ring**. A key belongs to the next node clockwise.
+- Adding or removing a node moves only about **1/N of the keys**.
+- **Virtual nodes**: each machine takes many positions on the ring, which evens out load and spreads a failed node's keys over many machines.
+- Replicas are the next distinct nodes clockwise.
+- Used by Cassandra, Dynamo and cache clients.
+
+#### Numbers to quote
+- 10 → 11 nodes: about 9% of keys move with consistent hashing, about 91% with `hash % N`.
+
+#### Common mistakes
+- Describing the ring and forgetting virtual nodes.
+- Saying it balances a single hot key. It only places keys.
+- Clients holding different views of the ring membership.
 
 #### How it works
 ```mermaid
@@ -261,8 +360,28 @@ Put the chat servers on a ring with virtual nodes and route each user (or conver
 #### Interview angle
 > "For cache and storage nodes I'd use consistent hashing with virtual nodes. Scaling from 10 to 11 nodes moves about 9% of keys instead of 90%, so there's no miss storm."
 
+#### Sources
+- [Consistent hashing](https://en.wikipedia.org/wiki/Consistent_hashing) — Wikipedia
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+- [Dynamo architecture in Cassandra: consistent hashing](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+
 ### Directory-based sharding — lookup service maps key to shard, flexible but single point of failure
 Directory-based sharding stores an explicit **mapping from key (or key range, or tenant) to shard** in a lookup service. Any placement policy is possible: move one big tenant to a dedicated shard, rebalance gradually, co-locate related keys. But the directory is critical and must be fast and highly available.
+
+#### Intuition
+A hotel reception desk with the guest register. The room is not worked out from your name. The desk looks it up, which means it can move you to a suite or another floor at any time, as long as the desk itself stays open.
+
+#### Must know
+- A lookup service stores an explicit **key → shard** (or tenant → shard) map.
+- The most flexible scheme: move one tenant, isolate a huge one, rebalance gradually.
+- The directory is on every request path, so it must be **replicated and cached** in clients.
+- Version the mapping, so a shard can answer "moved" when a client's cache is stale.
+- Common in multi-tenant SaaS, where it is also called cells or pods.
+
+#### Common mistakes
+- One unreplicated directory database, which is a single point of failure.
+- A network lookup on every request with no client cache.
+- No plan for stale caches during a tenant move.
 
 #### How it works
 ```mermaid
@@ -315,8 +434,27 @@ Directory-based (cell/pod) sharding by tenant: a directory maps tenant → cell,
 #### Interview angle
 > "For multi-tenant SaaS I'd use a directory mapping each tenant to a cell. Big tenants get isolated cells, and moves are copy, catch up, flip the entry. The directory is replicated and cached everywhere."
 
+#### Sources
+- [Sharding pattern: lookup strategy](https://learn.microsoft.com/en-us/azure/architecture/patterns/sharding) — Azure Architecture Center
+- [What is a cell-based architecture?](https://docs.aws.amazon.com/wellarchitected/latest/reducing-scope-of-impact-with-cell-based-architecture/what-is-a-cell-based-architecture.html) — AWS Well-Architected
+
 ### Resharding — data migration challenge, double-write period, consistent hashing minimizes movement
 Resharding changes how data is split: adding shards, splitting a hot shard, or changing the shard key. Data must move **while the system keeps serving traffic** without loss or double-counting. It's one of the riskiest operations in a sharded system, so design for it up front.
+
+#### Intuition
+Moving a library to a bigger building while it stays open. You copy shelf by shelf, keep logging returns and new loans during the copy, check the counts, switch one section at a time, and keep the old building until you are sure.
+
+#### Must know
+- Changing the shard layout **while serving traffic** is among the riskiest operations in a sharded system.
+- Steps: provision → backfill a snapshot → catch up live changes → verify → cut over → clean up.
+- Catch up with **CDC from the old shard**, or with dual writes.
+- Move in **small units** (one virtual bucket at a time), each with a pause of about a second.
+- Keep the old copy until you are confident, so you can roll back.
+
+#### Common mistakes
+- Starting the backfill before change capture is running, so writes made during the copy are lost.
+- Dual writes with no reconciliation. One side fails and the copies drift silently.
+- Deleting the old data immediately after cut-over.
 
 #### How it works
 ```mermaid
@@ -363,8 +501,30 @@ The two writes aren't atomic: one can succeed and the other fail, or they can la
 #### Interview angle
 > "I design for resharding up front with fixed virtual buckets. Each move is copy, CDC catch-up, verify, then flip that bucket's mapping, done in small throttled steps with a rollback path."
 
+#### Sources
+- [Herding elephants: lessons learned from sharding Postgres at Notion](https://www.notion.com/blog/sharding-postgres-at-notion) — Notion engineering
+- [Sharding](https://vitess.io/docs/reference/features/sharding/) — Vitess docs
+
 ### Hot spots — celebrity rows, popular keys hitting same shard; solution: add random suffix
 A hot spot is a shard, partition or key receiving **disproportionate traffic**: a celebrity's profile, a viral post's like counter, a flash-sale product, "today's" partition in time-based keys. Because a key lives on one shard, adding more shards doesn't help. You have to **spread or absorb** the load for that key.
+
+#### Intuition
+One billing counter has a celebrity signing autographs and a queue out of the door, while the other counters are empty. Opening more counters does not help, because everyone wants that one. You have to split that queue or serve it differently.
+
+#### Must know
+- A hot key lives on **one shard**, so adding shards does nothing for it.
+- **Salt the key**: write to `key#0 … key#N` and add the pieces up on read.
+- Cache hot reads. Buffer and batch hot counters (Redis or Kafka, flushed every second or so).
+- Give a known-hot entity dedicated capacity.
+- Measure per-key traffic so hot keys are found before they hurt.
+
+#### Numbers to quote
+- A single DynamoDB partition serves up to about 1,000 write units and 3,000 read units per second.
+
+#### Common mistakes
+- Answering a hot key with "add more shards".
+- Incrementing one database row for every like on a viral post.
+- Load testing with uniformly random keys. Real traffic is heavily skewed.
 
 #### How it works
 ```mermaid
@@ -420,8 +580,30 @@ Emit per-key or per-partition request metrics (sampled), use database features (
 #### Interview angle
 > "Hot keys can't be fixed by adding shards. I salt writes across sub-keys, buffer counters in Redis or Kafka, and cache hot reads, and I monitor per-key traffic so we spot them early."
 
+#### Sources
+- [Using write sharding to distribute workloads evenly](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-sharding.html) — Amazon DynamoDB developer guide
+- [Best practices for designing and using partition keys effectively](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html) — Amazon DynamoDB developer guide
+
 ### Cross-shard queries — scatter-gather (fan out to all shards), expensive, avoid in hot paths
 A cross-shard query needs data from more than one shard: it **fans out** to all relevant shards in parallel, then **merges** results (sort, aggregate, limit) in a coordinator. Latency equals the **slowest shard**, cost grows with shard count, and one slow shard degrades everything.
+
+#### Intuition
+Asking a question in a group chat of 100 people and needing every answer before you can act. You are done only when the slowest person replies.
+
+#### Must know
+- The query **fans out** to many shards and a coordinator merges the results.
+- Latency equals the **slowest shard**, and cost grows with the number of shards.
+- Hot paths must include the shard key so they touch one shard.
+- Other access patterns get a lookup table, a read model keyed for that query, or a search / warehouse store fed by CDC.
+- Scatter-gather is acceptable for rare admin queries with a timeout.
+
+#### Numbers to quote
+- If each shard is slow 1% of the time, a 100-shard fan-out hits at least one slow shard about 63% of the time.
+
+#### Common mistakes
+- Offset pagination across shards. Every shard must return offset + limit rows.
+- Designing a user-facing endpoint that fans out to all shards.
+- Reasoning from average shard latency when the tail decides the result.
 
 #### How it works
 ```mermaid
@@ -480,8 +662,27 @@ The response waits for the slowest shard. With N shards each having probability 
 #### Interview angle
 > "Hot queries must include the shard key. Anything that cuts across shards is served from a purpose-built read model or a search or warehouse store fed by CDC, not a scatter-gather on every request."
 
+#### Sources
+- [The tail at scale](https://research.google/pubs/the-tail-at-scale/) — Dean and Barroso, Google Research
+- [Sharding pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/sharding) — Azure Architecture Center
+
 ### Cross-shard transactions — two-phase commit risk, prefer Saga pattern instead
 When one business operation must update rows on **different shards**, you lose single-database ACID. Options: **two-phase commit** (atomic, but blocking and fragile), **sagas** (a series of local transactions with compensations, eventually consistent), or **avoiding the problem** by choosing shard keys that co-locate the data that changes together.
+
+#### Intuition
+Two bank branches, each with its own ledger. Either a manager phones both, gets a "ready" from each and then says "commit", while both hold the entry open waiting. Or the first branch debits and sends a message, the second credits, and if that fails the first refunds.
+
+#### Must know
+- A single ACID transaction does not span shards.
+- Best fix: choose the shard key so data that changes together **lives together**.
+- **2PC**: atomic, but participants hold locks and **block if the coordinator dies** after prepare.
+- **Saga**: a chain of local transactions plus compensating actions. Eventually consistent, with visible intermediate states.
+- A saga needs an outbox, idempotent steps and a reconciliation job.
+
+#### Common mistakes
+- Proposing 2PC across services as the default.
+- A saga step that is not idempotent, which double-credits on retry.
+- No PENDING state, so users see money vanish for a few seconds.
 
 #### How it works
 ```mermaid
@@ -544,8 +745,27 @@ After participants vote YES in the prepare phase, they can't unilaterally commit
 #### Interview angle
 > "I pick shard keys so most transactions stay on one shard. The rest run as sagas, with an outbox, idempotent steps, compensations and reconciliation, rather than 2PC across shards."
 
+#### Sources
+- [Saga pattern](https://microservices.io/patterns/data/saga.html) — microservices.io
+- [Two-phase commit protocol](https://en.wikipedia.org/wiki/Two-phase_commit_protocol) — Wikipedia
+
 ### Shard key selection — high cardinality, even distribution, matches query pattern
 The shard key decides where every row lives, and it's very hard to change later. A good key has **high cardinality** (many distinct values), spreads **reads and writes evenly**, and **matches the main access pattern**, so the hottest queries and transactions touch a single shard.
+
+#### Intuition
+Choosing how to label filing cabinets. Label by country and one drawer overflows. Label by date and only today's drawer is ever opened. Label by customer and every drawer gets steady use, and one customer's papers are all in one place.
+
+#### Must know
+- The shard key decides where every row lives and is **very hard to change later**.
+- Three tests: **high cardinality**, **even read and write spread**, and **present in the hot queries and transactions**.
+- Reject low-cardinality keys (country, status) and monotonic keys (timestamps, auto-increment).
+- `user_id` or `customer_id` is the usual good answer. For chat, `conversation_id`.
+- No key fits every query. Other access paths get their own projection or lookup table.
+
+#### Common mistakes
+- Picking the key for even distribution only (a random `order_id`), so "my orders" fans out everywhere.
+- Ignoring tenant skew: one enterprise tenant overloads its shard.
+- Choosing the key before listing the top queries.
 
 #### How it works
 ```mermaid
@@ -600,3 +820,8 @@ It distributes evenly, but the dominant queries are "orders for customer X" and 
 
 #### Interview angle
 > "I pick the shard key from the hottest access path and the transaction boundary: high-cardinality, non-monotonic and evenly loaded, usually user_id. Other access patterns get their own projections."
+
+#### Sources
+- [Choose a shard key](https://www.mongodb.com/docs/manual/core/sharding-choose-a-shard-key/) — MongoDB manual
+- [Best practices for designing and using partition keys effectively](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html) — Amazon DynamoDB developer guide
+

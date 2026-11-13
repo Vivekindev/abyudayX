@@ -3,6 +3,25 @@
 ### Google Spanner — globally distributed, external consistency, TrueTime (GPS + atomic clocks)
 Spanner is Google's globally distributed relational database: SQL, schemas and ACID transactions **across regions**, with **external consistency** (the strongest guarantee: if transaction T1 commits before T2 starts, T2 sees T1's effects everywhere). It combines Paxos-replicated data splits with **TrueTime**, a clock API with bounded uncertainty.
 
+#### Intuition
+A bank with branches on every continent that behaves like one branch with one ledger. Wherever you deposit, anyone anywhere who checks afterwards sees it. The trick is that every branch has a very accurate clock and knows exactly how inaccurate it might be.
+
+#### Must know
+- A relational database with SQL and **ACID transactions across regions**, scaled horizontally.
+- Data is split into ranges. Each range is a **Paxos group** replicated across zones or regions.
+- A transaction across ranges uses **2PC on top of those Paxos groups**, so a participant failure does not block it.
+- **External consistency**: if T1 commits before T2 starts, T2 sees T1. TrueTime plus commit wait gives this.
+- Avoid monotonically increasing primary keys. They put every insert on one range.
+
+#### Numbers to quote
+- Multi-region availability SLA: 99.999%.
+- TrueTime uncertainty is typically a few milliseconds (1–7 ms in the paper).
+
+#### Common mistakes
+- Saying Spanner "beats CAP". It chooses consistency and relies on a very reliable network to stay available.
+- A timestamp or sequence as the primary key.
+- Expecting single-region latency from a multi-region configuration. Every write waits for a cross-region quorum.
+
 #### How it works
 ```mermaid
 flowchart TD
@@ -54,8 +73,31 @@ Spanner range-partitions by primary key, so increasing keys (timestamps, sequenc
 #### Interview angle
 > "For a globally consistent ledger I'd consider Spanner: Paxos per split, 2PC across splits and TrueTime commit wait give external consistency. I'd pay the cross-region write latency and use stale reads for dashboards."
 
+#### Sources
+- [Spanner: Google's globally distributed database](https://research.google/pubs/spanner-googles-globally-distributed-database-2/) — Google Research
+- [Spanner: TrueTime and external consistency](https://cloud.google.com/spanner/docs/true-time-external-consistency) — Google Cloud docs
+- [Schema design best practices](https://cloud.google.com/spanner/docs/schema-design) — Google Cloud Spanner docs
+
 ### TrueTime — returns [earliest, latest] time interval, commit wait ensures monotonicity
 TrueTime is Google's clock API that admits uncertainty: `TT.now()` returns an interval **[earliest, latest]** guaranteed to contain the true absolute time. GPS receivers and atomic clocks in every data centre keep the uncertainty ε small (typically 1–7 ms). Spanner uses it to assign commit timestamps that respect real-time order.
+
+#### Intuition
+An honest watch that says "it is between 10:00:00 and 10:00:04" instead of pretending to know the exact second. If you wait those four seconds before announcing something, nobody anywhere can later claim it happened before your announcement.
+
+#### Must know
+- `TT.now()` returns an **interval [earliest, latest]** that is guaranteed to contain the true time.
+- GPS receivers and atomic clocks in each datacenter keep the interval small.
+- **Commit wait**: choose a timestamp, then wait until that timestamp is definitely in the past everywhere before acknowledging.
+- Result: timestamp order matches real-time order across the globe, with no central sequencer.
+- Without bounded clocks you need logical clocks or a central timestamp oracle (as TiDB does).
+
+#### Numbers to quote
+- Commit wait costs about twice the clock uncertainty, a few milliseconds per write transaction.
+
+#### Common mistakes
+- Saying TrueTime gives perfectly synchronised clocks. It gives a bounded error.
+- Using NTP wall-clock timestamps to order events across machines.
+- Forgetting that the wait is added to every read-write commit.
 
 #### How it works
 ```mermaid
@@ -107,8 +149,30 @@ After choosing a commit timestamp s (at least TrueTime's upper bound), the leade
 #### Interview angle
 > "TrueTime turns clock uncertainty into a bounded interval, and commit wait outlasts that interval, so timestamp order matches real-time order across continents without a central sequencer."
 
+#### Sources
+- [Spanner: TrueTime and external consistency](https://cloud.google.com/spanner/docs/true-time-external-consistency) — Google Cloud docs
+- [Spanner: Google's globally distributed database](https://research.google/pubs/spanner-googles-globally-distributed-database-2/) — Google Research
+
 ### CockroachDB — distributed Postgres-compatible, Raft consensus per range
-CockroachDB is an open-source distributed SQL database that speaks the **PostgreSQL wire protocol**. Data is split into ~512 MB **ranges**, each replicated (default 3×) with **Raft**. Transactions are serializable by default and span ranges and regions, using hybrid logical clocks instead of special hardware.
+CockroachDB is a source-available distributed SQL database (its free open-source Core edition was retired in November 2024) that speaks the **PostgreSQL wire protocol**. Data is split into ~512 MB **ranges**, each replicated (default 3×) with **Raft**. Transactions are serializable by default and span ranges and regions, using hybrid logical clocks instead of special hardware.
+
+#### Intuition
+A PostgreSQL that has been cut into many small chunks, with every chunk copied to three machines that vote on each change. Any machine can take your query, and the cluster keeps working when one machine or one region disappears.
+
+#### Must know
+- Distributed SQL that speaks the **PostgreSQL wire protocol**.
+- Data is split into **ranges**, each replicated with **Raft**. Ranges split and rebalance automatically.
+- **Serializable** isolation by default, so clients must retry on error `40001`.
+- It uses hybrid logical clocks, with no special clock hardware.
+- Multi-region controls: home each row in a region, and choose to survive a zone or a region failure.
+
+#### Numbers to quote
+- Default replication factor 3. Default range size 512 MB.
+
+#### Common mistakes
+- No client-side retry loop for serialization errors.
+- Sequential primary keys (`SERIAL`), which create a hot range.
+- Assuming every PostgreSQL extension and feature works.
 
 #### How it works
 ```mermaid
@@ -162,8 +226,27 @@ It runs serializable isolation optimistically. When concurrent transactions conf
 #### Interview angle
 > "If we need Postgres semantics with region-failure survival, I'd use CockroachDB, homing rows to regions with REGIONAL BY ROW and wrapping transactions in retry loops."
 
+#### Sources
+- [Architecture overview](https://www.cockroachlabs.com/docs/stable/architecture/overview) — CockroachDB docs
+- [Transaction retry error reference](https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference) — CockroachDB docs
+
 ### TiDB — MySQL-compatible, separates compute (TiDB) from storage (TiKV with Raft)
 TiDB is an open-source distributed SQL database compatible with the **MySQL protocol**. It separates stateless **SQL compute nodes** (TiDB) from distributed transactional **storage** (TiKV, a Raft-replicated key-value store on RocksDB), plus a **Placement Driver (PD)** for metadata and timestamps. It optionally adds **TiFlash** columnar replicas for analytics (HTAP).
+
+#### Intuition
+A restaurant with separate front and back of house. Waiters (the SQL layer) take orders and can be added or removed freely. The kitchen (the storage layer) keeps the food, in triplicate. A manager hands out numbered tickets so every order has a clear sequence.
+
+#### Must know
+- Distributed SQL that speaks the **MySQL protocol**.
+- Three parts: **TiDB** (stateless SQL nodes), **TiKV** (Raft-replicated key-value storage), **PD** (metadata and timestamps).
+- Compute and storage scale independently.
+- Timestamps come from PD's **central timestamp oracle**, so no special clocks, but one extra round trip per transaction.
+- **TiFlash** adds columnar replicas for analytics on the same live data (HTAP).
+
+#### Common mistakes
+- `AUTO_INCREMENT` keys, which create a write hotspot. Use `AUTO_RANDOM`.
+- Running heavy analytics on the row store when TiFlash exists.
+- Forgetting the timestamp oracle when asked about cross-region latency.
 
 #### How it works
 ```mermaid
@@ -177,7 +260,7 @@ flowchart TD
   K1 -. "Raft learner (async)" .-> F["TiFlash columnar replica for analytics"]
 ```
 
-- Data is split into ~96 MB **Regions**, each a Raft group (3 replicas).
+- Data is split into **Regions** (256 MB by default in recent versions, 96 MB in older ones), each a Raft group (3 replicas).
 - Transactions use a **Percolator**-style 2PC with timestamps from PD's **TSO** (a central timestamp oracle).
 - Scale SQL and storage independently. Add TiFlash for real-time analytics on the same data without ETL.
 
@@ -213,8 +296,27 @@ Hybrid Transactional/Analytical Processing: running OLTP and OLAP on the same fr
 #### Interview angle
 > "To escape manually sharded MySQL, TiDB keeps the MySQL protocol while splitting data into Raft regions automatically, and TiFlash replicas give real-time analytics without ETL."
 
+#### Sources
+- [TiDB architecture](https://docs.pingcap.com/tidb/stable/tidb-architecture/) — PingCAP docs
+- [TiDB storage](https://docs.pingcap.com/tidb/stable/tidb-storage/) — PingCAP docs
+
 ### YugabyteDB — PostgreSQL-compatible distributed SQL, uses DocDB storage engine
 YugabyteDB is a distributed SQL database that **reuses PostgreSQL's query layer** (YSQL), for high compatibility (many extensions, stored procedures, triggers), on top of **DocDB**, a distributed document store derived from RocksDB with Raft replication per tablet. It also offers a Cassandra-compatible API (YCQL).
+
+#### Intuition
+The familiar PostgreSQL front desk, kept almost unchanged, placed on top of a new warehouse that splits and copies the stock across many buildings.
+
+#### Must know
+- It **reuses PostgreSQL's own query layer**, so compatibility with procedures, triggers and extensions is high.
+- Storage is **DocDB**: tables are split into tablets, each a Raft group.
+- A table is sharded by **hash** (the default) or by **range**.
+- Small tables can be **colocated** in one tablet to avoid thousands of tiny Raft groups.
+- It also offers a Cassandra-compatible API.
+
+#### Common mistakes
+- Expecting single-node PostgreSQL latency. Every write is a consensus round.
+- Range scans on a hash-sharded table.
+- Hundreds of small tables with no colocation.
 
 #### How it works
 ```mermaid
@@ -263,13 +365,36 @@ Each table is normally split into multiple tablets, each its own Raft group. A s
 #### Interview angle
 > "To scale a Postgres app with lots of stored procedures and extensions, YugabyteDB keeps the real Postgres query layer over Raft-replicated tablets, so far less code needs rewriting."
 
+#### Sources
+- [Architecture](https://docs.yugabyte.com/preview/architecture/) — YugabyteDB docs
+- [DocDB sharding](https://docs.yugabyte.com/preview/architecture/docdb-sharding/) — YugabyteDB docs
+
 ### Aurora — MySQL/Postgres-compatible, shared distributed storage (6-way replication across 3 AZs)
 Amazon Aurora keeps the familiar MySQL/PostgreSQL engines but replaces their storage with a **distributed, log-structured storage service**: data is stored in 10 GB segments, **6 copies across 3 AZs**, and the database ships only **redo log records** to storage. That gives fast, durable commits, quick failover and up to 15 low-lag replicas sharing the same storage.
+
+#### Intuition
+An ordinary MySQL or PostgreSQL engine whose hard disk has been replaced by a storage service that keeps six copies in three buildings. The engine only sends the small "what changed" notes, and the storage service rebuilds the pages itself.
+
+#### Must know
+- MySQL- or PostgreSQL-compatible engine on a **shared, distributed storage layer**.
+- **Six copies across three AZs.** A write needs 4 of 6, a read needs 3 of 6.
+- The writer ships only **redo log records**. Storage nodes build the pages.
+- Up to 15 readers share the same storage, so replica lag is very low.
+- A standard cluster still has **one writer**. Write scaling is vertical.
+
+#### Numbers to quote
+- Replica lag is typically under 100 ms. Failover takes around 30 seconds.
+- Storage grows automatically, up to 256 TiB on current engine versions.
+
+#### Common mistakes
+- Claiming Aurora scales writes horizontally.
+- Forgetting that I/O is billed and can dominate the cost.
+- Clients caching the old writer's address after a failover.
 
 #### How it works
 ```mermaid
 flowchart TD
-  W["Writer instance"] -- "redo log records only" --> SV["Shared storage volume (auto-grows to 128 TB)"]
+  W["Writer instance"] -- "redo log records only" --> SV["Shared storage volume (auto-grows to 256 TiB)"]
   R1["Reader 1"] -- "reads pages" --> SV
   R2["Reader 2 … up to 15"] -- "reads pages" --> SV
   subgraph SV["Storage: each 10 GB segment ×6"]
@@ -281,7 +406,7 @@ flowchart TD
 
 - **Write quorum 4/6, read quorum 3/6**: survives losing an entire AZ plus one more copy without data loss, and keeps writing after losing an AZ.
 - Storage nodes apply redo to pages themselves ("the log is the database"), so there are no full-page writes from the instance.
-- Readers share the storage, so replica lag is typically < 20 ms, and failover promotes a reader in ~30 s or less.
+- Readers share the storage, so replica lag is typically well under 100 ms, and failover promotes a reader in ~30 s or less.
 - Extras: Aurora Serverless v2 (autoscaling capacity), Global Database (cross-region storage replication < 1 s lag, fast regional failover), fast cloning (copy-on-write), backtrack (MySQL).
 
 #### Example
@@ -311,14 +436,37 @@ The writer sends only small redo log records (not full pages) to six storage nod
 
 <details><summary>Does Aurora solve write scaling?</summary>
 
-No. It has a single writer instance per cluster (Aurora multi-master for MySQL was deprecated). It scales reads via up to 15 replicas and storage automatically to 128 TB. Write scaling still means a bigger instance, splitting by domain, sharding, or moving to a distributed SQL database.
+Not a standard Aurora cluster. It has a single writer instance (Aurora multi-master for MySQL was deprecated). It scales reads via up to 15 replicas and storage automatically to 256 TiB on current engine versions (128 TiB on older ones). Write scaling still means a bigger instance, splitting by domain, or sharding. AWS's own answers are separate products: Aurora PostgreSQL Limitless Database (managed sharding) and Aurora DSQL (distributed SQL).
 </details>
 
 #### Interview angle
 > "On AWS I'd default to Aurora: quorum storage across three AZs, readers with single-digit-millisecond lag, about 30-second failover and a Global Database for DR. Write scaling is still single-writer, so plan around that."
 
+#### Sources
+- [Amazon Aurora storage](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html) — Amazon Aurora user guide
+- [Amazon Aurora: design considerations for high throughput cloud-native relational databases](https://www.amazon.science/publications/amazon-aurora-design-considerations-for-high-throughput-cloud-native-relational-databases) — Verbitski et al., SIGMOD 2017
+
 ### Columnar storage — Parquet, ORC, Apache Arrow — for analytics, 10–100× faster than row stores
 Columnar storage stores **each column's values together** instead of each row's values together. Analytical queries read a few columns across millions of rows, so a columnar layout reads only the needed columns, compresses extremely well (similar values sit together) and enables vectorised CPU processing.
+
+#### Intuition
+A class marksheet stored subject by subject instead of student by student. To find the average maths score you read one strip of numbers, not every student's whole row.
+
+#### Must know
+- Values of **each column are stored together**, not each row together.
+- An analytical query reads only the columns it needs, so far fewer bytes.
+- Similar values side by side **compress very well** (dictionary, run-length).
+- Min/max statistics per block let the engine skip blocks that cannot match.
+- Bad at single-row inserts and updates. OLTP stays in row stores and feeds a columnar store.
+
+#### Numbers to quote
+- Compression of 5–10× is typical.
+- Aim for Parquet files of roughly 128 MB to 1 GB. Many tiny files are slow.
+
+#### Common mistakes
+- Running analytics on the production row store.
+- `SELECT *` on a columnar table, which throws the benefit away.
+- Unpartitioned, unsorted data, so nothing can be skipped.
 
 #### How it works
 ```mermaid
@@ -381,8 +529,28 @@ Stream changes from Postgres via CDC (Debezium → Kafka) into a columnar store:
 #### Interview angle
 > "Analytics never runs on the OLTP database. CDC streams changes into partitioned, sorted Parquet or a columnar warehouse, where a dashboard query reads three columns instead of whole rows."
 
+#### Sources
+- [Apache Parquet documentation](https://parquet.apache.org/docs/) — Apache Parquet
+- [Apache Arrow: overview](https://arrow.apache.org/overview/) — Apache Arrow
+- [Column-oriented DBMS](https://en.wikipedia.org/wiki/Column-oriented_DBMS) — Wikipedia
+
 ### Column-oriented query execution — predicate pushdown, vectorized processing, compression
 Columnar engines aren't fast only because of storage layout. Their **execution** is designed around it: **push filters down** to skip data before reading, **process batches of values with SIMD** instead of row by row, and **operate directly on compressed data** where possible.
+
+#### Intuition
+Looking for one receipt in a warehouse of boxes. First skip every box labelled with the wrong month, then open only the right folder in each remaining box, and check receipts a handful at a time and not one by one.
+
+#### Must know
+- **Predicate pushdown**: apply filters at the storage layer, so non-matching partitions and blocks are never read.
+- **Projection pushdown**: read only the columns the query mentions.
+- **Vectorised execution**: operate on batches of values in tight loops with SIMD.
+- Engines can compare dictionary codes without decompressing strings.
+- It only works if partition and sort keys **match the common filters**.
+
+#### Common mistakes
+- Filtering on a column the data is not partitioned or sorted by, then blaming the engine.
+- Wrapping the filter column in a function, which defeats pruning.
+- Thinking columnar speed comes only from the file layout.
 
 #### How it works
 ```mermaid
@@ -433,8 +601,27 @@ Row-at-a-time (Volcano model) calls virtual functions per row per operator, whic
 #### Interview angle
 > "I lay analytical tables out so filters prune early: partition by date, sort by the common filters, and select few columns. The engine then scans only surviving blocks in vectorised batches."
 
+#### Sources
+- [Why is ClickHouse so fast?](https://clickhouse.com/docs/concepts/why-clickhouse-is-so-fast) — ClickHouse docs
+- [MonetDB/X100: hyper-pipelining query execution](https://www.cidrdb.org/cidr2005/papers/P19.pdf) — Boncz, Zukowski and Nes, CIDR 2005
+
 ### B-tree vs LSM-tree — B-tree: read-optimized (database indexes); LSM: write-optimized (Cassandra, RocksDB)
 The two dominant storage engine designs. **B-trees** update fixed-size pages **in place** (PostgreSQL, MySQL InnoDB, Oracle), which is good for reads and predictable latency. **LSM-trees** buffer writes in memory and **append sorted immutable files**, merged by compaction (Cassandra, RocksDB, LevelDB, ScyllaDB, HBase), which is good for write-heavy workloads.
+
+#### Intuition
+A B-tree is a filing cabinet: every new paper goes straight into its exact folder, so finding it later is quick. An LSM-tree is an inbox tray: drop papers on top as they arrive and sort them into folders in bulk later, so filing is instant and finding takes more looking.
+
+#### Must know
+- **B-tree**: updates pages **in place**. Fast, predictable reads. PostgreSQL, MySQL InnoDB.
+- **LSM-tree**: buffer in memory, **append** immutable sorted files, merge them later. Very fast writes. Cassandra, RocksDB, HBase.
+- B-tree for read-heavy OLTP. LSM for ingest-heavy workloads.
+- LSM reads check several files, with bloom filters to skip most.
+- Three costs trade off: read, write and space amplification. You cannot minimise all three.
+
+#### Common mistakes
+- Saying LSM is simply "faster". It is faster at writes and pays on reads and compaction.
+- Forgetting that B-trees also have write amplification (a whole page for a small change).
+- Not knowing which engine a given database uses.
 
 #### How it works
 ```mermaid
@@ -493,8 +680,31 @@ Read amplification is how many disk reads per logical read. Write amplification 
 #### Interview angle
 > "B-trees for read-heavy OLTP, LSM engines for ingest-heavy workloads. I can explain the read, write and space amplification trade-offs and tune compaction to match."
 
+#### Sources
+- [Log-structured merge-tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree) — Wikipedia
+- [RocksDB overview](https://github.com/facebook/rocksdb/wiki/RocksDB-Overview) — RocksDB wiki
+- [B-tree](https://en.wikipedia.org/wiki/B-tree) — Wikipedia
+
 ### Write amplification in LSM trees — compaction rewrites data multiple times
 Write amplification (WA) is the ratio of **bytes physically written to disk** to **bytes written by the application**. In LSM trees, every piece of data is written to the WAL, flushed to an SSTable, then **rewritten repeatedly** as compaction merges it into lower levels, so WA of 10–30× is common with leveled compaction.
+
+#### Intuition
+Tidying a bookshelf by repeatedly merging small piles into bigger ones. Each book gets picked up and put down again every time its pile is merged, so you handle it many more times than you bought it.
+
+#### Must know
+- Write amplification = bytes written to disk ÷ bytes the application wrote.
+- In an LSM, data is written to the log, flushed, then **rewritten at every compaction level**.
+- **Leveled** compaction: high write amplification, but good reads and space use.
+- **Tiered** compaction: lower write amplification, worse reads and space use.
+- It consumes disk bandwidth and wears out SSDs.
+
+#### Numbers to quote
+- Leveled compaction commonly reaches 10–30×.
+
+#### Common mistakes
+- Ignoring compaction when sizing disks for a write-heavy store.
+- Leveled compaction on an ingest-heavy workload.
+- Large values stored inside the LSM, so every compaction rewrites them.
 
 #### How it works
 ```mermaid
@@ -543,8 +753,30 @@ Separate values from keys (WiscKey / RocksDB BlobDB / Titan): keep keys and smal
 #### Interview angle
 > "LSM engines pay for fast writes with compaction rewrites. I'd tune the compaction style and value separation to the workload so write amplification doesn't saturate disks or wear out SSDs."
 
+#### Sources
+- [Compaction](https://github.com/facebook/rocksdb/wiki/Compaction) — RocksDB wiki
+- [WiscKey: separating keys from values in SSD-conscious storage](https://www.usenix.org/conference/fast16/technical-sessions/presentation/lu) — Lu et al., USENIX FAST 2016
+
 ### Read amplification mitigated — bloom filter per SSTable level avoids unnecessary disk seeks
 In an LSM tree a key may live in the memtable or in any of several SSTables, so a naive read checks many files: **read amplification**. Engines cut it with **bloom filters** (skip files that definitely don't have the key), **sparse indexes and block caches**, **fence pointers**, and compaction that keeps levels non-overlapping.
+
+#### Intuition
+A bouncer with a guest list for each room. He can say for certain "that person is not in this room", so you skip it. Occasionally he says "maybe" and you look inside for nothing. He never tells you someone is absent when they are in there.
+
+#### Must know
+- In an LSM a key could be in the memtable or any SSTable, so a naive read checks many files.
+- A **bloom filter** per SSTable answers "definitely not here" or "maybe here".
+- **No false negatives**, only a small rate of false positives.
+- Most files are skipped without touching disk, so a point lookup costs about one block read.
+- Bloom filters do **not** help range scans.
+
+#### Numbers to quote
+- About 10 bits per key gives roughly a 1% false-positive rate.
+
+#### Common mistakes
+- Saying a bloom filter can tell you a key is present. It can only rule it out.
+- Expecting it to speed up range queries.
+- Forgetting the memory cost with billions of keys.
 
 #### How it works
 ```mermaid
@@ -593,3 +825,8 @@ A bloom filter answers membership for specific keys. It can't say whether any ke
 
 #### Interview angle
 > "LSM reads stay fast because each SSTable's bloom filter rules out files that can't hold the key. A point lookup usually costs one data block read, while range scans still pay to merge every level."
+
+#### Sources
+- [RocksDB bloom filter](https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter) — RocksDB wiki
+- [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) — Wikipedia
+
