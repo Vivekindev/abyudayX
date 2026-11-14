@@ -3,6 +3,21 @@
 ### Card payment parties — cardholder, merchant, acquirer/PSP, card network, issuer
 A card payment involves five parties. The **cardholder** pays. The **merchant** sells. The **acquirer** (the merchant's bank, often reached through a **PSP/payment gateway** such as Razorpay, Stripe or Adyen) accepts card payments for the merchant. The **card network** (Visa, Mastercard, RuPay) routes messages and sets rules. The **issuer** (the cardholder's bank) approves or declines and later pays. Money and messages flow differently: authorisation is real-time messaging, while money moves later in clearing and settlement batches.
 
+#### Intuition
+A relay of messengers. The shop asks its own bank, which asks the card network, which asks the customer's bank, "is this card good for ₹1,200?" The answer travels back the same way in a second or two. The money itself follows days later.
+
+#### Must know
+- Five parties: **cardholder, merchant, acquirer (reached through a PSP), card network, issuer**.
+- The **acquirer** is the merchant's bank. The **issuer** is the cardholder's bank.
+- The **network** (Visa, Mastercard, RuPay) routes messages and sets the rules.
+- **Authorisation is a real-time message. Money moves later** in settlement batches.
+- The merchant's fee is split among the issuer, the network and the acquirer or PSP.
+
+#### Common mistakes
+- Assuming money has moved the moment a payment is approved.
+- Treating a timeout between you and the PSP as a failed payment.
+- A single PSP with no failover.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -60,8 +75,30 @@ Resilience (fail over when one PSP is down or degraded), higher authorisation ra
 #### Interview angle
 > "Authorisation is a real-time message hop from PSP to acquirer, network and issuer, while money moves later in settlement batches. So my design separates payment status from money movement and reconciles the two."
 
+#### Sources
+- [Introduction to online payments](https://stripe.com/guides/introduction-to-online-payments) — Stripe guide
+- [How cards work](https://docs.stripe.com/payments/cards/overview) — Stripe docs
+
 ### Authorization vs capture vs settlement — hold now, claim later, move money in batch
 **Authorisation** asks the issuer to approve and **hold** funds on the card (no money moves yet). **Capture** tells the acquirer you're claiming the authorised amount (full or partial), typically at fulfilment. **Clearing and settlement** later move the money between banks in batches, and the merchant receives funds (T+1/T+2 days). Uncaptured authorisations **expire** (usually 5–7 days, varying by network and merchant category), releasing the hold.
+
+#### Intuition
+A hotel check-in. The hotel blocks an amount on your card when you arrive (hold), charges the final bill when you leave (claim), and the bank pays the hotel a day or two later (settle).
+
+#### Must know
+- **Authorisation**: the issuer approves and **holds** the funds. No money moves.
+- **Capture**: the merchant claims the held amount, in full or in part.
+- **Settlement**: the money actually moves between banks, in batches.
+- An uncaptured authorisation **expires**, and the hold is released.
+- **Void** before capture. **Refund** after capture.
+
+#### Numbers to quote
+- Authorisations typically expire after about 5–7 days. Settlement usually takes T+1 or T+2 days.
+
+#### Common mistakes
+- Capturing the full amount, then refunding the item that was out of stock.
+- No void on cancellation, so the customer's hold lingers.
+- A retried capture with no idempotency, which double captures.
 
 #### How it works
 ```mermaid
@@ -114,8 +151,27 @@ A void (authorisation reversal) cancels an authorisation before capture: no mone
 #### Interview angle
 > "For shipped goods I'd authorise at checkout, capture partially or fully at dispatch, and void on cancellation, with a job that re-authorises before holds expire."
 
+#### Sources
+- [Place a hold on a payment method](https://docs.stripe.com/payments/place-a-hold-on-a-payment-method) — Stripe docs
+- [Capture](https://docs.adyen.com/online-payments/capture/) — Adyen docs
+
 ### UPI flow — payer PSP → NPCI → remitter bank → beneficiary bank
 UPI (Unified Payments Interface), run by **NPCI**, enables real-time bank-to-bank payments using a **VPA** (UPI ID like `name@bank`) or QR code. A **payer PSP app** (PhonePe, Google Pay, Paytm, a bank app) sends the request to **NPCI's UPI switch**, which asks the **remitter (payer's) bank** to debit the account after PIN verification, then the **beneficiary (payee's) bank** to credit it. Merchants usually integrate through a payment aggregator or acquiring bank, receiving status via callbacks.
+
+#### Intuition
+A central switchboard between banks. Your payment app tells the switchboard, the switchboard tells your bank to take the money out, then tells the receiver's bank to put it in, and everyone gets a confirmation within seconds.
+
+#### Must know
+- **NPCI** runs the UPI switch between banks.
+- Flow: **payer app → NPCI → payer's bank debits → payee's bank credits → callbacks**.
+- The UPI PIN is verified by the **payer's bank**.
+- Outcomes are often **pending**: the debit may have happened while the status is unknown.
+- **A timeout is not a failure.** Poll the status and reconcile.
+
+#### Common mistakes
+- Marking a payment failed on timeout, then receiving a late success.
+- Processing the same callback twice.
+- No daily reconciliation against the settlement report.
 
 #### How it works
 ```mermaid
@@ -138,7 +194,7 @@ sequenceDiagram
   Note over N,BB: interbank settlement via NPCI in cycles, not per transaction
 ```
 
-Flow types: **intent/QR** (payer app opens with prefilled details), **collect** (merchant sends a request that the payer approves; restricted for some P2P use due to fraud), **UPI AutoPay** (mandates for recurring payments), and **UPI Lite** (small offline-style payments).
+Flow types: **intent/QR** (payer app opens with prefilled details), **collect** (merchant sends a request that the payer approves; person-to-person collect was discontinued by NPCI from October 2025 because of fraud, while merchant collect remains), **UPI AutoPay** (mandates for recurring payments), and **UPI Lite** (small offline-style payments).
 
 Edge cases engineers must handle: **pending/deemed** states (debit happened but credit status is unknown), timeouts with later success callbacks, **auto-reversals** of failed credits (within T+1 per NPCI rules), duplicate callbacks, and checking status APIs before marking failures.
 
@@ -175,8 +231,27 @@ Process callbacks idempotently: key on the merchant transaction reference (and U
 #### Interview angle
 > "A UPI timeout is never a failure. The payment stays PENDING, we poll status and honour late callbacks idempotently by transaction ref, and daily reconciliation catches whatever slipped through."
 
+#### Sources
+- [UPI product overview](https://www.npci.org.in/what-we-do/upi/product-overview) — NPCI
+- [Unified Payments Interface](https://en.wikipedia.org/wiki/Unified_Payments_Interface) — Wikipedia
+
 ### Payment state machine — CREATED → PROCESSING → AUTHORIZED/FAILED/UNKNOWN → CAPTURED → SETTLED/REFUNDED
 Modelling a payment as an explicit **state machine** with allowed transitions prevents impossible states (refunding a failed payment, capturing twice) and makes the system auditable. Crucially it includes an **UNKNOWN** (or PENDING) state for when the outcome isn't known (timeouts, network errors), which must be resolved by status checks, webhooks and reconciliation rather than guessed.
+
+#### Intuition
+A parcel tracking page with fixed steps. A parcel cannot go from "delivered" back to "in the warehouse". And when the courier loses signal, the page says "status unknown", not "lost".
+
+#### Must know
+- Model a payment as **explicit states with a fixed set of allowed transitions**.
+- This blocks impossible moves, such as capturing twice or refunding a failed payment.
+- **UNKNOWN is a real state**, used when a timeout leaves the outcome unclear.
+- Apply each transition with a **conditional update**: `... WHERE status = 'AUTHORIZED'`.
+- Keep an append-only history of every state change.
+
+#### Common mistakes
+- Treating a timeout as FAILED.
+- Two processes (webhook and poller) both applying the same transition.
+- Storing only the current state, with no history.
 
 #### How it works
 ```mermaid
@@ -238,8 +313,27 @@ Make transitions atomic and conditional on the current state (and version): `UPD
 #### Interview angle
 > "Payments are an explicit state machine with UNKNOWN as a real state, conditional updates for every transition, an append-only event history and an outbox, so concurrent webhooks and pollers can't double-fulfil."
 
+#### Sources
+- [How PaymentIntents work](https://docs.stripe.com/payments/paymentintents/lifecycle) — Stripe docs
+- [Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency) — Stripe blog
+
 ### Refunds, reversals & chargebacks — undoing money movement safely
 Undoing a payment depends on its stage. A **void/reversal** cancels an authorisation before capture. A **refund** is a merchant-initiated return of captured money (full or partial), a new transaction. A **chargeback** is a **cardholder-initiated dispute** through their issuer (fraud, item not received), where funds are pulled back from the merchant and the merchant can submit evidence (**representment**). Each must be modelled as its own entity with states, idempotency and ledger entries.
+
+#### Intuition
+Three ways a sale is undone. Cancel the booking before paying (void). The shop gives the money back (refund). Or the customer complains to their bank, which takes the money back from the shop (chargeback).
+
+#### Must know
+- **Void / reversal**: cancels an authorisation before capture. No money moved.
+- **Refund**: the merchant returns captured money. It is a new transaction.
+- **Chargeback**: the cardholder disputes through their bank, and funds are pulled from the merchant.
+- A refund is its own record with an idempotency key and states.
+- **Invariant: total refunded ≤ amount captured**, enforced under a lock.
+
+#### Common mistakes
+- Two refund clicks producing two refunds.
+- Editing the original ledger entry when a reversing entry is needed.
+- No tracking of chargeback deadlines and evidence.
 
 #### How it works
 ```mermaid
@@ -295,8 +389,27 @@ A chargeback is a dispute raised by the cardholder with their issuer, which forc
 #### Interview angle
 > "Voids, refunds and chargebacks are separate entities with their own state machines. Refunds are idempotent and capped by refunded ≤ captured under a lock, and every reversal posts new ledger entries."
 
+#### Sources
+- [Refund and cancel payments](https://docs.stripe.com/refunds) — Stripe docs
+- [Disputes](https://docs.stripe.com/disputes) — Stripe docs
+
 ### PSP webhooks & status polling — resolving UNKNOWN payments
 PSPs report final payment outcomes asynchronously via **webhooks** (HTTP callbacks), because many payments (3-D Secure, UPI, net banking) complete outside the original API call. Webhooks can be **late, duplicated, out of order or missing**, so robust systems combine them with **status polling** for payments stuck in pending/UNKNOWN, and **daily reconciliation** as the final safety net.
+
+#### Intuition
+Waiting for a courier to ring your doorbell (webhook). The bell may ring late, twice, or not at all. So you also check the tracking page yourself now and then (polling), and audit your deliveries at the end of the day (reconciliation).
+
+#### Must know
+- PSPs report final outcomes asynchronously through **webhooks**.
+- Webhooks can be **late, duplicated, out of order or missing**.
+- Receiver rules: **verify the signature, acknowledge fast, process asynchronously, deduplicate**.
+- **Poll** the status of payments stuck in pending.
+- Daily **reconciliation** is the final safety net.
+
+#### Common mistakes
+- Relying on webhooks alone.
+- Heavy processing inside the webhook request, which causes timeouts and retry storms.
+- No signature check, so anyone can forge a "payment succeeded" event.
 
 #### How it works
 ```mermaid
@@ -359,10 +472,33 @@ Webhooks can be delayed, lost, misconfigured or blocked during incidents. Withou
 #### Interview angle
 > "Webhooks are verified, acknowledged fast and processed idempotently. A poller resolves anything pending for more than a couple of minutes, and nightly reconciliation is the final authority."
 
+#### Sources
+- [Receive Stripe events in your webhook endpoint](https://docs.stripe.com/webhooks) — Stripe docs
+- [Webhooks](https://razorpay.com/docs/webhooks/) — Razorpay docs
+
+
 ## Money correctness
 
 ### Representing money — integer minor units or BigDecimal, never float
 Money must be represented **exactly**. Binary floating point (`float`, `double`, JavaScript `number` for arithmetic) can't represent most decimal fractions (0.1 + 0.2 = 0.30000000000000004), so rounding errors accumulate and totals stop matching. Use **integers in minor units** (paise, cents: ₹10.50 → 1050) or **arbitrary-precision decimals** (`BigDecimal`, Postgres `NUMERIC`) with explicit scale and rounding, and always store the **currency** alongside the amount.
+
+#### Intuition
+Counting in whole paise, as you would count coins. Coins are never half-counted. Floating-point numbers are like measuring money with a slightly stretchy ruler: each reading is nearly right, and the errors add up.
+
+#### Must know
+- **Never use float or double for money.** `0.1 + 0.2` is not exactly `0.3`.
+- Use **integers in minor units** (₹10.50 → 1050 paise) or exact decimals.
+- **Always store the currency** with the amount.
+- Currencies have different numbers of decimals.
+- When splitting an amount, **hand out the remainder** so the parts sum to the total.
+
+#### Numbers to quote
+- INR and USD have 2 decimal places. JPY has 0. KWD has 3.
+
+#### Common mistakes
+- Doing money arithmetic in a JavaScript `number`.
+- Rounding each part of a split separately, so the parts do not add up.
+- Assuming every currency has two decimals.
 
 #### How it works
 ```mermaid
@@ -422,8 +558,28 @@ Work in paise: 10,000 / 3 = 3,333 remainder 1. Give 3,333 to each and distribute
 #### Interview angle
 > "Money is a long in minor units paired with a currency and its exponent, with explicit rounding and remainder allocation, sent over JSON as integers. Never floats."
 
+#### Sources
+- [Money](https://martinfowler.com/eaaCatalog/money.html) — Martin Fowler, Patterns of Enterprise Application Architecture
+- [ISO 4217](https://en.wikipedia.org/wiki/ISO_4217) — Wikipedia
+- [Supported currencies](https://docs.stripe.com/currencies) — Stripe docs
+
 ### Idempotency at every hop — client→API, API→PSP, consumers, webhooks
 In payments, every network hop can fail ambiguously (timeout after the other side succeeded), so every hop is retried, and every retried hop must be **idempotent**: the same request applied twice has the same effect as once. This means idempotency keys from **client to API**, idempotency keys passed **from your service to the PSP**, **deduplication in message consumers**, and **deduplication of webhooks**.
+
+#### Intuition
+Pressing a lift button five times still calls one lift. Every step in a payment must behave like that button, because every step will sometimes be retried.
+
+#### Must know
+- Any hop can time out **after the other side succeeded**, so every hop is retried.
+- Therefore **every hop must be idempotent**: a repeat has no extra effect.
+- **Client → API**: an idempotency key, with the stored response replayed on retry.
+- **API → PSP**: a **deterministic** key, such as the internal payment id.
+- **Consumers and webhooks**: deduplicate by event id.
+
+#### Common mistakes
+- A new random key on each retry to the PSP.
+- Check-then-act with no unique constraint, so two concurrent duplicates both run.
+- Idempotency at the API only, while a consumer double-applies events.
 
 #### How it works
 ```mermaid
@@ -481,8 +637,28 @@ If your service times out calling the PSP and retries (possibly from a different
 #### Interview angle
 > "Idempotency covers every hop: a client key with stored responses, the payment id as the PSP key, and processed-event tables for consumers and webhooks. Retries are only safe end to end."
 
+#### Sources
+- [Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency) — Stripe blog
+- [Idempotent requests](https://docs.stripe.com/api/idempotent_requests) — Stripe API reference
+- [Implementing Stripe-like idempotency keys in Postgres](https://brandur.org/idempotency-keys) — Brandur Leach
+
 ### Double-entry ledger — every transaction has balanced debits and credits
 A double-entry ledger records every money movement as a **transaction with at least two entries** (debits and credits) that **sum to zero**: money is never created or destroyed, only moved between **accounts** (customer wallet, merchant payable, PSP receivable, fees revenue, tax payable). Account balances are derived from entries. This makes errors detectable (books must balance) and gives a complete audit trail.
+
+#### Intuition
+Money never appears from nowhere. It always comes out of one pocket and goes into another. Write down both pockets every time, and if the two sides ever disagree, you know a mistake was made.
+
+#### Must know
+- Every money movement is a transaction with **at least two entries that sum to zero**.
+- Money is only **moved between accounts**, never created or destroyed.
+- **Balances are derived from the entries.**
+- Errors become detectable, because the books must balance.
+- It gives a complete audit trail of where every rupee came from and went.
+
+#### Common mistakes
+- A single `balance` column updated in place, with no entries behind it.
+- Allowing a transaction whose entries do not sum to zero.
+- Summing millions of entries on every balance read, with no cached balance.
 
 #### How it works
 ```mermaid
@@ -554,8 +730,28 @@ Construct transactions through a single ledger service API that validates that e
 #### Interview angle
 > "Money lives in a double-entry ledger: zero-sum transactions of immutable entries across a chart of accounts, with balances updated atomically, so any money that appears or vanishes is caught by the books."
 
+#### Sources
+- [Double-entry bookkeeping](https://en.wikipedia.org/wiki/Double-entry_bookkeeping) — Wikipedia
+- [Accounting for developers, part I](https://www.moderntreasury.com/journal/accounting-for-developers-part-i) — Modern Treasury
+- [Ledger: Stripe's system for tracking and validating money movement](https://stripe.com/blog/ledger-stripe-system-for-tracking-and-validating-money-movement) — Stripe blog
+
 ### Ledger immutability — append-only entries, fix with reversing entries
 Ledger entries are **never updated or deleted**. Mistakes are corrected by posting **new reversing (or adjusting) entries** that offset the error, so the full history of what happened, including the mistake and its correction, is preserved. This is required for audits and regulations, and makes the ledger reproducible: replaying entries always yields the same balances.
+
+#### Intuition
+An accounts book written in ink. You never rub a line out. If a line is wrong, you write a new line that cancels it and another with the correct figure, so anyone can see what happened.
+
+#### Must know
+- Ledger entries are **never updated or deleted**.
+- A mistake is fixed by posting a **reversing entry** plus a corrected one.
+- The full history, including the mistake, is preserved.
+- Past statements stay reproducible.
+- Enforce it: the database role may only INSERT, and manual fixes need a second approver.
+
+#### Common mistakes
+- Running an UPDATE on historical entries to fix a bug.
+- Corrections with no reference to the original entry or the reason.
+- Direct database access for manual adjustments.
 
 #### How it works
 ```mermaid
@@ -603,8 +799,27 @@ They preserve the complete history (what was recorded, when it was discovered an
 #### Interview angle
 > "Ledger entries are insert-only. Corrections are reversal plus corrected transactions that reference the original, with a reason and maker-checker approval, so every past statement stays reproducible."
 
+#### Sources
+- [Accounting patterns](https://martinfowler.com/eaaDev/AccountingNarrative.html) — Martin Fowler
+- [Accounting for developers, part I](https://www.moderntreasury.com/journal/accounting-for-developers-part-i) — Modern Treasury
+
 ### Reconciliation — match internal records with bank/PSP settlement files
 Reconciliation compares your internal records (payments, ledger entries) with **external sources of truth**: PSP settlement reports, bank statements, card network files, payout confirmations. It finds **mismatches**: missing transactions on either side, amount or status differences, unexpected fees, duplicates. It's the final safety net that catches everything idempotency, webhooks and polling missed.
+
+#### Intuition
+Checking your own cash book against the bank statement at the end of the day. Every line should appear in both. Anything in only one of them, or with a different amount, needs an explanation.
+
+#### Must know
+- Compare **your records with an outside source of truth**: PSP settlement files and bank statements.
+- It finds missing transactions on either side, wrong amounts and unexpected fees.
+- It catches whatever idempotency, webhooks and polling missed.
+- Match on provider ids within a date window, since cut-off times differ.
+- Mismatches go to an **exception queue** with owners and ageing alerts.
+
+#### Common mistakes
+- No reconciliation at all, so errors surface as customer complaints.
+- A fully manual process whose exceptions pile up.
+- Matching amounts but never checking fees against the contract.
 
 #### How it works
 ```mermaid
@@ -656,8 +871,27 @@ Possible causes: a payment succeeded at the PSP after you marked it failed (miss
 #### Interview angle
 > "Daily reconciliation against PSP and bank files is the final authority. It matches by provider id and UTR within date windows, auto-resolves known patterns like late UPI successes, and checks fees against the contract."
 
+#### Sources
+- [Payment reconciliation 101](https://stripe.com/resources/more/payment-reconciliation-101) — Stripe
+- [Payout reconciliation report](https://docs.stripe.com/reports/payout-reconciliation) — Stripe docs
+
 ### Exactly-once money movement — at-least-once + idempotency + state guards + reconciliation
 True exactly-once delivery doesn't exist across networks. "Exactly-once" money movement is **built** from: **at-least-once** delivery and retries (never lose a request), **idempotency** at each hop (duplicates have no extra effect), **state machine guards** (transitions apply once), **atomic local writes with outbox** (state and events committed together), and **reconciliation** (detect and repair whatever slipped through).
+
+#### Intuition
+A recorded-delivery letter. You keep re-sending until you get a signed receipt, and the receiver throws away any copy they already have. The letter is acted on once, even though it may have been sent three times.
+
+#### Must know
+- **Exactly-once delivery does not exist** over a network.
+- Exactly-once **effect** is built from layers.
+- **At-least-once delivery** with an outbox, so nothing is lost.
+- **Idempotency and state guards**, so duplicates have no effect.
+- **UNKNOWN state and reconciliation**, for whatever is still ambiguous.
+
+#### Common mistakes
+- Calling the bank and then saving the result in two unprotected steps.
+- Publishing an event outside the database transaction (the dual-write problem).
+- Believing a message broker's "exactly-once" covers external side effects.
 
 #### How it works
 ```mermaid
@@ -713,8 +947,27 @@ Writing to the database and publishing to a message broker are two separate oper
 #### Interview angle
 > "Exactly-once money movement is built in layers: outbox plus at-least-once delivery, the transfer id as the bank's idempotency reference, guarded transitions, UNKNOWN for ambiguous outcomes, and reconciliation as the backstop."
 
+#### Sources
+- [Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) — microservices.io
+- [Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency) — Stripe blog
+
 ### Hot accounts — sub-accounts and batching for high-write ledger accounts
 A **hot account** is a ledger account that participates in a huge share of transactions: a platform's fee revenue account, a PSP clearing account, a popular merchant's payable account during a sale. If every transaction locks and updates the same balance row, throughput collapses to the rate of serialized row updates (often a few hundred to a few thousand per second) and lock waits spike.
+
+#### Intuition
+One till that every customer in a supermarket must pass through. Open thirty-two tills, let each customer pick one by a simple rule, and add up the till totals at the end.
+
+#### Must know
+- A **hot account** is one ledger account used in a huge share of transactions, such as fee revenue.
+- If every transaction locks the same balance row, throughput collapses.
+- **Sub-accounts**: split it into N rows, pick one by hash, and sum them to read.
+- **Batching**: write entries at once, and update the balance periodically.
+- This is safe only for accounts with **no overdraft check**.
+
+#### Common mistakes
+- One balance row updated by every transaction in the system.
+- Applying the same trick to customer wallets, which need a strict balance check.
+- Locking rows in different orders, which causes deadlocks.
 
 #### How it works
 ```mermaid
@@ -768,3 +1021,8 @@ Customer wallets need synchronous balance checks to prevent overdrafts: a debit 
 
 #### Interview angle
 > "Hot internal accounts like fee revenue get split into hashed sub-accounts or batched balance updates, because they have no overdraft check. Customer wallets keep synchronous, locked balance checks."
+
+#### Sources
+- [Ledger: Stripe's system for tracking and validating money movement](https://stripe.com/blog/ledger-stripe-system-for-tracking-and-validating-money-movement) — Stripe blog
+- [TigerBeetle documentation](https://docs.tigerbeetle.com/) — TigerBeetle
+

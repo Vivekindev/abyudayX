@@ -3,6 +3,21 @@
 ### PCI-DSS & tokenization — keep card numbers out of most systems
 **PCI-DSS** (Payment Card Industry Data Security Standard) governs any system that **stores, processes or transmits cardholder data** (PAN, expiry, CVV). Every system that touches card data is "in scope" for strict controls and audits. The core architectural strategy is **scope reduction through tokenisation**: replace the card number with a **token** as early as possible (ideally in the PSP's SDK or hosted fields, so raw PANs never reach your servers), and keep the few systems that do see PANs in an isolated, heavily controlled **cardholder data environment (CDE)**.
 
+#### Intuition
+Handling something dangerous by never touching it. The customer hands the card straight to a specialist, who gives you a numbered ticket. You work only with tickets, so only the specialist needs the vault.
+
+#### Must know
+- **PCI-DSS** applies to every system that stores, processes or transmits card data.
+- Strategy: **shrink the scope**. Keep card numbers out of as many systems as possible.
+- **Tokenise at the edge**: the PSP's hosted fields take the card and return a token.
+- **Never store the CVV** after authorisation.
+- In India, merchants may not store card numbers. Saved cards use network tokens.
+
+#### Common mistakes
+- Card details passing through your own backend, which puts all of it in scope.
+- Card numbers appearing in application logs.
+- Storing the CVV "encrypted".
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -56,8 +71,30 @@ A PSP token is issued by your payment provider and only usable through that prov
 #### Interview angle
 > "Card data never reaches our servers. Hosted fields return tokens, saved cards use network tokens per RBI rules, CVV is never stored, and log redaction is enforced anyway."
 
+#### Sources
+- [PCI DSS](https://www.pcisecuritystandards.org/standards/pci-dss/) — PCI Security Standards Council
+- [Integration security guide](https://docs.stripe.com/security/guide) — Stripe docs
+
 ### Fraud & risk checks — rules, velocity limits, ML scoring in the payment path
 Fraud and risk systems decide, **in real time within the payment flow** (tens of milliseconds), whether to **approve, decline, challenge (3-D Secure/OTP) or review** a transaction. They combine **rules** (blocklists, amount thresholds, geography mismatches), **velocity limits** (too many attempts per card, device, IP or account in a window) and **ML risk scores** built on features like device fingerprint, behaviour history and network relationships, with feedback from chargebacks and confirmed fraud.
+
+#### Intuition
+A bank teller who glances at each transaction. Most go straight through. Odd ones get an extra ID check, obviously bad ones are refused, and unclear large ones go to a supervisor.
+
+#### Must know
+- A decision made **in real time inside the payment flow**.
+- Four outcomes: **approve, challenge (OTP / 3-D Secure), decline, manual review**.
+- **Rules**: blocklists and hard limits. **Velocity limits**: too many attempts per card, device or IP.
+- An **ML risk score** built from device, history and behaviour features.
+- False positives lose good customers, so test new rules in **shadow mode** first.
+
+#### Numbers to quote
+- The risk check typically has a budget of tens of milliseconds.
+
+#### Common mistakes
+- No velocity limits on small payments, which allows card testing.
+- Declining outright where a step-up challenge would do.
+- No decision on what happens when the risk service is down.
 
 #### How it works
 ```mermaid
@@ -115,8 +152,28 @@ Look for patterns: many distinct cards from the same device, IP or account in a 
 #### Interview angle
 > "Risk runs inline within about 50 ms: Redis velocity counters, hard rules and an ML score map to approve, step-up, decline or review. New rules go through shadow mode, and chargebacks feed back as labels."
 
+#### Sources
+- [Radar](https://docs.stripe.com/radar) — Stripe docs
+- [A primer on machine learning for fraud detection](https://stripe.com/guides/primer-on-machine-learning-for-fraud-protection) — Stripe guide
+- [Card testing](https://docs.stripe.com/disputes/prevention/card-testing) — Stripe docs
+
 ### RBI data localisation & audit trails — data stays in India, immutable logs
 India's **RBI payment data localisation** directive (2018) requires that **all payment system data** (end-to-end transaction details, customer data, payment credentials) be **stored only in India**. Processing abroad is allowed in limited cases, but data must be brought back and deleted abroad within a set time (one business day or 24 hours). Combined with RBI and other regulators' **audit trail** expectations (and the DPDP Act for personal data), payment systems must control data location and keep **tamper-evident, retained logs** of transactions and access.
+
+#### Intuition
+A rule that the bank's records must stay inside the country, in a locked cabinet where pages can be added but never removed. That includes the photocopies sent to outside contractors.
+
+#### Must know
+- RBI requires **payment system data to be stored only in India**.
+- That covers databases, backups, logs, analytics copies and **third-party tools**.
+- Disaster recovery must also be within India.
+- Enforce it with cloud policies that deny every non-India region.
+- Audit trails must be **append-only, time-synced and retained** for years.
+
+#### Common mistakes
+- A foreign-hosted error tracker or log tool capturing payment payloads.
+- A disaster-recovery copy in a region outside India.
+- Audit logs that administrators can edit or delete.
 
 #### How it works
 ```mermaid
@@ -170,10 +227,31 @@ It's complete (all relevant actions: transactions, config changes, privileged ac
 #### Interview angle
 > "Payment data never leaves India: region-deny policies, DR between Mumbai and Hyderabad, scrubbed or India-hosted observability tools, and audit logs in object-locked buckets with long retention."
 
+#### Sources
+- [Storage of payment system data](https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11244&Mode=0) — Reserve Bank of India
+- [Storage of payment system data: frequently asked questions](https://www.rbi.org.in/Scripts/FAQView.aspx?Id=130) — Reserve Bank of India
+- [Locking objects with Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html) — Amazon S3 user guide
+
+
 ## Trading systems
 
 ### Order book & matching engine — price-time priority, single-threaded per symbol
 An exchange's **order book** holds resting buy orders (**bids**) and sell orders (**asks**) for each instrument, sorted by **price, then time**. The **matching engine** processes incoming orders sequentially: a buy order that's at or above the best ask **trades** against the cheapest asks first (and the earliest within each price level), and any remainder rests in the book (for limit orders). Matching is usually **single-threaded per symbol** for determinism and speed, with symbols partitioned across cores or machines.
+
+#### Intuition
+An auction with two queues: buyers lined up by the highest price they will pay, sellers by the lowest they will accept. When the front of each queue agrees on a price, they trade. Among people offering the same price, whoever came first goes first.
+
+#### Must know
+- The **order book** holds resting buy orders (bids) and sell orders (asks).
+- Matching uses **price-time priority**: best price first, then the earliest order.
+- The engine is **single-threaded per symbol**, which makes it deterministic and fast.
+- It runs in memory. Inputs are **sequenced and journaled first**, so a standby can replay them.
+- Scale by spreading symbols across engines.
+
+#### Common mistakes
+- Matching through database rows and locks.
+- Several threads on one book, which loses determinism and fairness.
+- Finding an order to cancel by scanning the book, with no id lookup map.
 
 #### How it works
 ```mermaid
@@ -226,8 +304,28 @@ Matching requires strict ordering for fairness (price-time priority) and determi
 #### Interview angle
 > "Each symbol's book is matched single-threaded in memory with price-time priority. Inputs are sequenced and journaled first so standbys replay deterministically, and scaling means partitioning symbols across engines."
 
+#### Sources
+- [Order book](https://en.wikipedia.org/wiki/Order_book) — Wikipedia
+- [Order matching system](https://en.wikipedia.org/wiki/Order_matching_system) — Wikipedia
+- [The LMAX architecture](https://martinfowler.com/articles/lmax.html) — Martin Fowler
+
 ### Low-latency techniques — LMAX Disruptor, GC avoidance, kernel bypass
 Trading systems compete on **microseconds**. Low-latency techniques remove every source of delay and jitter: **lock-free inter-thread messaging** (the LMAX Disruptor ring buffer), **mechanical sympathy** (cache-friendly data layouts, avoiding false sharing, pinning threads to cores), **avoiding GC pauses** (object pooling, off-heap memory, allocation-free hot paths), and **kernel bypass networking** (Solarflare/OpenOnload, DPDK, RDMA) to skip the OS network stack. FPGAs go further for the most latency-sensitive paths.
+
+#### Intuition
+A Formula 1 pit stop. Every movement is rehearsed, every tool is already in hand, nobody waits for anybody, and nothing is fetched during the stop. The aim is not only speed, but the same speed every time.
+
+#### Must know
+- Trading systems compete on **microseconds** and on consistency (low jitter).
+- **Disruptor**: a preallocated ring buffer that passes messages between threads with no locks.
+- **No allocation on the hot path**, so there are no garbage-collection pauses.
+- Pin threads to cores, and let them **busy-spin** in place of sleeping.
+- **Kernel bypass** networking skips the operating system's network stack.
+
+#### Common mistakes
+- Using these techniques where milliseconds are perfectly fine.
+- Allocating objects or logging inside the hot path.
+- Measuring the average and not the p99.9 and maximum.
 
 #### How it works
 ```mermaid
@@ -282,8 +380,31 @@ Design the hot path to allocate nothing in steady state: preallocate and reuse o
 #### Interview angle
 > "For microsecond paths I'd use Disruptor ring buffers with pinned, busy-spinning threads, an allocation-free hot path and kernel-bypass networking, measured at p99.9 with HDR histograms."
 
+#### Sources
+- [LMAX Disruptor: high performance alternative to bounded queues](https://lmax-exchange.github.io/disruptor/disruptor.html) — LMAX
+- [The LMAX architecture](https://martinfowler.com/articles/lmax.html) — Martin Fowler
+- [HdrHistogram](https://github.com/HdrHistogram/HdrHistogram) — HdrHistogram, GitHub
+
 ### Market data fan-out — multicast, conflation, sequence numbers
 Market data (quotes, trades, order book updates) must be delivered to **many consumers fast and fairly**. Exchanges publish via **UDP multicast** (one packet reaches all subscribers on the network), with **sequence numbers** so receivers detect gaps and recover via **retransmission or snapshot** services. Downstream, distribution to slower consumers (UIs, retail apps over WebSockets) uses **conflation**: sending only the latest state per instrument at a controlled rate instead of every tick.
+
+#### Intuition
+A stadium announcer speaks once and everyone hears it together (multicast). Each announcement is numbered, so you know if you missed one. For people far away on a slow line, you send only the current score every few seconds, not every play.
+
+#### Must know
+- Exchanges publish prices over **UDP multicast**: one packet reaches every subscriber.
+- UDP can drop packets, so each message has a **sequence number**.
+- A gap is repaired by a retransmission request or a fresh **snapshot**.
+- **Conflation** for slow consumers: send only the latest value per symbol at a fixed rate.
+- A slow consumer must never slow the publisher.
+
+#### Numbers to quote
+- Retail apps typically get the latest quote per symbol every 100–250 ms.
+
+#### Common mistakes
+- Streaming every tick to mobile clients, so queues grow without limit.
+- Incremental updates with no snapshot on reconnect.
+- No gap detection on an unreliable feed.
 
 #### How it works
 ```mermaid
@@ -335,3 +456,8 @@ UDP multicast doesn't guarantee delivery or order. Sequence numbers let receiver
 
 #### Interview angle
 > "Colocated consumers get sequenced UDP multicast with A/B arbitration and snapshot recovery. Retail clients get conflated latest-value updates over WebSockets, so a slow phone can never back up the publisher."
+
+#### Sources
+- [IP multicast](https://en.wikipedia.org/wiki/IP_multicast) — Wikipedia
+- [Market data](https://en.wikipedia.org/wiki/Market_data) — Wikipedia
+

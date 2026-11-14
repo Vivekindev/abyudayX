@@ -3,6 +3,21 @@
 ### Four pillars — encapsulation, abstraction, inheritance, polymorphism
 The four pillars of object-oriented design are: **encapsulation** (bundle state with the behaviour that guards it; hide internals behind a small API), **abstraction** (expose *what* something does, not *how*: interfaces and abstract types), **inheritance** (a subtype reuses and specialises a supertype: an is-a relationship), and **polymorphism** (code written against an abstraction works with any implementation, chosen at runtime). In LLD interviews they show up as clean class boundaries, interfaces at the seams, and no `if (type == …)` chains.
 
+#### Intuition
+A car. You drive with the pedals and wheel, not by touching the engine (encapsulation and abstraction). A sports car is still a car (inheritance). And "press the accelerator" works on any car, whatever is under the bonnet (polymorphism).
+
+#### Must know
+- **Encapsulation**: keep state private, and change it only through methods that protect its rules.
+- **Abstraction**: expose what something does, not how. Interfaces do this.
+- **Inheritance**: a subtype reuses and specialises a parent type (an "is-a" relationship).
+- **Polymorphism**: code written against an interface works with any implementation.
+- In interviews: private fields, interfaces at the boundaries, and no chains of `if (type == ...)`.
+
+#### Common mistakes
+- Public setters on everything, so callers can break the object's rules.
+- The same `switch (type)` repeated in several places.
+- Deep inheritance trees where a small interface would do.
+
 #### How it works
 ```mermaid
 classDiagram
@@ -84,8 +99,27 @@ Callers depend on an abstraction (interface) and invoke its methods; each varian
 #### Interview angle
 > "I keep state private behind methods that enforce invariants, put interfaces at the seams like payment methods and notifiers, and replace type switches with polymorphism so a new type is just a new class."
 
+#### Sources
+- [Object-oriented programming concepts](https://docs.oracle.com/javase/tutorial/java/concepts/index.html) — Oracle Java tutorials
+- [Object-oriented programming](https://en.wikipedia.org/wiki/Object-oriented_programming) — Wikipedia
+
 ### SOLID principles — SRP, OCP, LSP, ISP, DIP
 SOLID is five design principles for maintainable OO code: **S**ingle Responsibility (a class has one reason to change), **O**pen/Closed (open for extension, closed for modification), **L**iskov Substitution (subtypes must be usable wherever the base type is expected without breaking behaviour), **I**nterface Segregation (many small, client-specific interfaces over one fat interface), and **D**ependency Inversion (high-level modules depend on abstractions, not concrete low-level details; inject dependencies).
+
+#### Intuition
+Five house rules for code that will keep changing. One job per class. Add new features by adding code, not by editing old code. A stand-in must be able to do the original's job. Keep interfaces small. Depend on a socket shape, not on one brand of plug.
+
+#### Must know
+- **S**ingle responsibility: a class has **one reason to change**.
+- **O**pen/closed: **extend by adding** a class, not by editing existing code.
+- **L**iskov substitution: a subtype must work wherever its parent type is expected.
+- **I**nterface segregation: several small interfaces beat one fat one.
+- **D**ependency inversion: depend on abstractions, and **inject** the concrete implementation.
+
+#### Common mistakes
+- A "god class" that validates, saves, charges and sends email.
+- A subclass that throws "not supported" for a parent method.
+- Creating concrete dependencies with `new` inside business logic, which blocks testing.
 
 #### How it works
 ```mermaid
@@ -162,8 +196,27 @@ High-level logic depends on interfaces (e.g. `PaymentGateway`, `Clock`, `OrderRe
 #### Interview angle
 > "I apply SOLID where change is likely: strategies for the parts that vary, small interfaces, and constructor-injected abstractions so the core logic is testable with fakes. I don't create interfaces for everything."
 
+#### Sources
+- [SOLID](https://en.wikipedia.org/wiki/SOLID) — Wikipedia
+- [Solid relevance](https://blog.cleancoder.com/uncle-bob/2020/10/18/Solid-Relevance.html) — Robert C. Martin
+
 ### Composition over inheritance — has-a beats deep hierarchies
 "Favour composition over inheritance" means building behaviour by **combining objects that have-a collaborator** (delegating to them) rather than **inheriting from a base class**. Composition gives looser coupling, behaviour that can change at runtime, and avoids deep, fragile hierarchies and class explosion. Inheritance is still right for genuine, stable is-a relationships.
+
+#### Intuition
+Building with LEGO bricks, not carving one statue. You snap small pieces together in any combination, and swap a piece without re-carving the whole thing.
+
+#### Must know
+- Build behaviour by **combining objects that each do one thing**, and delegating to them.
+- "Has-a" is looser coupling than "is-a".
+- It avoids a **class explosion** when features combine (email + retry + rate limit).
+- Behaviour can be swapped at runtime.
+- Inheritance is still right for a genuine, stable "is-a" relationship.
+
+#### Common mistakes
+- A new subclass for every combination of features.
+- Inheriting only to reuse a few lines of code.
+- A base-class change that silently breaks subclasses.
 
 #### How it works
 ```mermaid
@@ -229,10 +282,30 @@ When there's a genuine, stable is-a relationship where subtypes fully honour the
 #### Interview angle
 > "I combine behaviours by composing small objects behind an interface, like a retrying notifier wrapping an email notifier, and keep inheritance for shallow, true is-a hierarchies."
 
+#### Sources
+- [Composition over inheritance](https://en.wikipedia.org/wiki/Composition_over_inheritance) — Wikipedia
+- [Decorator](https://refactoring.guru/design-patterns/decorator) — Refactoring.Guru
+
+
 ## Design patterns
 
 ### Creational — Singleton, Factory, Builder
 Creational patterns control **how objects are created**. **Singleton** ensures exactly one instance (a config registry or ID generator), but is often overused and hurts testability. **Factory** (simple factory, factory method, abstract factory) centralises the decision of *which* concrete class to create, so callers depend on an interface. **Builder** constructs complex objects step by step with readable, validated, often immutable results, replacing telescoping constructors.
+
+#### Intuition
+Three ways of getting an object. The singleton is the one shared office printer. The factory is a counter where you say "a bike, please" and are handed the right kind. The builder is ordering a custom sandwich step by step, checked before it is wrapped.
+
+#### Must know
+- Creational patterns control **how objects get created**.
+- **Singleton**: exactly one instance. Often overused, and it hurts testing.
+- **Factory**: one place decides **which concrete class** to create. Callers see only the interface.
+- **Builder**: constructs an object with many optional fields step by step, and validates at the end.
+- Prefer one injected instance over a static singleton.
+
+#### Common mistakes
+- Singletons as global mutable state, so tests interfere with each other.
+- A constructor with eight parameters, where a builder would be readable.
+- `new ConcreteClass()` scattered across the code.
 
 #### How it works
 ```mermaid
@@ -321,8 +394,27 @@ When an object has many parameters, especially optional ones (telescoping constr
 #### Interview angle
 > "I use a factory where the concrete type depends on input, a builder for objects with many optional fields that need validation, and avoid static singletons in favour of one injected instance."
 
+#### Sources
+- [Creational design patterns](https://refactoring.guru/design-patterns/creational-patterns) — Refactoring.Guru
+- [Builder pattern](https://en.wikipedia.org/wiki/Builder_pattern) — Wikipedia
+
 ### Strategy pattern — swap algorithms at runtime
 The Strategy pattern defines a **family of interchangeable algorithms** behind a common interface, so the context object delegates to whichever strategy it's given, and the algorithm can be **chosen or swapped at runtime** without changing the context. It's the standard cure for `if/else` chains over algorithm types, and the most common pattern in LLD rounds (pricing, fees, routing, scheduling, matching).
+
+#### Intuition
+A sat-nav with a "route type" setting: fastest, shortest or no tolls. The app is the same. You plug in a different route-finding method.
+
+#### Must know
+- Put each **interchangeable algorithm behind one interface**.
+- The context object **delegates** to whichever strategy it was given.
+- The algorithm can be chosen or swapped at runtime.
+- It replaces `if/else` chains over algorithm types.
+- The most common pattern in LLD rounds: pricing, fee calculation, splitting, scheduling.
+
+#### Common mistakes
+- A growing `if (type == ...)` block inside the context class.
+- Strategy selection duplicated across callers. Keep it in one factory.
+- Using it for two trivial variants where a plain condition is clearer.
 
 #### How it works
 ```mermaid
@@ -395,8 +487,27 @@ Implement a new class of the `PricingStrategy` interface, register it in the fac
 #### Interview angle
 > "Whatever varies, like pricing, splitting or scheduling, goes behind a strategy interface, selected in one factory, so a new rule is a new class with its own tests."
 
+#### Sources
+- [Strategy](https://refactoring.guru/design-patterns/strategy) — Refactoring.Guru
+- [Strategy pattern](https://en.wikipedia.org/wiki/Strategy_pattern) — Wikipedia
+
 ### Observer pattern — notify subscribers of changes
 The Observer pattern lets a **subject** maintain a list of **observers** and **notify them automatically** when its state changes, without knowing their concrete types. It decouples the source of events from the reactions (UI updates, notifications, analytics, cache invalidation). In distributed systems the same idea becomes pub/sub and event-driven architecture.
+
+#### Intuition
+A newspaper subscription. The publisher does not know or care who the readers are. Anyone who subscribes gets each new issue, and can cancel at any time.
+
+#### Must know
+- A **subject keeps a list of observers and notifies them** when something changes.
+- The subject does not know the observers' concrete types.
+- It decouples the source of an event from the reactions to it.
+- Decide: **synchronous or asynchronous** notification. A slow synchronous observer slows the subject.
+- One failing observer must not stop the others.
+
+#### Common mistakes
+- A slow observer blocking the main operation.
+- One exception aborting the rest of the notifications.
+- Observers that are never unsubscribed, which leaks memory.
 
 #### How it works
 ```mermaid
@@ -474,8 +585,27 @@ It's the same decoupling idea at a different scale: publishers emit events witho
 #### Interview angle
 > "Order status changes publish to observers through an interface, notified asynchronously with per-observer error isolation, so adding loyalty points doesn't touch OrderService. At service scale the same idea becomes Kafka."
 
+#### Sources
+- [Observer](https://refactoring.guru/design-patterns/observer) — Refactoring.Guru
+- [Observer pattern](https://en.wikipedia.org/wiki/Observer_pattern) — Wikipedia
+
 ### State pattern — behaviour changes with lifecycle state
 The State pattern makes an object's behaviour depend on its **current state**, with each state implemented as its own class handling the allowed operations and **deciding transitions**. It replaces sprawling `switch (status)` blocks in every method with polymorphic state objects, making illegal operations explicit. Classic LLD uses: vending machine, ATM, order lifecycle, elevator, traffic light, document workflow.
+
+#### Intuition
+A vending machine. Pressing "select" does nothing before you pay, dispenses after you pay, and is ignored while it is dispensing. The same button behaves differently depending on which stage the machine is in.
+
+#### Must know
+- An object's behaviour depends on its **current state**.
+- **Each state is its own class**, handling the operations allowed in that state.
+- Each state decides the **next state**.
+- It replaces `switch (status)` blocks repeated in every method.
+- For a simple lifecycle, an enum plus a table of allowed transitions is often clearer.
+
+#### Common mistakes
+- The same `switch (state)` copied into every method, with one branch missing a check.
+- Illegal operations silently allowed. Default them to "not allowed".
+- Transitions that are not thread-safe.
 
 #### How it works
 ```mermaid
@@ -546,8 +676,27 @@ Serialise operations on the machine: synchronise the methods that delegate to th
 #### Interview angle
 > "Lifecycle objects like a vending machine or ATM get a class per state that returns the next state and rejects illegal operations by default. Transitions are synchronised, and I keep the state diagram next to the code."
 
+#### Sources
+- [State](https://refactoring.guru/design-patterns/state) — Refactoring.Guru
+- [State pattern](https://en.wikipedia.org/wiki/State_pattern) — Wikipedia
+
 ### Decorator & Adapter — wrap to add behaviour or translate interfaces
 Both patterns **wrap** an object. A **Decorator** implements the **same interface** as the wrapped object and **adds behaviour** before or after delegating (logging, caching, retries, metrics, compression), and decorators can be stacked. An **Adapter** **converts one interface into another** that clients expect, typically to integrate a third-party or legacy API without leaking its shape into your code.
+
+#### Intuition
+A phone case and a travel plug. The case wraps the phone and adds protection while every button still works (decorator). The travel plug changes the shape of the pins so your charger fits a foreign socket (adapter).
+
+#### Must know
+- Both patterns **wrap** another object.
+- **Decorator**: the **same interface**, with added behaviour such as logging, caching or retries.
+- Decorators can be stacked.
+- **Adapter**: **converts one interface into another** that the caller expects.
+- Typical use: an adapter per vendor SDK, and decorators for cross-cutting concerns.
+
+#### Common mistakes
+- Vendor SDK types leaking through the whole codebase.
+- Retry and metrics code copied into every client class.
+- Forgetting that the order of the wrappers changes the behaviour.
 
 #### How it works
 ```mermaid
@@ -634,8 +783,27 @@ Create a `CachingProductRepository` that implements the same `ProductRepository`
 #### Interview angle
 > "Each provider sits behind an adapter that maps it to our PaymentGateway interface, and cross-cutting concerns like retries, metrics and circuit breaking are decorators stacked once around any adapter."
 
+#### Sources
+- [Decorator](https://refactoring.guru/design-patterns/decorator) — Refactoring.Guru
+- [Adapter](https://refactoring.guru/design-patterns/adapter) — Refactoring.Guru
+
 ### Chain of Responsibility — pass requests along handlers
 Chain of Responsibility passes a request **along a chain of handlers**; each handler either **processes it, rejects it, or passes it to the next** handler. The sender doesn't know which handler will act. It's the structure behind middleware pipelines (HTTP filters, Express/Koa middleware, servlet filters), validation chains, approval workflows and support escalation.
+
+#### Intuition
+Airport security in stages: ticket check, passport check, bag scan. Each station either stops you or waves you on to the next. You do not know in advance which one will stop you.
+
+#### Must know
+- A request passes **along a chain of handlers**.
+- Each handler **processes it, rejects it or passes it on**.
+- The sender does not know which handler will act.
+- It is the structure behind middleware and filter pipelines.
+- **Order matters**: cheap checks first, and a final default handler at the end.
+
+#### Common mistakes
+- No terminal handler, so a request falls off the end unhandled.
+- An expensive check placed before a cheap rejection.
+- No logging of which handler rejected the request.
 
 #### How it works
 ```mermaid
@@ -702,10 +870,33 @@ Model approvers as a chain ordered by authority limit: each handler checks if th
 #### Interview angle
 > "Request validation is a chain: auth, rate limit, validation, then fraud. Cheap rejections come first, a terminal handler makes sure nothing falls off the end, and each handler can be reordered or replaced."
 
+#### Sources
+- [Chain of responsibility](https://refactoring.guru/design-patterns/chain-of-responsibility) — Refactoring.Guru
+- [Chain-of-responsibility pattern](https://en.wikipedia.org/wiki/Chain-of-responsibility_pattern) — Wikipedia
+
+
 ## Machine coding & concurrency
 
 ### Machine-coding approach — requirements, entities, classes, code, tests in 90 minutes
 A machine-coding round asks you to build a **working, extensible, well-structured program** (parking lot, Splitwise, snake and ladder, rate limiter, LRU cache, elevator, BookMyShow) in 60–120 minutes. Evaluators look for **working code first**, then clean modelling (entities, responsibilities), extensibility (patterns where change is likely), correctness on edge cases, concurrency awareness, and a demo or tests. A time-boxed process keeps you from over-designing or running out of time.
+
+#### Intuition
+A timed cooking contest. A simple finished dish beats an ambitious half-cooked one. Read the brief, pick the dish, get something edible on the plate, then improve it.
+
+#### Must know
+- Goal: a **working, well-structured, extensible program** in limited time.
+- **Working code comes first.** Get the main flow running end to end early.
+- Order: clarify requirements → entities → core flow → features → tests or a demo.
+- Add interfaces **only where the requirements are likely to vary**.
+- Make shared state thread-safe, and show it with a small test.
+
+#### Numbers to quote
+- A rough 90-minute split: 10 clarifying, 10 on entities, 50 coding, 15 on tests and demo, 5 explaining.
+
+#### Common mistakes
+- A perfect class diagram and no running code at the end.
+- Everything in one class or one main method.
+- A pattern and an interface for every class.
 
 #### How it works
 ```mermaid
@@ -768,8 +959,27 @@ Clear domain modelling (entities with responsibilities, invariants protected), s
 #### Interview angle
 > "I clarify scope, sketch entities and the one or two variation points, get the happy path running end to end by mid-round, then add edge cases, thread safety and a demo or test."
 
+#### Sources
+- [Awesome low level design](https://github.com/ashishps1/awesome-low-level-design) — Ashish Pratap Singh, GitHub
+- [The catalog of design patterns](https://refactoring.guru/design-patterns/catalog) — Refactoring.Guru
+
 ### Java concurrency toolkit — locks, atomics, ConcurrentHashMap, executors
 Java's `java.util.concurrent` gives building blocks for safe concurrent code: **locks** (`synchronized`, `ReentrantLock`, `ReadWriteLock`, `StampedLock`), **atomics** (`AtomicLong`, `AtomicReference`, `LongAdder`) for lock-free updates via CAS, **concurrent collections** (`ConcurrentHashMap`, `CopyOnWriteArrayList`, `BlockingQueue`), **executors** (thread pools, `CompletableFuture`, virtual threads in Java 21), and **synchronizers** (`CountDownLatch`, `Semaphore`, `CyclicBarrier`). Choosing the right one is a staple of machine-coding and LLD interviews.
+
+#### Intuition
+A workshop's safety equipment. A lock is a "one person at a time" sign. An atomic is a counter that cannot be mis-clicked. A concurrent map is a shelf many people can use at once. An executor is a team of workers with a job queue.
+
+#### Must know
+- **Locks** (`synchronized`, `ReentrantLock`) protect a group of steps that must happen together.
+- **Atomics** (`AtomicLong`) update a single value safely with no lock.
+- **`ConcurrentHashMap`** is a thread-safe map. Use `computeIfAbsent` and `merge` for check-then-update.
+- **Executors** run tasks on a pool of threads. Use a bounded queue.
+- A `BlockingQueue` handles producer-consumer hand-off, and a `Semaphore` caps concurrency.
+
+#### Common mistakes
+- `if (!map.containsKey(k)) map.put(k, v)` on a concurrent map, which is still a race.
+- An unbounded executor queue, which hides overload until memory runs out.
+- Taking two locks in different orders in different places, which deadlocks.
 
 #### How it works
 | Need | Tool | Notes |
@@ -840,8 +1050,28 @@ No. Each call is thread-safe on its own, but the combination is a check-then-act
 #### Interview angle
 > "I reach for the highest-level tool that fits: ConcurrentHashMap with merge or computeIfAbsent, LongAdder for hot counters, bounded BlockingQueues for producer-consumer, and Semaphores to cap calls to a dependency."
 
+#### Sources
+- [Package java.util.concurrent](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/package-summary.html) — Java 21 API docs
+- [Lesson: concurrency](https://docs.oracle.com/javase/tutorial/essential/concurrency/index.html) — Oracle Java tutorials
+- [ConcurrentHashMap](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html) — Java 21 API docs
+
 ### Thread-safe singleton — holder idiom, enum, double-checked locking
 A thread-safe singleton must guarantee **exactly one instance** even when multiple threads request it simultaneously, and publish it safely (other threads see a fully constructed object). Common Java approaches: **eager initialisation**, the **initialization-on-demand holder idiom** (lazy, no locking, JVM class-loading guarantees), the **enum singleton** (Effective Java's recommendation: serialisation and reflection safe), and **double-checked locking** with a `volatile` field.
+
+#### Intuition
+Two people both see the office has no coffee machine, and each goes out to buy one. You end up with two. A thread-safe singleton makes sure only one is ever bought, however many people notice at once.
+
+#### Must know
+- It must give **exactly one instance** even when many threads ask at the same moment.
+- **Enum singleton**: the simplest safe form.
+- **Holder idiom**: lazy and thread-safe with no locking, using class loading.
+- **Double-checked locking** works only if the field is **`volatile`**.
+- In real code, let the dependency-injection container own the single instance.
+
+#### Common mistakes
+- `if (instance == null) instance = new X()` with no synchronisation.
+- Double-checked locking without `volatile`, which can expose a half-built object.
+- A `synchronized` getter on every call, when the holder idiom has no such cost.
 
 #### How it works
 ```java
@@ -924,8 +1154,28 @@ The JVM guarantees that class initialisation happens once, under an internal loc
 #### Interview angle
 > "I'd use the enum or holder idiom: lazy, thread-safe and lock-free. Double-checked locking needs volatile to avoid publishing a half-built object, and in real code I'd let the DI container own the single instance."
 
+#### Sources
+- [Initialization-on-demand holder idiom](https://en.wikipedia.org/wiki/Initialization-on-demand_holder_idiom) — Wikipedia
+- [The "double-checked locking is broken" declaration](https://www.cs.umd.edu/~pugh/java/memoryModel/DoubleCheckedLocking.html) — Bill Pugh et al.
+- [Double-checked locking](https://en.wikipedia.org/wiki/Double-checked_locking) — Wikipedia
+
 ### Per-resource locking — CAS on the resource instead of one global lock
 Instead of one **global lock** that serialises all operations (e.g. `synchronized bookSeat()` on the whole theatre), **lock per resource** (per seat, per account, per show) or use **compare-and-set (CAS)** on the resource's state, so operations on different resources proceed in parallel and only conflicting operations contend. This is how booking systems, inventory, and wallet transfers scale in machine-coding rounds and in real databases (row-level locks, conditional updates).
+
+#### Intuition
+A cinema with one ticket window against a lock on every seat. With one window, everybody queues, even for different seats. With a lock per seat, only people who want the same seat have to compete.
+
+#### Must know
+- A **global lock** makes every operation wait in one queue.
+- **Lock per resource** (per seat, per account), so unrelated operations run in parallel.
+- Or use **compare-and-set**: change the state only if it is still what you expected.
+- For several resources, lock in a **consistent order** to avoid deadlock, and roll back on failure.
+- The database version: `UPDATE ... WHERE status = 'AVAILABLE'`, then check that one row changed.
+
+#### Common mistakes
+- `synchronized` on the whole booking service.
+- Locking two accounts in whichever order they arrive.
+- Holds with no expiry, so a crashed user keeps a seat forever.
 
 #### How it works
 ```mermaid
@@ -996,3 +1246,9 @@ Always acquire locks in a global, consistent order (e.g. by account id), so two 
 
 #### Interview angle
 > "Seats are claimed with a CAS on per-seat state that includes hold expiry, multi-seat bookings take holds in sorted order with rollback, and transfers lock accounts in id order. No global lock."
+
+#### Sources
+- [Compare-and-swap](https://en.wikipedia.org/wiki/Compare-and-swap) — Wikipedia
+- [AtomicReference](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicReference.html) — Java 21 API docs
+- [Deadlock](https://docs.oracle.com/javase/tutorial/essential/concurrency/deadlock.html) — Oracle Java tutorials
+
