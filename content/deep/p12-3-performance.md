@@ -3,6 +3,21 @@
 ### Profiling — CPU flame graphs (async-profiler, py-spy), heap dumps, I/O tracing (strace, perf)
 Profiling measures **where a program actually spends resources** (CPU time, memory allocations, lock waits, I/O) instead of guessing. Sampling profilers (async-profiler for the JVM, py-spy for Python, pprof for Go, perf for native code) capture stack traces many times per second with low overhead, safe enough for production. Heap dumps and allocation profiles find memory leaks. strace, perf and eBPF tools trace system calls and I/O.
 
+#### Intuition
+Checking where your money actually goes by looking at the bank statement. Guessing usually blames the wrong thing. The statement shows the real biggest expense.
+
+#### Must know
+- Profiling **measures where a program really spends** CPU, memory and waiting time.
+- **Measure before optimising.** Guesses about the slow part are often wrong.
+- Sampling profilers have low overhead and are safe to run in production.
+- Pick the profile by symptom: CPU, wall-clock (waiting), memory allocation, or locks.
+- A CPU profile does not show time spent waiting.
+
+#### Common mistakes
+- Optimising code that was never measured.
+- Using a CPU profile to explain latency that is really lock or I/O waiting.
+- Profiling under a load that looks nothing like production.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -63,8 +78,28 @@ Time is being spent waiting, not computing: on locks, I/O, network calls, connec
 #### Interview angle
 > "I never optimise by guessing: a 30-second sampling profile under real load, CPU or wall-clock depending on the symptom, then fix the widest frame and profile again."
 
+#### Sources
+- [async-profiler](https://github.com/async-profiler/async-profiler) — async-profiler, GitHub
+- [Linux perf examples](https://www.brendangregg.com/perf.html) — Brendan Gregg
+- [py-spy](https://github.com/benfred/py-spy) — Ben Frederickson, GitHub
+
 ### Flame graph — visualize hot code paths; identify unexpected CPU consumers in production
 A flame graph (Brendan Gregg) visualises sampled stack traces: each box is a function, the **width is the proportion of samples** (time) it appeared in, and boxes are stacked by call hierarchy (callers below, callees above). Wide plateaus at the top are where CPU is actually burned. The x-axis is **not time**; it's sorted alphabetically to merge identical stacks.
+
+#### Intuition
+A stacked bar picture of where time went. The wider a block, the more time that function took. You look for the widest blocks at the top, the way you spot the biggest slice of a pie chart.
+
+#### Must know
+- A picture of thousands of sampled stack traces merged together.
+- **Width = share of samples**, which means share of time.
+- Callers are below, the functions they call are above.
+- **Wide blocks at the top** are where the CPU is actually burned.
+- The horizontal axis is **not time**. It is sorted alphabetically.
+
+#### Common mistakes
+- Reading left to right as a timeline.
+- Giving meaning to the colours, which are usually arbitrary.
+- Using an on-CPU graph to explain time spent blocked. Use an off-CPU graph.
 
 #### How it works
 ```mermaid
@@ -117,8 +152,27 @@ It shows stack traces where threads were blocked rather than running (waiting on
 #### Interview angle
 > "In a flame graph I look for wide plateaus at the top. That's where CPU actually goes, and it's frequently serialization or logging rather than the code everyone suspected."
 
+#### Sources
+- [Flame graphs](https://www.brendangregg.com/flamegraphs.html) — Brendan Gregg
+- [CPU flame graphs](https://www.brendangregg.com/FlameGraphs/cpuflamegraphs.html) — Brendan Gregg
+
 ### Load testing — k6, Locust, Apache JMeter, wrk; always test in staging environment first
 Load testing simulates expected traffic to verify the system meets **performance targets** (throughput, latency percentiles, error rate) at that load, and to find bottlenecks before users do. Tools: **k6** (JavaScript scripts, great for CI), **Locust** (Python), **JMeter** (GUI, mature), **wrk/wrk2** (raw HTTP benchmarking), **Gatling** (Scala/Java).
+
+#### Intuition
+A dress rehearsal with a full audience. Before opening night you fill the theatre with the crowd you expect and check that the doors, seats and exits cope.
+
+#### Must know
+- It simulates the **expected traffic** to check throughput, latency and error rate.
+- It finds bottlenecks before users do.
+- Be realistic: production-like data size, request mix and hot keys.
+- Use an **open model**: send at a fixed arrival rate, whatever the response time.
+- Set pass/fail thresholds on p99 and error rate, not on averages.
+
+#### Common mistakes
+- Testing only the home page while the real bottleneck is checkout.
+- A tiny test database, where every query looks fast.
+- A closed-loop test that slows down with the system and hides the tail.
 
 #### How it works
 ```mermaid
@@ -177,8 +231,30 @@ In closed-loop load tests, each virtual user waits for a response before sending
 #### Interview angle
 > "Load tests replay the production request mix against production-sized data at a constant arrival rate, with thresholds on p99 and error rate rather than averages."
 
+#### Sources
+- [Grafana k6 documentation](https://grafana.com/docs/k6/latest/) — Grafana k6
+- [Open and closed models](https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/open-vs-closed/) — Grafana k6 docs
+
 ### Stress testing — find breaking point (max RPS before error rate spikes)
 Stress testing pushes load **beyond expected levels** until the system breaks, to learn **where the limit is, which component fails first, and how it fails** (gracefully shedding load, or collapsing and not recovering). It answers "what's our real headroom?" and "does the system recover after the overload ends?"
+
+#### Intuition
+Loading a bridge with heavier and heavier lorries until it creaks. You want to know the weight at which it creaks, which part gives first, and whether it springs back when the load is removed.
+
+#### Must know
+- Push load **beyond the expected peak** until the system breaks.
+- Find the **knee** (latency starts climbing) and the **breaking point** (errors spike).
+- Identify **which component fails first**.
+- Check how it fails: clean rejections, or everything timing out?
+- Check that it **recovers by itself** when the load drops.
+
+#### Numbers to quote
+- Run production at no more than about 50–70% of the breaking point.
+
+#### Common mistakes
+- Only recording the maximum requests per second.
+- No load shedding, so overload becomes a total collapse.
+- Client retries with no backoff, which keep the system down after the load has gone.
 
 #### How it works
 ```mermaid
@@ -230,8 +306,27 @@ Metastable failure: retries and timeouts keep the effective load above capacity 
 #### Interview angle
 > "A stress test finds the knee, the first bottleneck and the failure mode. What I want to see is clean 503s under overload and automatic recovery, not a retry storm that keeps it down."
 
+#### Sources
+- [Stress testing](https://grafana.com/docs/k6/latest/testing-guides/test-types/stress-testing/) — Grafana k6 docs
+- [Addressing cascading failures](https://sre.google/sre-book/addressing-cascading-failures/) — Google SRE book
+
 ### Soak testing — sustained load for hours; catch memory leaks, connection pool exhaustion
 Soak (endurance) testing runs a **realistic, steady load for a long period** (hours to days) to find problems that only appear over time: memory leaks, connection or file descriptor leaks, growing queues, disk filling with logs, cache bloat, degrading GC behaviour, and slow performance drift.
+
+#### Intuition
+Leaving a tap dripping into a bucket overnight. In five minutes you see nothing. By morning the bucket has overflowed. Some problems only show up with time.
+
+#### Must know
+- A **steady, realistic load for hours or days**.
+- It finds problems that build up slowly: memory leaks, connection leaks, growing queues, filling disks.
+- Watch for anything that **trends upward** under constant load.
+- Key signals: heap after garbage collection, open connections, file descriptors, disk, latency.
+- Two heap dumps taken hours apart show what is accumulating.
+
+#### Common mistakes
+- Trusting a 30-minute test for a service that runs for weeks.
+- Watching only averages and missing the slow trend.
+- Unbounded in-memory maps and caches with no eviction.
 
 #### How it works
 ```mermaid
@@ -277,8 +372,27 @@ Watch heap usage after full GCs over time under constant load: a sawtooth whose 
 #### Interview angle
 > "Soak tests run 12+ hours at steady load and I watch heap-after-GC, file descriptors and pool usage for upward trends. Two heap dumps then show exactly what's leaking."
 
+#### Sources
+- [Soak testing](https://grafana.com/docs/k6/latest/testing-guides/test-types/soak-testing/) — Grafana k6 docs
+- [Eclipse Memory Analyzer](https://eclipse.dev/mat/) — Eclipse MAT
+
 ### Spike testing — sudden 10× traffic increase; test auto-scaling and DB connection pool behavior
 Spike testing applies a **sudden, sharp increase** in load (e.g. 10× in seconds) to see how the system copes **before autoscaling catches up**: do queues absorb it, does load shedding protect the core, how fast does capacity scale, do connection pools and databases survive a burst of new connections, and does it settle back afterwards.
+
+#### Intuition
+A stadium crowd arriving at one small café at half-time. More staff are on their way, but for the first few minutes the queue is out of the door. The test is what happens in those minutes.
+
+#### Must know
+- A **sudden, sharp jump** in load, within seconds.
+- The danger is the **gap before autoscaling catches up**.
+- Defences: pre-scale for known events, queue work, shed non-critical load.
+- Scale on a leading signal such as request rate, not on CPU.
+- New instances each open database connections, so **protect the database with a pooler**.
+
+#### Common mistakes
+- Relying on reactive autoscaling alone for a spike that takes 30 seconds.
+- Scaling the app tier out until it exhausts database connections.
+- Causing your own spike, such as a push notification to every user at once.
 
 #### How it works
 ```mermaid
@@ -331,8 +445,30 @@ Each new instance opens its own connection pool. Scaling from 10 to 100 pods wit
 #### Interview angle
 > "Spike tests expose the minutes before autoscaling catches up. I pre-scale for known events, scale on RPS rather than CPU, shed non-critical load and put PgBouncer in front of the database."
 
+#### Sources
+- [Spike testing](https://grafana.com/docs/k6/latest/testing-guides/test-types/spike-testing/) — Grafana k6 docs
+- [Horizontal pod autoscaling](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) — Kubernetes docs
+
 ### Little's Law in practice — L = λW: if p99 latency increases, L (queue depth) grows; fix by reducing W or λ
 Little's Law: in a stable system, **L = λ × W**, the average number of items in the system (in-flight requests, queue length) equals the arrival rate times the average time each spends in the system. It's a practical tool for sizing pools, queues and concurrency, and for explaining why latency increases cause resource exhaustion.
+
+#### Intuition
+A café where 10 customers arrive each minute and each stays 5 minutes will have about 50 people inside. If people start staying 20 minutes, there are 200 inside, with the same arrival rate.
+
+#### Must know
+- **L = λ × W**: items in the system = arrival rate × time each one spends.
+- It gives the concurrency you need: requests in flight = requests per second × latency.
+- Use it to **size pools**: connections needed = queries per second × query time.
+- When a dependency slows down, **required concurrency rises in proportion**.
+- That is why a slow dependency exhausts threads with no change in traffic.
+
+#### Numbers to quote
+- 2,000 requests/s × 50 ms = 100 in flight. At 500 ms it becomes 1,000.
+
+#### Common mistakes
+- Sizing pools by guesswork.
+- Blaming traffic when the latency was what changed.
+- Using the average with no headroom for the tail.
 
 #### How it works
 ```mermaid
@@ -381,8 +517,30 @@ Concurrency equals arrival rate times latency. If traffic stays at 1,000 RPS but
 #### Interview angle
 > "Little's Law sizes pools (rate × latency × headroom) and explains incidents: when a dependency gets ten times slower, required concurrency goes up ten times, so timeouts and bulkheads cap the damage."
 
+#### Sources
+- [Little's law](https://en.wikipedia.org/wiki/Little%27s_law) — Wikipedia
+- [Handling overload](https://sre.google/sre-book/handling-overload/) — Google SRE book
+
 ### Connection pool sizing — formula: pool = (cores × 2) + effective_spindle_count; too large → context switch overhead
 A database can only execute a limited number of queries truly in parallel (roughly its CPU cores plus some overlap for I/O waits). The HikariCP guideline **pool = (DB cores × 2) + effective spindle count** suggests that **small pools** (often 10–30 connections per database) outperform large ones: extra connections just add context switching, lock contention and memory overhead on the database while requests queue anyway.
+
+#### Intuition
+A kitchen with four cooks. Letting 200 waiters shout orders at once does not produce food faster. It only makes the cooks trip over each other. A short orderly queue gets more meals out.
+
+#### Must know
+- A database can run only a **limited number of queries truly in parallel**.
+- **Small pools beat large ones.** Extra connections add contention, not speed.
+- The guideline is for **total connections to the database**, across all app instances.
+- With many instances, put a **connection pooler** (PgBouncer, RDS Proxy) in front.
+- Watch the time requests wait for a connection.
+
+#### Numbers to quote
+- Starting point: (database cores × 2) + 1. An 8-core database wants about 17 active connections.
+
+#### Common mistakes
+- "Fixing" timeouts by raising the pool to hundreds.
+- Forgetting that the pool size is multiplied by the number of pods.
+- A remote call made inside a transaction, which holds a connection.
 
 #### How it works
 ```mermaid
@@ -433,8 +591,30 @@ Put a connection pooler between them and the database (PgBouncer in transaction 
 #### Interview angle
 > "The database wants about cores × 2 active connections in total, not per pod. With many pods I put PgBouncer in front and fix the slow queries that hold connections, rather than growing the pools."
 
+#### Sources
+- [About pool sizing](https://github.com/brettwooldridge/HikariCP/wiki/About-Pool-Sizing) — HikariCP wiki
+- [PgBouncer features](https://www.pgbouncer.org/features.html) — PgBouncer docs
+
 ### Thread pool sizing — I/O-bound: threads = (1 + wait_time/service_time) × cores; CPU-bound: threads ≈ cores
 Thread pool size should match the work type. **CPU-bound** tasks gain nothing beyond about one thread per core (more threads just context switch). **I/O-bound** tasks spend most time waiting, so more threads keep the CPU busy: **threads ≈ cores × (1 + wait time / compute time)** (Goetz's formula). Separate pools for different work types keep a slow I/O dependency from starving CPU work.
+
+#### Intuition
+Cooks who are chopping need one board each, so more cooks than boards is pointless. Cooks who mostly wait for the oven can share a board, so you can have many more of them.
+
+#### Must know
+- **CPU-bound work**: about one thread per core. More only adds switching.
+- **I/O-bound work**: threads mostly wait, so use more.
+- Formula: **threads ≈ cores × (1 + wait time ÷ compute time)**.
+- Use **bounded queues** with a rejection policy.
+- Keep separate pools for different kinds of work. The downstream limit is still the real ceiling.
+
+#### Numbers to quote
+- 8 cores, 10 ms compute and 90 ms waiting per request: 8 × (1 + 9) = 80 threads.
+
+#### Common mistakes
+- One big shared pool for CPU work and I/O work.
+- An unbounded queue, which hides overload until memory runs out.
+- 200 threads all queuing for a 20-connection database pool.
 
 #### How it works
 ```mermaid
@@ -487,8 +667,27 @@ They remove the need to size thread pools for blocking I/O, since virtual thread
 #### Interview angle
 > "CPU pools are sized to cores and I/O pools to cores × (1 + wait/compute), all with bounded queues and separated by work type. Downstream connection limits are still the real ceiling."
 
+#### Sources
+- [Virtual threads](https://docs.oracle.com/en/java/javase/21/core/virtual-threads.html) — Oracle Java 21 docs
+- [ThreadPoolExecutor](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ThreadPoolExecutor.html) — Java 21 API docs
+
 ### Async I/O and non-blocking — event loop (Node.js, Netty, asyncio): single thread handles thousands of I/O connections
 Non-blocking I/O lets a small number of threads handle **thousands of concurrent connections**: instead of a thread blocking on each socket read, an **event loop** asks the OS (epoll, kqueue, io_uring) which sockets are ready and runs callbacks or resumes coroutines only when data is available. Node.js, Netty, Nginx, Python asyncio, Go's runtime and Rust's tokio are built on this model.
+
+#### Intuition
+One waiter serving a whole restaurant. They take an order, hand it to the kitchen and move to the next table, never standing still waiting for a dish. It works well until the waiter stops to cook a meal.
+
+#### Must know
+- A few threads handle **thousands of connections** by never waiting on any one of them.
+- An **event loop** asks the operating system which sockets are ready and works only on those.
+- An idle connection costs very little memory.
+- **Never block the event loop.** One blocking call stalls every request.
+- Move CPU-heavy work to worker threads, and still cap downstream concurrency.
+
+#### Common mistakes
+- A synchronous file read or heavy computation inside a request handler.
+- An "async" framework sitting on a blocking database driver.
+- Not monitoring event-loop lag.
 
 #### How it works
 ```mermaid
@@ -541,8 +740,31 @@ The event loop is blocked for the duration, so no other request, timer or I/O ca
 #### Interview angle
 > "Async I/O gives cheap concurrency for slow or idle connections, but the event loop must never block, so CPU work is offloaded, loop lag is alerted on, and downstream concurrency is still capped."
 
+#### Sources
+- [The Node.js event loop](https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick) — Node.js docs
+- [Don't block the event loop (or the worker pool)](https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop) — Node.js docs
+- [epoll(7)](https://man7.org/linux/man-pages/man7/epoll.7.html) — Linux manual pages
+
 ### N+1 query — detect via slow query log or ORM verbose mode; fix with JOIN, eager loading, or DataLoader
 The N+1 query problem: code fetches a list (1 query) and then runs **one more query per item** to load related data (N queries), typically hidden behind ORM lazy loading or naive GraphQL resolvers. 100 orders → 101 queries; each fast alone, but the round trips add up and hammer the database.
+
+#### Intuition
+Going to the shop for one item, coming home, and going back for the next, a hundred times over. Each trip is short, but one trip with a full list would have been far quicker.
+
+#### Must know
+- Code runs **1 query for a list, then 1 more query per item**.
+- It is usually hidden behind ORM lazy loading or GraphQL resolvers.
+- Each query is fast. The **round trips add up**.
+- Fixes: a JOIN, eager loading, or a single `IN (...)` query.
+- In GraphQL, **DataLoader** batches the lookups.
+
+#### Numbers to quote
+- 100 orders become 101 queries. The fix is 2.
+
+#### Common mistakes
+- Looking only at slow-query logs, where each of these queries looks fine.
+- Eager loading several collections with one JOIN, which multiplies rows.
+- No guard, so the problem returns later.
 
 #### How it works
 ```mermaid
@@ -598,8 +820,27 @@ Each resolver asks DataLoader for a key instead of querying directly. DataLoader
 #### Interview angle
 > "N+1 shows up in traces as a wall of identical DB spans. I fix it with eager loading or an IN batch (DataLoader in GraphQL) and lock it in with query-count assertions in tests."
 
+#### Sources
+- [DataLoader](https://github.com/graphql/dataloader) — GraphQL, GitHub
+- [The N+1 query problem](https://vladmihalcea.com/n-plus-1-query-problem/) — Vlad Mihalcea
+
 ### Batch APIs — reduce round trips: fetch 100 items in one request vs 100 individual requests (10× improvement)
 Batch APIs let a client fetch or modify **many items in one request** (`GET /products?ids=1,2,3…` or `POST /products:batchGet`), eliminating per-request overhead: network round trips, TLS and HTTP processing, auth checks, and per-call database queries. For chatty service-to-service communication, batching is often the single biggest latency win.
+
+#### Intuition
+One delivery van carrying a hundred parcels, as against a hundred vans carrying one each. The driving, parking and paperwork happen once.
+
+#### Must know
+- One request fetches or changes **many items**.
+- It removes the per-request cost: network round trip, auth check, separate query.
+- On the server, turn it into **one set-based query**, not a loop.
+- **Cap the batch size.**
+- Return **per-item results and errors**, so one bad item does not fail the rest.
+
+#### Common mistakes
+- A batch endpoint that loops single queries inside.
+- All-or-nothing behaviour when partial success would be fine.
+- No size limit, so one huge batch hurts everyone's latency.
 
 #### How it works
 ```mermaid
@@ -653,8 +894,30 @@ Batching reduces per-item overhead and total work, but the batch completes only 
 #### Interview angle
 > "Chatty fan-out becomes one batchGet with a capped size, a set-based query and per-item errors. That's usually the biggest latency win between services."
 
+#### Sources
+- [AIP-231: batch methods: get](https://google.aip.dev/231) — Google API Improvement Proposals
+- [BatchGetItem](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchGetItem.html) — Amazon DynamoDB API reference
+
 ### Compression — Snappy (fastest, moderate ratio), LZ4 (balanced), gzip (best ratio, slower), Zstandard (best of both)
 Compression trades CPU for fewer bytes on the network and disk. Algorithms sit on a speed/ratio spectrum: **LZ4** and **Snappy** are extremely fast with moderate ratios (good for hot paths, Kafka, caches, databases), **gzip/deflate** gives good ratios at moderate speed (universal on the web), **Brotli** compresses web assets better, and **Zstandard (zstd)** offers gzip-or-better ratios at much higher speed with tunable levels.
+
+#### Intuition
+Vacuum-packing clothes for a suitcase. It takes a little effort at each end, but far more fits. A quick squeeze saves some space, and a slow careful pack saves more.
+
+#### Must know
+- Compression **trades CPU for fewer bytes** on the network and disk.
+- **LZ4 and Snappy**: very fast, moderate saving. For hot paths.
+- **gzip**: works everywhere on the web. **Brotli**: better for static web files.
+- **Zstandard**: gzip-like or better ratio at much higher speed.
+- Compress batches. Skip tiny payloads and data that is already compressed.
+
+#### Numbers to quote
+- Text and JSON shrink roughly 2× with LZ4 or Snappy, and 4–6× with gzip or Zstandard.
+
+#### Common mistakes
+- A high compression level on a latency-critical path.
+- Compressing images, video or encrypted data again.
+- Compressing each tiny message separately, which gives a poor ratio.
 
 #### How it works
 | Algorithm | Compress speed | Ratio (text/JSON) | Typical uses |
@@ -708,8 +971,31 @@ When CPU is the bottleneck (high compression levels on hot paths), when payloads
 #### Interview angle
 > "I pick compression by bottleneck: zstd for Kafka and storage, with bigger batches for ratio, LZ4 when CPU is tight, Brotli for static assets, and nothing for tiny or already-compressed payloads."
 
+#### Sources
+- [Zstandard](https://facebook.github.io/zstd/) — Meta open source
+- [LZ4](https://github.com/lz4/lz4) — LZ4, GitHub
+- [Compression in HTTP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Compression) — MDN
+
 ### Efficient serialization — Protocol Buffers 3–10× smaller than JSON; Avro for Kafka schemas; MessagePack for binary JSON
 Serialization format affects payload size, CPU time and schema evolution. **JSON** is human-readable and universal but verbose (field names repeated, numbers as text) and slow to parse. **Protocol Buffers** (gRPC) and **Avro** (Kafka, Hadoop) are compact binary formats with **schemas** and well-defined evolution rules. **MessagePack/CBOR** are schemaless binary JSON. **FlatBuffers/Cap'n Proto** allow zero-copy reads.
+
+#### Intuition
+A form where both sides already know what box 1, box 2 and box 3 mean. You send only the box numbers and the values, not the question text each time. JSON resends every question.
+
+#### Must know
+- **JSON**: readable and universal, but bulky and slow to parse.
+- **Protocol Buffers**: compact binary with a schema. Used with gRPC.
+- **Avro**: compact binary with a schema, common with Kafka and a schema registry.
+- Binary formats send **field numbers, not field names**.
+- Evolve safely: only add optional fields, and never reuse a field number.
+
+#### Numbers to quote
+- Protobuf messages are often 3–10× smaller than the same JSON.
+
+#### Common mistakes
+- Reusing or renumbering a Protobuf field.
+- No automatic compatibility check, so a rename breaks consumers.
+- Binary formats on a public browser API, where JSON is expected.
 
 #### How it works
 ```protobuf
@@ -774,8 +1060,31 @@ Only add new fields with new field numbers (old readers ignore unknown fields, n
 #### Interview angle
 > "External APIs stay JSON, internal traffic uses Protobuf over gRPC, and Kafka uses Avro with a schema registry, with compatibility enforced in CI so a renamed field can't break consumers."
 
+#### Sources
+- [Encoding](https://protobuf.dev/programming-guides/encoding/) — Protocol Buffers docs
+- [Language guide (proto 3): updating a message type](https://protobuf.dev/programming-guides/proto3/#updating) — Protocol Buffers docs
+- [Apache Avro documentation](https://avro.apache.org/docs/) — Apache Avro
+
 ### GC tuning (JVM) — G1GC for balanced latency; ZGC for sub-ms GC pauses; tune heap: not too small (frequent GC), not too large (long GC)
 JVM garbage collectors trade **throughput, pause times and memory overhead**. **G1** (default) aims for configurable pause targets (e.g. 200 ms) with good throughput. **ZGC** and **Shenandoah** do almost all work concurrently, giving **sub-millisecond pauses** even on huge heaps at some CPU cost. **Parallel GC** maximises throughput for batch jobs and tolerates long pauses. Tuning starts with **reducing allocation** and sizing the heap correctly, not with flags.
+
+#### Intuition
+Clearing tables in a restaurant. You can stop service for a moment and clear everything at once, or have staff clear continuously while guests eat. The second never interrupts, but needs extra staff.
+
+#### Must know
+- A garbage collector trades **throughput, pause time and memory**.
+- **G1** is the default: balanced, with a pause target.
+- **ZGC**: nearly all work done concurrently, so pauses are under a millisecond.
+- **Parallel GC**: best throughput for batch jobs, with long pauses.
+- **Cut allocation and size the heap first.** Flags come last.
+
+#### Numbers to quote
+- Size the heap at about 2–3× the live data. In a container, give the heap about 75% of memory.
+
+#### Common mistakes
+- Tuning flags before looking at the allocation rate.
+- Setting the heap equal to the container limit, so the process is OOM-killed.
+- Running with no GC logs.
 
 #### How it works
 ```mermaid
@@ -828,8 +1137,30 @@ The container's memory limit covers the whole process: heap plus metaspace, code
 #### Interview angle
 > "GC tuning starts with cutting allocation and sizing the heap at 2–3× the live set. For latency-critical services on Java 21 I'd use generational ZGC, and always keep GC logs on."
 
+#### Sources
+- [Introduction to garbage collection tuning](https://docs.oracle.com/en/java/javase/21/gctuning/introduction-garbage-collection-tuning.html) — Oracle Java 21 docs
+- [JEP 439: generational ZGC](https://openjdk.org/jeps/439) — OpenJDK
+
 ### Database connection exhaustion — symptom: timeout waiting for connection; fix: pool size + circuit breaker upstream
 Connection exhaustion happens when all connections in an app's pool (or the database's `max_connections`) are in use, so new requests **wait and then time out** ("Connection is not available, request timed out after 30000ms"). Root causes are usually **connections held too long** (slow queries, long transactions, remote calls inside transactions, leaks) or **too many clients** (scale-out, serverless), not "pool too small".
+
+#### Intuition
+Every phone line in a call centre is busy, so new callers wait and then give up. The cause is rarely too few lines. Usually some calls are being held far too long.
+
+#### Must know
+- Every connection in the pool is in use, so new requests **wait and then time out**.
+- The usual cause is **connections held too long**: slow queries, long transactions, leaks.
+- The other cause is too many clients: many pods, each with its own pool.
+- **A bigger pool rarely fixes it.**
+- Fail fast with a short acquire timeout, and set statement timeouts.
+
+#### Numbers to quote
+- Use a connection acquire timeout of about 1–2 seconds, not 30.
+
+#### Common mistakes
+- Calling an external API while a transaction is open.
+- A long acquire timeout, so every request hangs before failing.
+- Retrying hard against a database that is already struggling.
 
 #### How it works
 ```mermaid
@@ -887,3 +1218,9 @@ With a long timeout (e.g. 30 s), when the pool is exhausted every request waits 
 
 #### Interview angle
 > "Connection exhaustion means connections are held too long or there are too many clients. I fix the long transactions and slow queries, put PgBouncer in front, and fail fast with short acquire timeouts and upstream circuit breakers."
+
+#### Sources
+- [HikariCP](https://github.com/brettwooldridge/HikariCP) — HikariCP, GitHub
+- [Client connection defaults](https://www.postgresql.org/docs/current/runtime-config-client.html) — PostgreSQL docs
+- [The cumulative statistics system](https://www.postgresql.org/docs/current/monitoring-stats.html) — PostgreSQL docs
+

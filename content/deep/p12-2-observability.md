@@ -3,6 +3,21 @@
 ### Three pillars of observability — logs (what happened), metrics (how much), traces (how long and where)
 Observability is the ability to understand a system's internal state from its outputs, including for failures nobody predicted. The three classic signal types complement each other: **metrics** (cheap numeric time series: tell you *that* something is wrong), **traces** (the path and timing of a request across services: tell you *where*), and **logs** (detailed events: tell you *why*). They're most powerful when **correlated** through shared ids (trace_id) and labels.
 
+#### Intuition
+A doctor's three tools. The thermometer says something is wrong (metrics). The X-ray shows where (traces). The patient's own account explains why (logs). Used together they give a diagnosis.
+
+#### Must know
+- **Metrics** are cheap numbers over time. They tell you **that** something is wrong.
+- **Traces** follow one request across services. They tell you **where**.
+- **Logs** are detailed event records. They tell you **why**.
+- They are far more useful when **linked by a shared trace id**.
+- Logs cost the most at scale, so control volume and retention.
+
+#### Common mistakes
+- Using logs for everything, including trends and alerts.
+- Three separate tools with no way to jump between them.
+- Debug-level logging left on in production.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -53,8 +68,27 @@ Logs are expensive at scale (every event stored and indexed), slow to aggregate 
 #### Interview angle
 > "Alerts come from metrics, exemplars link slow buckets to traces, and trace_ids link traces to logs. That gets you from page to root cause in minutes without grepping."
 
+#### Sources
+- [Observability primer](https://opentelemetry.io/docs/concepts/observability-primer/) — OpenTelemetry docs
+- [Monitoring distributed systems](https://sre.google/sre-book/monitoring-distributed-systems/) — Google SRE book
+
 ### Four golden signals (Google SRE) — latency, traffic (RPS), errors (rate), saturation (utilization)
 From Google's SRE book: if you can only measure four things about a user-facing system, measure **latency** (how long requests take, separating successes and failures), **traffic** (demand, e.g. requests per second), **errors** (rate of failed requests, including wrong content and slow-as-failure) and **saturation** (how full the most constrained resource is: CPU, memory, queue depth, connection pool).
+
+#### Intuition
+The four dials on a car dashboard you actually watch: speed, how much traffic, warning lights, and how close the engine is to its limit. If you could only have four, these are the ones.
+
+#### Must know
+- **Latency**: how long requests take.
+- **Traffic**: how much demand there is, such as requests per second.
+- **Errors**: the rate of failed requests.
+- **Saturation**: how full the most constrained resource is.
+- **Saturation moves first.** Latency and errors follow.
+
+#### Common mistakes
+- Mixing fast failures into latency, which makes an outage look quick.
+- Watching CPU when the real limit is a connection pool or a queue.
+- A dashboard with dozens of panels and no clear top row.
 
 #### How it works
 ```mermaid
@@ -103,8 +137,27 @@ Database connection pool utilisation and wait time for a connection, plus reques
 #### Interview angle
 > "Every service dashboard starts with the golden signals: latency split by outcome, traffic, errors, and the real saturation point, like pool usage, since saturation moves first."
 
+#### Sources
+- [Monitoring distributed systems: the four golden signals](https://sre.google/sre-book/monitoring-distributed-systems/#xref_monitoring_golden-signals) — Google SRE book
+- [Instrumentation](https://prometheus.io/docs/practices/instrumentation/) — Prometheus docs
+
 ### RED method — Rate (requests/sec), Errors (rate), Duration (latency distribution)
 RED (coined by Tom Wilkie) is a request-centric monitoring method for **services**: for every service (and ideally every endpoint), track **Rate** (requests per second), **Errors** (failed requests per second or as a ratio) and **Duration** (latency distribution via histograms). It's essentially the golden signals minus saturation, and easy to standardise across microservices.
+
+#### Intuition
+Three questions about any shop counter. How many customers per minute? How many left unhappy? How long did each one wait?
+
+#### Must know
+- A monitoring recipe for **request-driven services**.
+- **Rate**: requests per second. **Errors**: failed requests. **Duration**: the latency distribution.
+- Emit them from shared middleware or a service mesh, so every service looks the same.
+- One dashboard template then works for all services.
+- It does not cover resources. Use USE for those.
+
+#### Common mistakes
+- Raw URL paths as metric labels, which creates millions of series.
+- Averaging per-instance percentiles.
+- Every team building its own differently shaped dashboard.
 
 #### How it works
 ```mermaid
@@ -157,8 +210,27 @@ Label with bounded values only: the route template (`/orders/:id`), method, stat
 #### Interview angle
 > "Every service emits RED metrics from shared middleware with templated route labels and histograms, so one dashboard template and one SLO alert template cover all 120 services."
 
+#### Sources
+- [The RED method: how to instrument your services](https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/) — Grafana Labs blog
+- [Instrumentation](https://prometheus.io/docs/practices/instrumentation/) — Prometheus docs
+
 ### USE method — Utilization, Saturation, Errors per resource (CPU, memory, disk, network)
 The USE method (Brendan Gregg) is a checklist for finding **resource bottlenecks**: for every resource, check **Utilization** (% of time busy or % used), **Saturation** (extra work queued that it can't service yet) and **Errors** (error events). Resources include CPUs, memory, disks, network interfaces, and software resources like thread pools, connection pools, file descriptors and locks.
+
+#### Intuition
+Checking each machine on a factory floor in turn. How busy is it? Is work piling up in front of it? Is it throwing faults? The machine with the pile-up is your bottleneck.
+
+#### Must know
+- A checklist for finding **resource bottlenecks**.
+- For every resource check **Utilisation**, **Saturation** and **Errors**.
+- Include software resources: thread pools, connection pools, queues, file descriptors.
+- **Saturation (queued work) is what causes latency**, not high utilisation alone.
+- RED finds that a service is slow. USE finds which resource is the cause.
+
+#### Common mistakes
+- Checking only CPU and memory.
+- Treating 90% utilisation as a problem with no queueing present.
+- Missing container CPU throttling, which average CPU hides.
 
 #### How it works
 | Resource | Utilization | Saturation | Errors |
@@ -212,8 +284,27 @@ Utilization measures how busy a resource is, and a resource at 90% busy is effic
 #### Interview angle
 > "When latency rises but CPU looks fine, I walk the USE checklist through software resources too: pool waits, queue depth, fd limits and cgroup throttling. That's where the saturation usually hides."
 
+#### Sources
+- [The USE method](https://www.brendangregg.com/usemethod.html) — Brendan Gregg
+- [USE method: Linux performance checklist](https://www.brendangregg.com/USEmethod/use-linux.html) — Brendan Gregg
+
 ### Structured logging — JSON format: include trace_id, span_id, request_id, user_id, service_name
 Structured logging means emitting logs as **machine-parseable records** (usually JSON) with consistent fields, instead of free-form strings. This lets log systems index, filter and aggregate by field (`service=payments AND level=ERROR AND merchant_id=m42`) and link logs to traces through `trace_id` and `span_id`.
+
+#### Intuition
+A form with labelled boxes against a handwritten note. You can sort and filter a thousand forms by any box in seconds. With handwritten notes you have to read each one.
+
+#### Must know
+- Logs are emitted as **machine-readable records**, usually JSON, with consistent fields.
+- You can then filter and aggregate by field, not by text search.
+- Every line carries a **trace id**, which links logs to traces.
+- Use a shared set of fields across services: time, level, service, version, trace id, event name.
+- **Never log secrets or personal data.**
+
+#### Common mistakes
+- Free-text messages that need a regular expression to parse.
+- Logging whole request bodies, which leaks card numbers and tokens.
+- The same field as a number in one service and a string in another.
 
 #### How it works
 ```json
@@ -270,8 +361,27 @@ Don't log raw request or response bodies. Use allow-listed structured fields rat
 #### Interview angle
 > "Logs are JSON with a shared schema, trace_id injected from the OpenTelemetry context, stable event names, and redaction at source, so one field query plus a trace link answers most support questions."
 
+#### Sources
+- [OpenTelemetry logs](https://opentelemetry.io/docs/concepts/signals/logs/) — OpenTelemetry docs
+- [Logging cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) — OWASP
+
 ### Log levels — TRACE (verbose), DEBUG, INFO (business events), WARN (recoverable), ERROR (needs action), FATAL
 Log levels classify severity so you can control volume and route attention. Typical meaning: **TRACE/DEBUG** for developer detail (off in production by default), **INFO** for significant business events and lifecycle milestones, **WARN** for unexpected but handled situations, **ERROR** for failures of an operation that need investigation, and **FATAL** for errors that terminate the process.
+
+#### Intuition
+Volume settings for what the system says. A whisper for developer detail, a normal voice for business events, a raised voice when something odd was handled, and a shout when an operation failed.
+
+#### Must know
+- **DEBUG / TRACE**: developer detail, off in production by default.
+- **INFO**: meaningful business and lifecycle events.
+- **WARN**: something unexpected that was handled, such as a retry.
+- **ERROR**: an operation failed and needs a look.
+- **Log an error once**, at the place where it is handled.
+
+#### Common mistakes
+- Logging the same exception at every layer while rethrowing it.
+- Debug detail written at INFO, which bloats volume and cost.
+- Paging on the count of ERROR lines, when the alert should come from an SLO.
 
 #### How it works
 | Level | Use for | Production default | Example |
@@ -329,8 +439,27 @@ Each layer logs the same exception before passing it up, producing multiple ERRO
 #### Interview angle
 > "Errors are logged once where they're handled, retries are WARN, DEBUG can be switched on at runtime for a single logger, and paging comes from SLOs, not log counts."
 
+#### Sources
+- [Syslog: severity level](https://en.wikipedia.org/wiki/Syslog#Severity_level) — Wikipedia
+- [Logs data model: severity fields](https://opentelemetry.io/docs/specs/otel/logs/data-model/#severity-fields) — OpenTelemetry specification
+
 ### Log aggregation — Fluentd/Logstash collect → Elasticsearch store → Kibana visualize (ELK/EFK)
 Log aggregation ships logs from every host and container to a **central store** where they can be searched, retained and visualised. Classic stacks are **ELK** (Elasticsearch, Logstash, Kibana) and **EFK** (Fluentd or Fluent Bit instead of Logstash). Cheaper modern alternatives index only labels (**Grafana Loki**) or use columnar stores (ClickHouse-based tools). Managed options include CloudWatch Logs, Datadog and others.
+
+#### Intuition
+A post room that collects the letters from every desk in the building and files them in one searchable archive. Without it, you would walk to each desk to find one letter.
+
+#### Must know
+- Logs from every host and container are shipped to **one central store**.
+- Pipeline: **agent → buffer → processor → store → search UI**.
+- A **buffer** (Kafka or disk) absorbs spikes, so logs are not dropped.
+- Use tiered retention: recent logs searchable, old logs in cheap archive.
+- **Cost follows ingest volume.** Drop noise at the agent.
+
+#### Common mistakes
+- No buffer, so logs vanish during the incident when they are needed most.
+- Indexing every field of every log for ever.
+- Nobody monitoring the logging pipeline itself.
 
 #### How it works
 ```mermaid
@@ -384,8 +513,30 @@ It decouples producers from the store: log spikes (incidents generate far more l
 #### Interview angle
 > "Fluent Bit ships structured logs through Kafka to OpenSearch or Loki with tiered retention and an S3 archive. Noise is dropped at the agent, because ingest volume is the cost driver."
 
+#### Sources
+- [Fluent Bit documentation](https://docs.fluentbit.io/manual/) — Fluent Bit
+- [Loki overview](https://grafana.com/docs/loki/latest/get-started/overview/) — Grafana Loki docs
+
 ### Prometheus data model — time series labeled by key-value pairs; pull-based scraping
 Prometheus stores **time series**: each series is identified by a **metric name plus a set of key-value labels** (`http_requests_total{service="checkout", route="/pay", code="200"}`) and holds (timestamp, float64) samples. Prometheus **pulls** (scrapes) metrics over HTTP from targets' `/metrics` endpoints at an interval (15–30 s), discovered via service discovery (Kubernetes, Consul, EC2).
+
+#### Intuition
+An inspector with a clipboard who walks round every 15 seconds and writes down each machine's readings. Each reading is filed under the machine's name and a few tags.
+
+#### Must know
+- A **time series** is a metric name plus a set of **labels**, with a value over time.
+- Prometheus **pulls** (scrapes) metrics from each target's `/metrics` endpoint.
+- Targets are found through service discovery.
+- **Every unique label combination is a separate series.**
+- Keep labels bounded. One server is not highly available without extra components.
+
+#### Numbers to quote
+- Scrape interval is usually 15–30 seconds. Local retention defaults to 15 days.
+
+#### Common mistakes
+- A user id or request id as a label, which exhausts memory.
+- Expecting short-lived batch jobs to be scraped before they exit.
+- One Prometheus with no replica, so alerting dies with it.
 
 #### How it works
 ```mermaid
@@ -445,8 +596,27 @@ Pull (Prometheus): central control over what and how often to scrape, automatic 
 #### Interview angle
 > "Prometheus scrapes pods found through Kubernetes discovery, labels stay bounded (per-customer detail lives in traces), and Thanos or Mimir provide HA and long retention."
 
+#### Sources
+- [Data model](https://prometheus.io/docs/concepts/data_model/) — Prometheus docs
+- [Overview](https://prometheus.io/docs/introduction/overview/) — Prometheus docs
+
 ### Prometheus metric types — Counter (monotone: total_requests), Gauge (current: active_connections), Histogram (latency buckets), Summary
 Prometheus has four metric types: **Counter** (only goes up, resets on restart: requests, errors, bytes; query with `rate()`), **Gauge** (goes up and down: memory, queue depth, active connections), **Histogram** (observations counted into configurable buckets plus sum and count, aggregatable, used for latency percentiles), and **Summary** (client-side computed quantiles, not aggregatable across instances).
+
+#### Intuition
+A car has an odometer that only goes up, a fuel gauge that goes up and down, and a trip log that sorts journeys into "under 10 km", "under 50 km" and so on. Those are a counter, a gauge and a histogram.
+
+#### Must know
+- **Counter**: only increases. Query it with `rate()`.
+- **Gauge**: goes up and down. Read the value directly.
+- **Histogram**: counts observations into buckets. It can be **combined across instances**.
+- **Summary**: quantiles computed in the client, which **cannot** be combined across instances.
+- Use histograms for latency, with a bucket boundary at your SLO threshold.
+
+#### Common mistakes
+- Plotting a raw counter, which gives a sawtooth.
+- Averaging p99 values from several pods.
+- A counter for something that can decrease.
 
 #### How it works
 | Type | Example | Query pattern | Notes |
@@ -501,8 +671,30 @@ A gauge: it goes up and down. Counters are only for cumulative totals that incre
 #### Interview angle
 > "Latency is a histogram with buckets at the SLO threshold, summed across pods before histogram_quantile, because averaging per-pod p99s is meaningless."
 
+#### Sources
+- [Metric types](https://prometheus.io/docs/concepts/metric_types/) — Prometheus docs
+- [Histograms and summaries](https://prometheus.io/docs/practices/histograms/) — Prometheus docs
+
 ### PromQL queries — rate(http_requests_total[5m]), histogram_quantile(0.99, ...), topk(5, ...)
 PromQL is Prometheus's functional query language for selecting and aggregating time series. Core building blocks: **selectors** with label matchers, **range vectors** (`[5m]`), functions like `rate()`, `increase()`, `histogram_quantile()`, aggregation operators (`sum by`, `avg`, `topk`), and binary operations between series (ratios, thresholds) that power dashboards, recording rules and alerts.
+
+#### Intuition
+A spreadsheet formula language for time series. Pick the series you want, turn the running totals into per-second speeds, then add them up by group.
+
+#### Must know
+- `rate(counter[5m])` turns a counter into a per-second rate.
+- **Apply `rate()` first, then `sum()`**, so counter resets are handled.
+- `histogram_quantile(0.99, sum by (le) (rate(..._bucket[5m])))` gives p99. Keep the `le` label.
+- A ratio of two rates gives an error ratio.
+- Use **recording rules** for queries that dashboards and alerts run constantly.
+
+#### Numbers to quote
+- Make the range at least 4× the scrape interval.
+
+#### Common mistakes
+- `sum` before `rate`, which gives spikes whenever a pod restarts.
+- Dropping `le` when aggregating histogram buckets.
+- Heavy raw queries on every dashboard refresh.
 
 #### How it works
 ```promql
@@ -571,8 +763,28 @@ Counters reset to zero when a process restarts. `rate()` detects resets per seri
 #### Interview angle
 > "Rate first, then sum, keep le for quantiles, and use recording rules for anything a dashboard or alert evaluates constantly."
 
+#### Sources
+- [Querying basics](https://prometheus.io/docs/prometheus/latest/querying/basics/) — Prometheus docs
+- [Query functions](https://prometheus.io/docs/prometheus/latest/querying/functions/) — Prometheus docs
+- [Recording rules](https://prometheus.io/docs/practices/rules/) — Prometheus docs
+
 ### Grafana — connect to Prometheus/CloudWatch/InfluxDB; build dashboards, set alert thresholds
 Grafana is the de facto open-source **visualisation and dashboarding** layer for observability. It connects to many **data sources** (Prometheus, Loki, Tempo, CloudWatch, Elasticsearch, InfluxDB, SQL databases), lets you build dashboards with variables and templates, link metrics → traces → logs, and define **alerts** routed to Slack, PagerDuty and others.
+
+#### Intuition
+The control-room wall of screens. It stores no data itself. It pulls numbers from many systems and draws them side by side, so one glance shows what is happening.
+
+#### Must know
+- The standard open-source **dashboard layer** for observability.
+- It **connects to many data sources**: metrics, logs, traces, cloud monitoring, SQL.
+- Dashboards use variables, so one template serves every service.
+- Mark **deploys** on every graph.
+- Keep dashboards in Git as code, with an owner.
+
+#### Common mistakes
+- Hundreds of stale, duplicated dashboards.
+- No deploy markers, so nobody can tell whether a release caused the spike.
+- Alerts defined in several tools with no standard.
 
 #### How it works
 ```mermaid
@@ -626,8 +838,27 @@ Version control and review prevent accidental breakage, changes are auditable an
 #### Interview angle
 > "Dashboards are provisioned from Git in three tiers (SLO overview, templated service view, dependency deep-dives) with deploy annotations and exemplar links to Tempo and Loki."
 
+#### Sources
+- [Grafana dashboard best practices](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/best-practices/) — Grafana docs
+- [About Grafana](https://grafana.com/docs/grafana/latest/introduction/) — Grafana docs
+
 ### Distributed tracing — trace = end-to-end request; span = single operation with start/end/metadata
 Distributed tracing follows a single request through every service it touches. A **trace** is the whole journey, identified by a **trace_id**. It's composed of **spans**, each one operation (an HTTP handler, a DB query, a Kafka publish) with start time, duration, attributes, status and a **parent span id**. Context is **propagated** across process boundaries in headers, so spans from different services assemble into one tree.
+
+#### Intuition
+A parcel's tracking history. Every depot scans it and records when it arrived and left. Put the scans together and you see the whole journey and where it sat waiting.
+
+#### Must know
+- A **trace** is one request's whole journey, identified by a trace id.
+- A **span** is one operation inside it, with a start, a duration and a parent.
+- Context is **passed along in headers**, so spans from different services join into one tree.
+- **Sampling** controls cost: head-based is simple, tail-based keeps errors and slow traces.
+- Queues need the context carried in message headers too.
+
+#### Common mistakes
+- One service that does not forward the headers, which breaks the trace.
+- 1% head sampling, so the rare error is never captured.
+- No tracing across Kafka or other asynchronous hops.
 
 #### How it works
 ```mermaid
@@ -684,8 +915,28 @@ The producer injects the trace context (W3C traceparent) into Kafka message head
 #### Interview angle
 > "Every hop propagates W3C trace context, including Kafka headers, and tail sampling keeps all error and slow traces. The waterfall exposes things like sequential fan-out immediately."
 
+#### Sources
+- [Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — OpenTelemetry docs
+- [Dapper, a large-scale distributed systems tracing infrastructure](https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/) — Google Research
+- [Sampling](https://opentelemetry.io/docs/concepts/sampling/) — OpenTelemetry docs
+
 ### OpenTelemetry — vendor-neutral SDK for traces, metrics, logs; single integration for all backends
 OpenTelemetry (OTel) is the CNCF standard for generating and exporting telemetry: **APIs and SDKs** for traces, metrics and logs in all major languages, **auto-instrumentation** for common frameworks, the **OTLP** wire protocol, and the **Collector**, a pipeline that receives, processes and exports telemetry to any backend. You instrument once and can switch vendors without touching code.
+
+#### Intuition
+A universal plug. You wire your application once to a standard socket, and can then connect it to any monitoring product with no rewiring.
+
+#### Must know
+- The open standard for **producing and exporting telemetry**: traces, metrics and logs.
+- **Instrument once.** Changing vendor is a configuration change.
+- **Auto-instrumentation** covers common frameworks with little code.
+- **OTLP** is its wire protocol.
+- The **Collector** receives, processes (batch, sample, redact) and forwards telemetry.
+
+#### Common mistakes
+- Not setting `service.name`, so everything shows as an unknown service.
+- A Collector with no memory limit, which crashes under load.
+- Sensitive values captured in span attributes by default.
 
 #### How it works
 ```mermaid
@@ -733,8 +984,30 @@ Code is instrumented against the vendor-neutral OTel API and SDK and emits OTLP.
 #### Interview angle
 > "Services use OpenTelemetry auto-instrumentation and export OTLP to a Collector that batches, tail-samples and redacts before sending to the backends. Switching vendors is a config change."
 
+#### Sources
+- [What is OpenTelemetry?](https://opentelemetry.io/docs/what-is-opentelemetry/) — OpenTelemetry docs
+- [Collector](https://opentelemetry.io/docs/collector/) — OpenTelemetry docs
+
 ### W3C TraceContext — traceparent and tracestate headers for cross-service trace propagation
 W3C Trace Context is the standard for propagating trace identity across services in HTTP (and other) headers. **`traceparent`** carries the version, a 16-byte trace id, the 8-byte parent span id and trace flags (sampled bit). **`tracestate`** carries vendor-specific key-values. A standard header lets services using different tracing vendors and libraries join the same trace. **Baggage** (a separate W3C header) carries application key-values.
+
+#### Intuition
+A reference number written on a letter as it passes between departments. Each department keeps the same reference and adds its own initials, so the whole chain can be traced later.
+
+#### Must know
+- The standard header for passing trace identity between services.
+- `traceparent` holds a **version, trace id, parent span id and flags**.
+- Each hop keeps the trace id and replaces the parent id with its own span id.
+- The **sampled** flag tells services downstream whether to record.
+- `tracestate` carries vendor data. `baggage` carries application key-values.
+
+#### Numbers to quote
+- The trace id is 16 bytes (32 hex characters). The span id is 8 bytes (16 hex characters).
+
+#### Common mistakes
+- Trusting a `traceparent` sent by an external client, which can force sampling.
+- Mixed propagation formats (W3C and B3) with no bridge.
+- Sensitive data in baggage, which is sent to every downstream service.
 
 #### How it works
 ```
@@ -797,8 +1070,27 @@ Usually not blindly: external clients can forge ids or force the sampled flag, i
 #### Interview angle
 > "Propagation uses W3C traceparent everywhere, with B3 bridged during migrations. At the edge we start fresh traces rather than trusting client-supplied sampling flags."
 
+#### Sources
+- [Trace Context](https://w3c.github.io/trace-context/) — W3C
+- [Propagation format for distributed context: Baggage](https://w3c.github.io/baggage/) — W3C
+
 ### Jaeger / Zipkin — open-source distributed tracing backends; Tempo (Grafana), X-Ray (AWS)
 Tracing backends receive, store and visualise spans. **Zipkin** (Twitter, 2012) and **Jaeger** (Uber, CNCF) are the classic open-source options with search UIs and service dependency graphs. **Grafana Tempo** stores traces cheaply in object storage, indexing only trace ids (found via exemplars, logs or TraceQL). **AWS X-Ray** is the managed AWS option. All accept OpenTelemetry data today.
+
+#### Intuition
+The filing room for parcel-tracking records. Different rooms file them differently: some index every detail for quick search, others stack them cheaply and find them by tracking number.
+
+#### Must know
+- A tracing backend **stores spans and shows them** as a waterfall.
+- **Jaeger and Zipkin**: classic open-source backends with indexed search.
+- **Tempo**: stores traces in object storage with a minimal index. Much cheaper at scale.
+- **X-Ray**: the managed AWS option.
+- All accept OpenTelemetry data, so the backend can change later.
+
+#### Common mistakes
+- Indexing every span attribute at full volume.
+- No way to find the interesting trace: no exemplars and no trace id in logs.
+- Vendor-specific instrumentation that ties you to one backend.
 
 #### How it works
 ```mermaid
@@ -848,8 +1140,28 @@ Tempo writes spans into compressed blocks in object storage and indexes minimall
 #### Interview angle
 > "Spans flow from the OTel Collector into Tempo on S3 for cheap 30-day retention. Engineers reach traces through exemplars, log trace_ids and TraceQL rather than heavy indexes."
 
+#### Sources
+- [Jaeger documentation](https://www.jaegertracing.io/docs/) — Jaeger
+- [Grafana Tempo documentation](https://grafana.com/docs/tempo/latest/) — Grafana Tempo
+- [Zipkin](https://zipkin.io/) — OpenZipkin
+
 ### APM tools — Datadog, New Relic, Dynatrace: trace + metrics + logs in one platform
 Application Performance Monitoring (APM) platforms like **Datadog, New Relic, Dynatrace, Elastic APM, Honeycomb** provide **all observability signals in one SaaS product**: auto-instrumentation agents, distributed tracing, metrics, logs, real-user monitoring, profiling, error tracking, service maps and AI-assisted anomaly detection, with correlation built in.
+
+#### Intuition
+Hiring a full facilities company where you could have bought tools and staffed it yourself. Everything works together on day one, and the bill grows with every room you add.
+
+#### Must know
+- A hosted product with **traces, metrics and logs in one place**, already linked.
+- **Buy**: quick to adopt, no operations work, rich features.
+- **Build** (Prometheus, Loki, Tempo, Grafana): cheaper at scale, needs a platform team.
+- Cost grows with hosts, log volume, spans and custom metrics.
+- Instrument with **OpenTelemetry** to keep the option of switching.
+
+#### Common mistakes
+- Indexing all logs and adding high-cardinality tags to custom metrics.
+- Proprietary agents everywhere, which makes leaving very expensive.
+- No per-team view of what the telemetry costs.
 
 #### How it works
 ```mermaid
@@ -900,8 +1212,30 @@ Number of hosts or containers, indexed log volume, ingested and indexed spans, a
 #### Interview angle
 > "At our size I'd buy an APM but instrument with OpenTelemetry, index only error and business logs, and govern metric tags, so cost stays predictable and switching stays possible."
 
+#### Sources
+- [Vendors who natively support OpenTelemetry](https://opentelemetry.io/ecosystem/vendors/) — OpenTelemetry
+- [APM](https://docs.datadoghq.com/tracing/) — Datadog docs
+
 ### Alerting best practices — alert on SLO burn rate, not raw metrics; PagerDuty + runbooks for every alert
 Good alerting wakes a human **only when users are (or will soon be) impacted and a human must act**. Page on **symptoms** (SLO burn rate, user-facing errors and latency), not causes (CPU at 80%). Route lower-urgency issues to tickets. Every page must be **actionable**, have an **owner**, and link to a **runbook** and a dashboard.
+
+#### Intuition
+A smoke alarm should ring for a fire, not for toast. If it rings every morning, people take the battery out, and then it is silent on the day there is a fire.
+
+#### Must know
+- **Page a person only when users are affected and a person must act.**
+- Page on **symptoms** (SLO burn rate), not causes (CPU at 80%).
+- Less urgent issues become tickets, not pages.
+- Every page has an **owner, a runbook and a dashboard link**.
+- Group and suppress related alerts, and review alert quality regularly.
+
+#### Numbers to quote
+- Aim for no more than about 2 actionable pages per on-call shift.
+
+#### Common mistakes
+- Dozens of noisy cause-based alerts that everyone learns to ignore.
+- One root cause producing fifty separate pages.
+- A page with no runbook, so the responder starts from nothing.
 
 #### How it works
 ```mermaid
@@ -955,8 +1289,30 @@ What the alert means and its user impact, how to verify it (dashboard and query 
 #### Interview angle
 > "We page only on SLO burn rate plus a few predictive alerts like disk or cert expiry. Every page carries a runbook and dashboard link, and alerts nobody acts on get deleted in the weekly review."
 
+#### Sources
+- [Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/) — Google SRE workbook
+- [Alerting](https://prometheus.io/docs/practices/alerting/) — Prometheus docs
+
 ### P50/P99/P99.9 latency — mean misleads; tail latency (P99.9) matters at scale (1 in 1000 requests)
 Latency percentiles describe the distribution: **p50** (median, the typical request), **p99** (1 in 100 is slower), **p99.9** (1 in 1,000 is slower). Means hide tail behaviour and get skewed by outliers. At scale, tails dominate user experience because one page load or API call **fans out** to many backend calls, and the slowest one determines the response.
+
+#### Intuition
+A supermarket's average queue time can be two minutes while one unlucky shopper in a hundred waits twenty. If each trip means visiting many counters, you are very likely to hit at least one long queue.
+
+#### Must know
+- **p50** is the typical request. **p99** means 1 in 100 is slower. **p99.9** means 1 in 1,000.
+- **The mean hides the tail.** Always report percentiles.
+- With **fan-out**, the slowest of many backend calls sets the response time.
+- Percentiles cannot be averaged. Compute them from histograms.
+- Tail causes: GC pauses, queueing, cold caches, retries.
+
+#### Numbers to quote
+- A request calling 100 backends hits at least one beyond its p99 with probability 1 − 0.99^100 ≈ 63%.
+
+#### Common mistakes
+- Reporting only average latency.
+- Averaging per-instance p99 values.
+- Load tests that wait for each response before sending the next, which hides the tail.
 
 #### How it works
 ```mermaid
@@ -1008,8 +1364,30 @@ Latency distributions are skewed with long tails. A few very slow requests barel
 #### Interview angle
 > "I report p50, p99 and p99.9 from histograms, because with fan-out the backend's p99 becomes the user's median. Tail latency is the thing to engineer for."
 
+#### Sources
+- [The tail at scale](https://research.google/pubs/the-tail-at-scale/) — Dean and Barroso, Google Research
+- [Monitoring distributed systems](https://sre.google/sre-book/monitoring-distributed-systems/) — Google SRE book
+
 ### Tail latency mitigation — hedged requests: send duplicate to second server if first exceeds threshold, use first response
 Tail latency mitigation techniques make the slowest requests faster without fixing every cause. The best known, from Google's "The Tail at Scale", is **hedged requests**: send the request to one replica, and if it hasn't answered within (say) its p95 latency, send a duplicate to another replica and use whichever answers first. Related techniques: **tied requests**, **micro-partitioning**, **selective replication** of hot data, **latency-aware load balancing** and **good-enough** partial results.
+
+#### Intuition
+You order a taxi and it has not come after a reasonable wait, so you order a second from another company and take whichever arrives first. You only do this when the first one is late.
+
+#### Must know
+- **Hedged request**: if the first replica is slow, send a duplicate to a second and take the first answer.
+- Send the duplicate only after a delay near the **p95**, so the extra load is small.
+- **Only for idempotent operations**, normally reads.
+- **Cap the extra load** and switch hedging off under overload.
+- Related tools: load balancing that avoids slow instances, deadlines, partial results.
+
+#### Numbers to quote
+- Hedging after the p95 adds about 5% load and cuts p99.9 sharply.
+
+#### Common mistakes
+- Hedging writes that are not idempotent.
+- Unlimited hedging during an overload, which makes it worse.
+- Treating hedging as a fix when every replica is slow for the same reason.
 
 #### How it works
 ```mermaid
@@ -1064,8 +1442,30 @@ When slowness is caused by system-wide overload: hedging adds more requests to a
 #### Interview angle
 > "For idempotent reads I'd hedge after the p95 with a capped hedge budget, plus least-outstanding load balancing, which cuts the p99.9 for about 5% extra load and switches off under overload."
 
+#### Sources
+- [The tail at scale](https://research.google/pubs/the-tail-at-scale/) — Dean and Barroso, Google Research
+- [Request hedging](https://grpc.io/docs/guides/request-hedging/) — gRPC docs
+
 ### On-call best practices — runbooks, escalation policy, post-mortems, blameless culture, rotation fairness
 Sustainable on-call ensures incidents get fast, competent responses **without burning people out**: clear rotations and escalation policies, actionable alerts with runbooks, defined incident roles, **blameless postmortems** that produce real fixes, fair load distribution, and compensation or time off for out-of-hours work.
+
+#### Intuition
+A fire station's duty roster. Someone is always on duty, they know the drill, there is backup if they do not answer, and after every fire the crew reviews what happened without blaming anyone.
+
+#### Must know
+- A clear **rotation and escalation path**: primary, secondary, then a manager.
+- Every page is actionable and has a **runbook**.
+- Big incidents have defined roles, with one **incident commander** coordinating.
+- **Blameless postmortems**: ask what in the system made the mistake easy, not who did it.
+- Track on-call load, and finish the follow-up actions.
+
+#### Numbers to quote
+- Keep at least 6–8 people in a rotation.
+
+#### Common mistakes
+- A tiny rotation with constant night pages, which leads to burnout.
+- Postmortem action items that are never finished.
+- A blame culture, so people hide what actually happened.
 
 #### How it works
 ```mermaid
@@ -1119,3 +1519,9 @@ Categorise the pages: actionable vs noise, and by cause. Delete or downgrade non
 
 #### Interview angle
 > "Sustainable on-call needs a large enough rotation, actionable pages with runbooks, an incident commander for big incidents, and blameless postmortems whose action items actually get finished."
+
+#### Sources
+- [Being on-call](https://sre.google/sre-book/being-on-call/) — Google SRE book
+- [Postmortem culture: learning from failure](https://sre.google/sre-book/postmortem-culture/) — Google SRE book
+- [PagerDuty incident response](https://response.pagerduty.com/) — PagerDuty
+

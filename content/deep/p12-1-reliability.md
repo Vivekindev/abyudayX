@@ -3,6 +3,24 @@
 ### SLA — Service Level Agreement: contractual uptime commitment (e.g., 99.9% uptime per month)
 An SLA is a **contract with customers**: a promised level of service (usually availability, sometimes latency or support response time) measured over a period, with **consequences** if it's missed, typically service credits. SLAs are set **looser than internal SLOs**, so you breach your own target long before you owe anyone money.
 
+#### Intuition
+A courier's money-back guarantee. "Delivered by noon or you get a refund" is a promise to the customer with a penalty attached. Inside the company, the drivers aim for 11 am so the promise is rarely broken.
+
+#### Must know
+- An SLA is a **contract with customers**, with a penalty (usually service credits) if it is missed.
+- **SLI** is the measurement. **SLO** is the internal target. **SLA** is the external promise.
+- Set the SLA **looser than the SLO**, so you notice trouble before you owe money.
+- It must define exactly what counts as "down" and how it is measured.
+- You cannot promise more than your dependencies allow, unless you add redundancy.
+
+#### Numbers to quote
+- Three serial dependencies at 99.9% each give about 99.7% at best.
+
+#### Common mistakes
+- An SLA equal to or tighter than the internal SLO.
+- A vague definition of downtime, which leads to disputes.
+- Ignoring the dependency maths when promising nines.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -51,8 +69,30 @@ The SLO is the operational target that triggers internal action (freezes, priori
 #### Interview angle
 > "I'd set the SLA a step below our SLO, say 99.9% against 99.95%, with a precise definition of downtime, and check the dependency math so the promise is actually achievable."
 
+#### Sources
+- [Service level objectives](https://sre.google/sre-book/service-level-objectives/) — Google SRE book
+- [Service-level agreement](https://en.wikipedia.org/wiki/Service-level_agreement) — Wikipedia
+
 ### SLO — Service Level Objective: internal target (e.g., p99 latency < 200ms, error rate < 0.1%)
 An SLO is an **internal reliability target** for an SLI over a window: "99.9% of checkout requests succeed over 28 days" or "99% of search requests complete in under 300 ms". It defines "reliable enough", balancing user happiness against development speed, and it drives alerting and prioritisation through the **error budget**.
+
+#### Intuition
+A team's own pass mark. Not perfection, but the level at which users are happy. Above it, the team is free to move fast. Below it, the team stops and fixes things.
+
+#### Must know
+- An **internal reliability target** for a measurement over a time window.
+- Example: "99.9% of checkout requests succeed over 28 days".
+- Start from **user journeys** (login, search, checkout), not from servers.
+- **100% is never the right target.**
+- It drives alerting and priorities through the error budget.
+
+#### Numbers to quote
+- Keep 2–4 SLOs per service, usually availability and latency, over a rolling 28 or 30 days.
+
+#### Common mistakes
+- An SLO on CPU or memory, not on what users experience.
+- A target with no agreed consequence when it is missed.
+- Too many SLOs, so none of them guides decisions.
 
 #### How it works
 ```mermaid
@@ -104,8 +144,27 @@ It's unattainable (networks, dependencies and user devices fail), each extra nin
 #### Interview angle
 > "SLOs are per user journey, measured at the edge: for example 99.9% success and p99 under 400 ms over 28 days, with an agreed policy for what happens when the budget runs out."
 
+#### Sources
+- [Service level objectives](https://sre.google/sre-book/service-level-objectives/) — Google SRE book
+- [Implementing SLOs](https://sre.google/workbook/implementing-slos/) — Google SRE workbook
+
 ### SLI — Service Level Indicator: the actual measured metric (e.g., % of requests completing < 200ms)
 An SLI is the **measured quantity** behind an SLO, best expressed as a ratio: **good events / valid events**. For example, successful requests / all requests, or requests faster than 300 ms / all requests. Ratios make SLIs comparable across services and directly map to error budgets.
+
+#### Intuition
+The thermometer reading, as opposed to the temperature you want. If the thermometer is in the wrong room, the reading looks fine while people are freezing somewhere else.
+
+#### Must know
+- An SLI is the **measured number** behind an SLO.
+- Best written as a ratio: **good events ÷ valid events**.
+- Measure **as close to the user as possible**: the load balancer or the client.
+- Main types: availability, latency, freshness, correctness.
+- Decide what counts as valid: leave out health checks and errors caused by the client.
+
+#### Common mistakes
+- Measuring inside the application, which misses requests that never reached it.
+- "p99 below X" as the indicator, when "share of requests below X" works better.
+- Counting client errors (4xx) as your failures.
 
 #### How it works
 ```mermaid
@@ -163,8 +222,30 @@ At the load balancer or API gateway as a good default: it sees requests that nev
 #### Interview angle
 > "SLIs are good-over-valid ratios taken at the load balancer, so I count the 502s that never reached the app. Latency is expressed as the share of requests under the threshold, which makes it budgetable."
 
+#### Sources
+- [Implementing SLOs](https://sre.google/workbook/implementing-slos/) — Google SRE workbook
+- [Monitoring distributed systems](https://sre.google/sre-book/monitoring-distributed-systems/) — Google SRE book
+
 ### Error budget — 1 − SLO: how much downtime/error is acceptable in a period (99.9% → 43 min/month)
 The error budget is the **allowed unreliability**: 1 − SLO. With a 99.9% monthly SLO, 0.1% of requests may fail, roughly **43 minutes** of full outage per 30 days. Teams **spend** it on releases, experiments and incidents. When it's exhausted, an agreed **error budget policy** shifts priority from features to reliability.
+
+#### Intuition
+A monthly allowance for things going wrong. You can spend it on risky launches and experiments. Once it is gone, there is no more spending until it refills.
+
+#### Must know
+- **Error budget = 1 − SLO**: the amount of unreliability you are allowed.
+- The team **spends** it on releases, experiments and incidents.
+- Budget left: ship freely. **Budget spent: pause risky changes and fix reliability.**
+- This needs a written policy agreed with the product team.
+- It turns "speed against stability" into a number both sides accept.
+
+#### Numbers to quote
+- 99.9% over 30 days ≈ 43 minutes. 99.99% ≈ 4.3 minutes.
+
+#### Common mistakes
+- A budget that is tracked but changes nothing when it runs out.
+- Excluding dependency outages. Users felt them, so they count.
+- Treating an unused budget as success, when it can mean you are moving too slowly.
 
 #### How it works
 ```mermaid
@@ -217,8 +298,31 @@ The monthly budget is 0.05% of ~43,200 minutes ≈ 21.6 minutes of full outage. 
 #### Interview angle
 > "Error budgets make reliability negotiable with data: at 99.9% we have about 43 minutes a month, and when it's spent our written policy freezes risky launches until the fixes land."
 
+#### Sources
+- [Embracing risk](https://sre.google/sre-book/embracing-risk/) — Google SRE book
+- [Error budget policy](https://sre.google/workbook/error-budget-policy/) — Google SRE workbook
+
 ### Error budget burn rate — rate at which budget is consumed; fast burn = imminent SLO violation
 Burn rate is how fast you're consuming the error budget relative to the rate that would use exactly 100% by the end of the window. **Burn rate 1** = on track to use the whole budget. **Burn rate 14.4** = the 30-day budget is gone in ~2 days. Alerting on burn rate, with **multiple windows**, pages for real user-impacting problems quickly while ignoring blips.
+
+#### Intuition
+Your monthly salary is meant to last 30 days. Spending it at 14 times the normal pace means it is gone in two days, and someone should stop you now. Spending slightly too fast only needs a reminder.
+
+#### Must know
+- **Burn rate = current error ratio ÷ (1 − SLO).**
+- Burn rate 1 uses exactly the whole budget by the end of the window.
+- **Alert on burn rate, not on a fixed error threshold.**
+- Use **two windows**: a long one to show it matters, a short one to show it is still happening.
+- Fast burn pages a person. Slow burn opens a ticket.
+
+#### Numbers to quote
+- Page at 14.4× over 1 hour (and 5 minutes). That pace spends 2% of a 30-day budget in an hour.
+- Page at 6× over 6 hours. Ticket at 1× over 3 days.
+
+#### Common mistakes
+- A static "errors above 1%" alert, which pages for blips and misses slow leaks.
+- A long window alone, so the alert keeps firing after the fix.
+- Ratio alerts on very low traffic, which are noisy.
 
 #### How it works
 ```mermaid
@@ -274,8 +378,31 @@ The long window (e.g. 1 h) ensures enough budget has actually been consumed to m
 #### Interview angle
 > "I page on multi-window burn rate (14.4× over 1 h confirmed by 5 min) and open tickets for 1× over 3 days. That catches fast outages and slow leaks without paging for blips."
 
+#### Sources
+- [Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/) — Google SRE workbook
+- [Service level objectives](https://sre.google/sre-book/service-level-objectives/) — Google SRE book
+
 ### 99% = 87.6 hr/yr, 99.9% = 8.7 hr/yr, 99.99% = 52 min/yr, 99.999% = 5.2 min/yr
 The "nines" table converts availability percentages into allowed downtime. Each additional nine cuts allowed downtime by 10×, and roughly multiplies the **cost and engineering effort** needed, because at four or five nines humans can't even respond in time: recovery must be **automatic**.
+
+#### Intuition
+Each extra nine is ten times less downtime. Three nines leaves time for a person to fix things. Five nines leaves seconds, which only automation can meet.
+
+#### Must know
+- **Each additional nine cuts allowed downtime by 10×** and costs far more.
+- **Serial** dependencies multiply, so the total is lower than the weakest part.
+- **Parallel** redundancy raises availability: 1 − (chance that all copies fail).
+- At four nines and above, recovery **must be automatic**.
+- Apply the strict target to the critical path only.
+
+#### Numbers to quote
+- 99.9% ≈ 8.76 hours a year, or 43 minutes a month.
+- 99.99% ≈ 52.6 minutes a year. 99.999% ≈ 5.26 minutes a year.
+
+#### Common mistakes
+- Promising five nines for everything.
+- Forgetting planned maintenance counts as downtime.
+- Assuming redundant copies fail independently. A bad deploy hits them all.
 
 #### How it works
 | Availability | Per year | Per month (30 d) | Per week | Per day |
@@ -329,8 +456,27 @@ Downtime allowance drops from ~43 minutes to ~4 minutes a month, too short for h
 #### Interview angle
 > "Each nine is ten times less downtime: 99.99% is about 4 minutes a month, which only automation can meet. I'd apply the strict target to the critical path and relax it elsewhere."
 
+#### Sources
+- [Availability table](https://sre.google/sre-book/availability-table/) — Google SRE book
+- [High availability](https://en.wikipedia.org/wiki/High_availability) — Wikipedia
+
 ### MTTR — Mean Time to Recovery: key reliability metric; minimize with runbooks + automation
 MTTR is the average time from a failure starting to service being restored. It breaks down into **time to detect + time to diagnose/engage + time to mitigate**. Because availability ≈ MTBF / (MTBF + MTTR), cutting MTTR from 60 to 6 minutes improves availability as much as making failures 10× rarer, and it's usually easier.
+
+#### Intuition
+How long the lights stay off after a fuse blows. Finding the fuse box, working out which fuse, and flipping it each take time, and each can be made faster.
+
+#### Must know
+- MTTR is the average time from a failure starting to service being restored.
+- It splits into **detect + engage + diagnose + mitigate**.
+- Availability ≈ MTBF ÷ (MTBF + MTTR), so faster recovery raises availability directly.
+- **Mitigate first, find the root cause later**: roll back, fail over, or switch a flag off.
+- Most incidents follow a change, so show recent deploys beside every graph.
+
+#### Common mistakes
+- Alerting on causes (CPU) and not symptoms, so users notice first.
+- Debugging to the root cause while users are still affected.
+- No quick rollback, so every fix needs a new deploy.
 
 #### How it works
 ```mermaid
@@ -381,8 +527,30 @@ Users care about service being restored, not the explanation. Rolling back a sus
 #### Interview angle
 > "Most incidents follow a change, so the fastest MTTR wins come from SLO alerts, deploy markers next to every graph and one-click rollback. Root cause comes after service is back."
 
+#### Sources
+- [Managing incidents](https://sre.google/sre-book/managing-incidents/) — Google SRE book
+- [DORA's software delivery metrics: the four keys](https://dora.dev/guides/dora-metrics/) — DORA
+
 ### MTBF — Mean Time Between Failures; maximize with fault isolation and redundancy
 MTBF is the average operating time between failures. You increase it by preventing failures (testing, safer deployments, capacity headroom) and, at the system level, by making component failures **not become system failures** through redundancy, isolation and graceful degradation. Availability = MTBF / (MTBF + MTTR).
+
+#### Intuition
+How long the car runs between breakdowns. Good servicing helps, but so does carrying a spare tyre, so a puncture does not end the journey.
+
+#### Must know
+- MTBF is the average running time between failures.
+- Raise it by **preventing** failures: testing, safer deploys, spare capacity.
+- Raise it by stopping a component failure becoming a system failure: **redundancy and isolation**.
+- At scale, individual parts fail every day, so the design must assume failure.
+- Improving MTTR is often cheaper than improving MTBF.
+
+#### Numbers to quote
+- 10,000 disks at a 2% yearly failure rate means about 200 failures a year.
+
+#### Common mistakes
+- Redundant copies that share one failure cause: same deploy, same zone, same config.
+- The same kind of incident repeating because follow-up actions were never done.
+- Chasing perfect MTBF and neglecting recovery.
 
 #### How it works
 ```mermaid
@@ -428,8 +596,30 @@ Redundant components often fail together due to shared causes: the same buggy de
 #### Interview angle
 > "I raise MTBF by classifying incident causes and fixing whole classes (canaries for deploys, bulkheads for dependencies, headroom for peaks) and by keeping replicas out of shared failure domains."
 
+#### Sources
+- [Mean time between failures](https://en.wikipedia.org/wiki/Mean_time_between_failures) — Wikipedia
+- [Embracing risk](https://sre.google/sre-book/embracing-risk/) — Google SRE book
+
 ### RTO — Recovery Time Objective: max acceptable downtime (DR planning)
 RTO is the **maximum acceptable time** to restore a service after a disaster (region loss, data corruption, ransomware). It's a business decision tied to the cost of downtime, and it determines the disaster recovery (DR) strategy: backup-and-restore (hours), pilot light (tens of minutes to hours), warm standby (minutes), or active-active (near zero).
+
+#### Intuition
+After a fire, how quickly must the shop reopen? In an hour you need a second shop ready and waiting. In a week you can rebuild from the plans.
+
+#### Must know
+- RTO is the **maximum acceptable time to restore service** after a disaster.
+- It is a business decision, based on what downtime costs.
+- It selects the recovery strategy: backup and restore, pilot light, warm standby, or active-active.
+- **A lower RTO costs more.**
+- It includes the time people take to decide. Test it with timed drills.
+
+#### Numbers to quote
+- Backup and restore: hours. Pilot light: tens of minutes. Warm standby: minutes. Active-active: near zero.
+
+#### Common mistakes
+- An RTO on paper that has never been tested.
+- Forgetting that restoring a large database can take hours by itself.
+- Nobody with clear authority to declare a disaster.
 
 #### How it works
 ```mermaid
@@ -480,8 +670,30 @@ Schedule a DR drill: actually restore or fail over in the secondary region with 
 #### Interview angle
 > "RTO picks the DR tier. For a one-hour RTO I'd run a warm standby with cross-region replicas and Terraform-built scaled-down capacity, and prove it with timed drills."
 
+#### Sources
+- [Disaster recovery options in the cloud](https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html) — AWS whitepaper
+- [Plan for disaster recovery](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/plan-for-disaster-recovery-dr.html) — AWS Well-Architected reliability pillar
+
 ### RPO — Recovery Point Objective: max acceptable data loss (backup frequency)
 RPO is the **maximum acceptable amount of data loss**, measured in time: if RPO = 5 minutes, after a disaster you may lose at most the last 5 minutes of writes. It determines replication and backup strategy: nightly backups (RPO 24 h), WAL/PITR archiving (minutes), asynchronous replication (seconds), synchronous replication (zero).
+
+#### Intuition
+How much of your essay can you afford to lose? If you save every five minutes, a crash costs at most five minutes of typing. Save once a day and you can lose the whole day.
+
+#### Must know
+- RPO is the **maximum acceptable data loss, measured in time**.
+- It selects the backup and replication method.
+- **RTO is how long you are down. RPO is how much data you lose.** They are independent.
+- **A replica is not a backup**: a bad delete is copied to it at once.
+- Keep point-in-time recovery and backups that cannot be altered.
+
+#### Numbers to quote
+- Nightly backup: up to 24 hours. Log archiving: minutes. Async replica: seconds. Synchronous replication: zero.
+
+#### Common mistakes
+- Relying on replicas to recover from a bad migration or deleted table.
+- Backups that production credentials can delete or encrypt.
+- Demanding zero loss across regions without accepting slower writes.
 
 #### How it works
 ```mermaid
@@ -534,8 +746,30 @@ A replica faithfully copies every change, including mistakes: an accidental `DRO
 #### Interview angle
 > "RPO picks the replication mode: quorum writes across AZs for zero loss, async cross-region for seconds, and PITR with immutable backups for the bad-migration case that replicas copy straight away."
 
+#### Sources
+- [Business continuity plan](https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/business-continuity-plan-bcp.html) — AWS whitepaper
+- [Continuous archiving and point-in-time recovery](https://www.postgresql.org/docs/current/continuous-archiving.html) — PostgreSQL docs
+
 ### Multi-AZ deployment — replicate across availability zones for HA within a region
 An **availability zone (AZ)** is one or more data centres with independent power, cooling and networking, connected to other AZs in the region by low-latency links (~1–2 ms). Running across **at least 2–3 AZs** protects against data-centre-level failures with minimal latency cost. It's the baseline for production high availability.
+
+#### Intuition
+A company with three offices in the same city, each on a different power grid. If one building loses power, staff in the other two carry on.
+
+#### Must know
+- An **availability zone** is a separate data centre with its own power and network.
+- Zones in one region are close, so the latency cost is small.
+- Run across **at least 2–3 zones** as the baseline for production.
+- **Size for losing one zone**: the rest must carry the full load.
+- It does not protect against a region-wide failure or a bad deploy.
+
+#### Numbers to quote
+- With 3 zones, run each at about 66% of capacity or less. Zones are about 1–2 ms apart.
+
+#### Common mistakes
+- All instances ending up in one zone.
+- No spare capacity, so losing a zone overloads the survivors.
+- Clients that do not reconnect after a database failover.
 
 #### How it works
 ```mermaid
@@ -590,8 +824,30 @@ When an AZ fails, its share of traffic shifts to the remaining AZs instantly. If
 #### Interview angle
 > "Production runs across three AZs sized for N−1, with topology spread constraints and a Multi-AZ database whose failover clients ride through with retries."
 
+#### Sources
+- [Availability Zones](https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/availability-zones.html) — AWS whitepaper
+- [Pod topology spread constraints](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/) — Kubernetes docs
+
 ### Multi-region deployment — replicate across regions for DR; active-active vs active-passive
 Multi-region deployments run the system in **two or more geographic regions**, for **disaster recovery** (surviving a whole-region outage), **latency** (serving users nearby) and **data residency**. The core challenges are **data replication** across ~50–200 ms links and **traffic routing**. The two broad models are **active-passive** and **active-active**.
+
+#### Intuition
+Offices in two different cities. An earthquake in one does not touch the other, but the cities are far apart, so keeping both offices' records identical takes real effort.
+
+#### Must know
+- Reasons to do it: **disaster recovery, lower latency, data residency**.
+- The hard parts are **data replication** over long distances and **traffic routing**.
+- **Active-passive**: one region serves, the other waits.
+- **Active-active**: all regions serve at once.
+- **Home-region partitioning**: each user's writes go to one region, which avoids most conflicts.
+
+#### Numbers to quote
+- Regions are about 50–200 ms apart. Asynchronous replication lag is typically around a second.
+
+#### Common mistakes
+- Going multi-region when multi-AZ would meet the requirement.
+- The same record written in two regions with no conflict plan.
+- A failover that has never been rehearsed.
 
 #### How it works
 ```mermaid
@@ -648,8 +904,27 @@ Writes committed in the failed region but not yet replicated, up to the replicat
 #### Interview angle
 > "Multi-region writes stay conflict-free by giving each user a home region. Failover promotes the async replica, and we reconcile the lag window against upstream records."
 
+#### Sources
+- [AWS multi-Region fundamentals](https://docs.aws.amazon.com/prescriptive-guidance/latest/aws-multi-region-fundamentals/) — AWS Prescriptive Guidance
+- [Geode pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/geodes) — Azure Architecture Center
+
 ### Active-active failover — both regions serve traffic; complex consistency, zero downtime
 In active-active, **all regions serve production traffic simultaneously**. If one fails, global routing stops sending traffic there and the others absorb it, with no promotion step, so failover is near-instant and the standby is always proven to work. The hard part is **data**: concurrent writes in multiple regions need partitioning, conflict resolution or a globally consistent database.
+
+#### Intuition
+Two checkout lanes both open all day. If one closes, customers walk over to the other. Nothing needs to be switched on, but that one lane must be able to take everyone.
+
+#### Must know
+- **Every region serves live traffic** all the time.
+- If one fails, routing stops sending traffic there. There is no promotion step.
+- Failover is near-instant, and the "standby" is constantly proven to work.
+- **Each region needs capacity for the whole load.**
+- The hard part is data: concurrent writes in two regions need a plan.
+
+#### Common mistakes
+- Survivors overloading because there was no spare capacity.
+- A hidden dependency that lives in only one region.
+- Operations that are not idempotent, so a retry in another region duplicates an effect.
 
 #### How it works
 ```mermaid
@@ -707,8 +982,27 @@ Preferably route each user to a single home region for writes so concurrent cros
 #### Interview angle
 > "Active-active means every region is live and provisioned for N−1, writes route to each user's home region, and idempotency keys make cross-region retries safe."
 
+#### Sources
+- [Disaster recovery options in the cloud](https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html) — AWS whitepaper
+- [Global tables: multi-Region replication for DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html) — Amazon DynamoDB developer guide
+
 ### Active-passive failover — primary serves all traffic; secondary on standby; DNS failover
 In active-passive, **one region (primary) serves all traffic**, while a **secondary** keeps a replicated copy of data and standby (often scaled-down) infrastructure. On disaster, you **promote** the secondary's database, scale it up, and **switch traffic** (DNS failover or global load balancer). It's simpler than active-active because writes only happen in one place.
+
+#### Intuition
+A spare tyre in the boot. It does nothing most days. When a tyre bursts you stop, fit the spare and drive on. It takes a few minutes, and it only works if the spare was kept inflated.
+
+#### Must know
+- **One region serves all traffic.** A second holds a replicated copy on standby.
+- On disaster: **promote** the standby database, scale up, switch traffic.
+- It is simpler than active-active, because writes happen in one place.
+- **Fence the old primary** first, so two regions never both accept writes.
+- Expect minutes of downtime and a little data loss from replication lag.
+
+#### Common mistakes
+- No fencing, which leads to two primaries (split brain).
+- Clients stuck on the dead region because of cached DNS.
+- A standby that was never tested and has drifted from the primary.
 
 #### How it works
 ```mermaid
@@ -755,8 +1049,27 @@ Often semi-automatic: automatic detection, then a human confirms, because region
 #### Interview angle
 > "Active-passive is the pragmatic DR default: async replica and warm standby, fence the old primary before promoting, anycast or a global accelerator for traffic switching, and regular drills."
 
+#### Sources
+- [Active-active and active-passive failover](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover-types.html) — Amazon Route 53 developer guide
+- [Disaster recovery options in the cloud](https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html) — AWS whitepaper
+
 ### Chaos engineering — intentionally inject failures: kill random pods (Chaos Monkey), Gremlin
 Chaos engineering is the discipline of **running controlled experiments that inject failures in production-like environments** (killing instances, adding latency, failing dependencies, filling disks) to verify the system degrades as expected, and to find weaknesses before real incidents do. Tools include Chaos Monkey, Gremlin, LitmusChaos, Chaos Mesh and AWS Fault Injection Service.
+
+#### Intuition
+A fire drill for software. You set off a small controlled fire on purpose to check that the alarms ring and the exits work, so you do not find out during a real fire.
+
+#### Must know
+- **Deliberately inject failures** to check the system copes as you expect.
+- Steps: state a hypothesis, define the normal state, inject, observe, fix.
+- **Limit the blast radius** and define conditions that stop the experiment.
+- Start in staging, then a small slice of production.
+- Typical finds: missing timeouts, missing fallbacks, failover that does not work.
+
+#### Common mistakes
+- An experiment with no hypothesis and no stop condition.
+- Starting with a large blast radius in production.
+- Findings that nobody owns or fixes.
 
 #### How it works
 ```mermaid
@@ -803,8 +1116,28 @@ Missing or too-long timeouts causing thread exhaustion, retry storms, "optional"
 #### Interview angle
 > "I validate resilience claims with chaos experiments: a hypothesis on SLIs, a small blast radius with auto-abort, then injected latency or dependency loss. It nearly always finds a missing timeout."
 
+#### Sources
+- [Principles of chaos engineering](https://principlesofchaos.org/) — principlesofchaos.org
+- [Chaos Monkey](https://netflix.github.io/chaosmonkey/) — Netflix
+- [What is AWS Fault Injection Service?](https://docs.aws.amazon.com/fis/latest/userguide/what-is.html) — AWS FIS user guide
+
 ### Game days — scheduled chaos: simulate region outage, practice incident response with real team
 A game day is a **scheduled exercise** where the team deliberately simulates a significant failure (a region outage, database failover, a dependency down, a lost key engineer) and **responds as in a real incident**, using real dashboards, runbooks and communication channels. It tests the system *and* the people and processes: detection, roles, runbooks, decision-making.
+
+#### Intuition
+A full rehearsal with the whole cast. Chaos engineering tests the machinery. A game day also tests the people: who gets paged, whether the instructions are right, and who has the keys.
+
+#### Must know
+- A **scheduled exercise** that simulates a big failure, with the team responding as if it were real.
+- It tests **people and process** as well as the system.
+- Formats: tabletop walk-through, staging, then production with safeguards.
+- Measure the time to detect, the time to recover, and whether the runbook worked.
+- The usual findings are missing permissions and out-of-date runbooks.
+
+#### Common mistakes
+- Runbooks that have never been exercised.
+- The same gaps found every time because the actions were not done.
+- Starting with a production game day before trying a tabletop.
 
 #### How it works
 ```mermaid
@@ -849,8 +1182,27 @@ Time to detect (did alerts fire and page the right person), time to engage, time
 #### Interview angle
 > "Quarterly game days rehearse things like a region failover with the real on-call team. The useful findings are usually missing permissions and stale runbooks, not code."
 
+#### Sources
+- [Conduct game days regularly](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_testing_resiliency_game_days_resiliency.html) — AWS Well-Architected reliability pillar
+- [Testing for reliability](https://sre.google/sre-book/testing-reliability/) — Google SRE book
+
 ### Graceful degradation — serve reduced functionality when dependency fails (disable recommendations, show cached data)
 Graceful degradation means that when a dependency fails or the system is overloaded, you **keep the core experience working** with reduced functionality instead of failing entirely: show cached or default data, hide optional features, queue work for later, or serve read-only. It requires classifying features as **critical vs non-critical** and building fallbacks ahead of time.
+
+#### Intuition
+A restaurant whose dessert fridge breaks. It keeps serving mains and takes desserts off the menu. It does not close the whole restaurant.
+
+#### Must know
+- When a dependency fails, **keep the core working with reduced features**.
+- First classify features as **critical or optional**.
+- Fallbacks: cached data, defaults, hiding a section, queueing work, read-only mode.
+- Built from timeouts, circuit breakers and kill switches.
+- **Never serve stale data where being wrong is harmful**: balances, prices at checkout, permissions.
+
+#### Common mistakes
+- An optional service called synchronously with no timeout, so its failure takes the page down.
+- A fallback path that is never tested.
+- Treating every feature as critical.
 
 #### How it works
 ```mermaid
@@ -899,8 +1251,30 @@ When correctness matters more than availability: account balances, inventory at 
 #### Interview angle
 > "Every dependency is classified as critical or optional. Optional ones get tight timeouts, circuit breakers and cached fallbacks, and kill switches shed expensive features under load."
 
+#### Sources
+- [Addressing cascading failures](https://sre.google/sre-book/addressing-cascading-failures/) — Google SRE book
+- [Implement graceful degradation to transform applicable hard dependencies into soft dependencies](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_mitigate_interaction_failure_graceful_degradation.html) — AWS Well-Architected reliability pillar
+
 ### Bulkhead isolation — separate thread pools and connection pools per downstream dependency
 Named after ship compartments, a bulkhead **isolates resources** (thread pools, connection pools, semaphores, even separate clusters) per dependency, tenant or workload, so that one slow or failing part can't consume all shared resources and sink the whole service.
+
+#### Intuition
+A ship's hull divided into watertight compartments. A hole floods one compartment and the ship stays afloat. Without the walls, one hole sinks everything.
+
+#### Must know
+- **Give each dependency its own limited pool** of threads or connections.
+- A slow dependency can then exhaust only its own pool, not the whole service.
+- Requests beyond the limit **fail fast** and can use a fallback.
+- The same idea separates workloads and tenants, up to full independent cells.
+- Pair it with timeouts and circuit breakers.
+
+#### Numbers to quote
+- Size a pool with Little's law: 100 requests/s × 0.2 s = 20 concurrent slots, plus headroom.
+
+#### Common mistakes
+- One shared thread pool for every outbound call.
+- Batch jobs sharing the pool or database that serves users.
+- Pools sized by guesswork and never monitored.
 
 #### How it works
 ```mermaid
@@ -952,3 +1326,8 @@ Use Little's Law: concurrency = request rate × latency. If you call a service a
 
 #### Interview angle
 > "Each downstream call gets its own bulkhead sized by Little's Law, plus a timeout and a circuit breaker, so a hung loyalty service can never take checkout down with it."
+
+#### Sources
+- [Bulkhead pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead) — Azure Architecture Center
+- [Bulkhead](https://resilience4j.readme.io/docs/bulkhead) — Resilience4j docs
+

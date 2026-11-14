@@ -3,6 +3,24 @@
 ### Right-sizing compute — use CloudWatch metrics to identify over-provisioned instances
 Right-sizing means matching instance types and sizes (or container requests) to **actual resource usage**. Teams typically over-provision "to be safe", leaving instances at 10–20% CPU. Using utilisation metrics over a representative period (CPU, memory, network, at p95/p99, not averages) you downsize, change instance family, or move to newer, cheaper generations (e.g. Graviton/ARM).
 
+#### Intuition
+Renting a 50-seat bus to drive four people to work. It gets them there, but you pay for 46 empty seats every day. Check how many people actually ride, then rent a car.
+
+#### Must know
+- Match the instance size (or container request) to **actual measured usage**.
+- Teams over-provision "to be safe", and servers sit mostly idle.
+- Measure over a few weeks, and size on **p95 or peak**, not the average.
+- Options: a smaller size, a different family, or a newer and cheaper generation.
+- **Right-size first, then buy commitments**, so you do not commit to waste.
+
+#### Numbers to quote
+- Measure 2–4 weeks. Graviton (ARM) often gives 20–40% better price-performance.
+
+#### Common mistakes
+- Sizing on average CPU, then being slow at peak.
+- Forgetting memory, which is not in the default EC2 metrics.
+- In Kubernetes, inflated pod requests that nobody revisits.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -52,8 +70,30 @@ Averages hide peaks: a service averaging 20% CPU may hit 85% during daily peaks.
 #### Interview angle
 > "Right-sizing on p95 CPU and memory, plus a Graviton migration, is usually the biggest low-risk saving. Only after that do we buy savings plans for the steady baseline."
 
+#### Sources
+- [What is AWS Compute Optimizer?](https://docs.aws.amazon.com/compute-optimizer/latest/ug/what-is-compute-optimizer.html) — AWS Compute Optimizer user guide
+- [Cost optimization pillar](https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html) — AWS Well-Architected Framework
+
 ### Spot / preemptible instances — 70–90% savings; design stateless workers that handle 2-min shutdown notice
 Spot instances (AWS) / preemptible or Spot VMs (GCP) / Spot VMs (Azure) are **spare cloud capacity at 60–90% discount**, which the provider can **reclaim at short notice** (2 minutes on AWS, 30 seconds on GCP). They suit **fault-tolerant, stateless or checkpointed** workloads: batch processing, CI runners, data pipelines, stateless web tiers behind load balancers, and Kubernetes worker nodes with diverse instance types.
+
+#### Intuition
+Standby airline tickets. They are very cheap because the airline can bump you when a full-fare passenger turns up. Fine for a flexible trip, wrong for your own wedding.
+
+#### Must know
+- **Spare cloud capacity at a large discount**, which the provider can take back at short notice.
+- Good for work that **survives interruption**: batch jobs, CI runners, stateless or idempotent workers.
+- On the notice: stop taking work, finish or checkpoint, drain connections.
+- **Diversify** across instance types and zones to cut interruptions.
+- Keep an on-demand baseline for critical services.
+
+#### Numbers to quote
+- 60–90% cheaper. Notice is 2 minutes on AWS and 30 seconds on GCP.
+
+#### Common mistakes
+- Databases or other stateful single instances on spot.
+- A single instance type in a single zone.
+- A critical service on 100% spot with no fallback.
 
 #### How it works
 ```mermaid
@@ -111,8 +151,30 @@ Make each job idempotent and retryable; use visibility timeouts (SQS) or consume
 #### Interview angle
 > "Batch jobs, CI and idempotent queue workers run on diversified spot capacity with a termination handler that drains and checkpoints. Critical services keep an on-demand baseline."
 
+#### Sources
+- [Spot Instances](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-spot-instances.html) — Amazon EC2 user guide
+- [Spot Instance interruption notices](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-instance-termination-notices.html) — Amazon EC2 user guide
+
 ### Reserved instances vs savings plans — 1–3 year commitment for 30–60% discount on baseline capacity
 Commitment discounts trade flexibility for price: you commit to a level of usage for **1 or 3 years** and get **~30–72% off** on-demand. **Reserved Instances (RIs)** commit to specific instance families/regions (standard or convertible). **Savings Plans** commit to a **$/hour spend**: Compute Savings Plans apply across instance families, regions, Fargate and Lambda; EC2 Instance Savings Plans give deeper discounts for a family in a region. Commit only to the **steady baseline**; cover variable load with on-demand and spot.
+
+#### Intuition
+A yearly gym membership against paying per visit. If you really go every day, the membership is far cheaper. If you stop going, you keep paying anyway.
+
+#### Must know
+- **Commit to usage for 1 or 3 years** in return for a large discount.
+- **Reserved instances** commit to specific instance families. Deeper discount, less flexible.
+- **Savings plans** commit to an hourly spend. **Compute savings plans are the most flexible.**
+- Commit only to the **steady baseline**. Peaks run on on-demand and spot.
+- Right-size first, and buy in stages over time.
+
+#### Numbers to quote
+- Discounts run from about 30% to about 72%. Commit to roughly 70–80% of the steady floor.
+
+#### Common mistakes
+- Committing before right-sizing.
+- Rigid 3-year reservations just before a migration to containers or ARM.
+- Buying everything at once, so it all expires together.
 
 #### How it works
 ```mermaid
@@ -166,8 +228,31 @@ Compute Savings Plans: they apply automatically across EC2 instance families and
 #### Interview angle
 > "Right-size first, then cover about 70–80% of the steady floor with flexible Compute Savings Plans bought in staggered tranches. Peaks ride on autoscaled on-demand and spot."
 
+#### Sources
+- [What are Savings Plans?](https://docs.aws.amazon.com/savingsplans/latest/userguide/what-is-savings-plans.html) — AWS Savings Plans user guide
+- [Reserved Instances](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-reserved-instances.html) — Amazon EC2 user guide
+
 ### S3 storage tiering — Standard → Standard-IA → Glacier Instant → Glacier Flexible → Deep Archive
 S3 offers storage classes priced by **access frequency and retrieval speed**: the less often you need data and the longer you can wait for it, the cheaper per GB, but with retrieval fees and minimum storage durations. **Intelligent-Tiering** moves objects automatically based on access patterns for a small monitoring fee.
+
+#### Intuition
+Keeping things on your desk, in a cupboard or in a distant warehouse. The further away, the cheaper the space, but the longer and costlier it is to fetch something back.
+
+#### Must know
+- Storage classes are priced by **how often you read the data and how fast you need it**.
+- **Colder is cheaper per GB**, but adds retrieval fees and minimum storage periods.
+- Order: Standard → Standard-IA → Glacier Instant → Glacier Flexible → Deep Archive.
+- **Intelligent-Tiering** moves objects automatically when the access pattern is unknown.
+- Small or frequently read objects can cost more in a cold class.
+
+#### Numbers to quote
+- Standard is about $0.023 per GB-month. Deep Archive is about $0.001, with retrieval in 12–48 hours.
+- Infrequent-access classes bill a 128 KB minimum per object and a 30-day minimum stay.
+
+#### Common mistakes
+- Moving millions of tiny objects to an infrequent-access class.
+- Keeping data needed for incident recovery in a slow archive tier.
+- Ignoring retrieval fees for data that is read more often than expected.
 
 #### How it works
 | Class | Storage $/GB-month (approx, us-east-1) | Retrieval | Min duration | Use for |
@@ -225,8 +310,27 @@ When objects are small (IA classes charge a minimum of 128 KB per object), when 
 #### Interview angle
 > "Cold user uploads tier from Standard to IA to Glacier Instant Retrieval through lifecycle rules, or Intelligent-Tiering when access is unknown, while small hot objects stay in Standard because IA minimums cost more."
 
+#### Sources
+- [Amazon S3 storage classes](https://aws.amazon.com/s3/storage-classes/) — AWS
+- [Understanding and managing Amazon S3 storage classes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html) — Amazon S3 user guide
+
 ### Lifecycle policies — auto-transition objects to cheaper tier after 30/90/365 days
 Lifecycle policies are **rules on a bucket** (by prefix or tag) that automatically **transition** objects to cheaper storage classes after a given age and **expire** (delete) them when no longer needed, including old object versions and incomplete multipart uploads. They turn data retention policy into automation.
+
+#### Intuition
+A filing rule pinned to the wall: after a month move it to the cabinet, after a year to the basement, after seven years shred it. Once written, it runs with nobody thinking about it.
+
+#### Must know
+- **Rules on a bucket** that move objects to cheaper classes by age and delete them when done.
+- Rules can target a prefix or a tag.
+- Always add: **expire old object versions**.
+- Always add: **abort incomplete multipart uploads**.
+- Check the rules against legal retention requirements first.
+
+#### Common mistakes
+- A versioned bucket with no rule for old versions, so it grows without limit.
+- Abandoned multipart uploads, which are invisible in listings but still billed.
+- An expiry rule that deletes data the business must keep.
 
 #### How it works
 ```json
@@ -287,8 +391,30 @@ Every overwrite or delete keeps the previous object as a noncurrent version (and
 #### Interview angle
 > "Every bucket gets lifecycle rules: transitions by age, expiry per data class, noncurrent version expiration and multipart cleanup, all reviewed against legal retention."
 
+#### Sources
+- [Managing the lifecycle of objects](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html) — Amazon S3 user guide
+- [Examples of S3 Lifecycle configurations](https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-configuration-examples.html) — Amazon S3 user guide
+
 ### Data transfer costs — same-AZ is free; cross-AZ costs $0.01/GB; cross-region higher; CDN reduces egress
 Cloud providers charge for data moving **between AZs, between regions and out to the internet**, and these costs are easy to overlook. On AWS (approximate): traffic within an AZ over private IPs is free, **cross-AZ ~$0.01/GB each direction**, **cross-region ~$0.02/GB**, and **internet egress ~$0.05–0.09/GB** (cheaper via CloudFront). NAT gateways add **~$0.045/GB processed**. High-throughput architectures can spend more on data transfer than on compute.
+
+#### Intuition
+Road tolls. Driving inside your own neighbourhood is free, crossing to the next district costs a little, another city costs more, and leaving the country costs the most. Heavy traffic makes the tolls add up.
+
+#### Must know
+- Clouds charge for data moving **between zones, between regions and out to the internet**.
+- Within one zone it is free. Each step outward costs more.
+- A **NAT gateway** adds a per-GB processing fee.
+- Use **VPC gateway endpoints** for S3 and DynamoDB. They are free.
+- A CDN, compression and zone-aware routing cut the rest.
+
+#### Numbers to quote
+- AWS, approximately: cross-AZ $0.01/GB each way, cross-region $0.02/GB, internet egress $0.05–0.09/GB, NAT processing $0.045/GB.
+
+#### Common mistakes
+- Sending S3 traffic through a NAT gateway.
+- Chatty services or Kafka replication crossing zones with no compression.
+- Serving large media straight from the origin with no CDN.
 
 #### How it works
 ```mermaid
@@ -349,8 +475,30 @@ NAT gateway data processing (~$0.045/GB) on traffic from private subnets to AWS 
 #### Interview angle
 > "I check data transfer early: gateway endpoints instead of NAT for S3, a CDN for egress, compression, and zone-aware routing with rack-aware Kafka fetches so bytes stop crossing AZs."
 
+#### Sources
+- [Overview of data transfer costs for common architectures](https://aws.amazon.com/blogs/architecture/overview-of-data-transfer-costs-for-common-architectures/) — AWS architecture blog
+- [Gateway endpoints](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html) — AWS PrivateLink guide
+
 ### Caching ROI — every cache hit saves a DB query; measure cache hit rate, aim for >95% for hot paths
 Caching pays off when the **cost of the cache is lower than the backend work it avoids**: database capacity, compute, latency and third-party API fees. The key metric is **hit rate**: at 95% hits, the backend sees only 5% of read traffic (20× reduction); dropping to 80% quadruples backend load. Measure hit rate, latency and backend savings to justify (and size) caches.
+
+#### Intuition
+A receptionist who answers the common questions from memory, so only the unusual ones reach the expert. If the receptionist answers 95 out of 100, the expert handles 5. At 80 out of 100, the expert's load is four times higher.
+
+#### Must know
+- A cache is worth it when it **costs less than the backend work it avoids**.
+- The key metric is the **hit rate**.
+- A small drop in hit rate means a large rise in backend load.
+- Measure hit rate **per key pattern**, not only overall.
+- Plan for the cache being empty or down, when the full load reaches the database.
+
+#### Numbers to quote
+- At 95% hits the backend sees 5% of reads. At 85% it sees 15%, three times as much.
+
+#### Common mistakes
+- Cache keys that include needless per-user or per-session parts.
+- A cache too small for the working set, so entries are constantly evicted.
+- Adding database replicas before fixing a poor hit rate.
 
 #### How it works
 ```mermaid
@@ -401,8 +549,30 @@ Backend load triples (from 5% to 15% of reads), which may overload the database.
 #### Interview angle
 > "Cache ROI is about hit rate: going from 95% to 85% triples database load. I track hit rate per key pattern and evictions, and justify the cluster by the replicas it lets us remove."
 
+#### Sources
+- [Caching overview](https://aws.amazon.com/caching/) — AWS
+- [INFO](https://redis.io/docs/latest/commands/info/) — Redis command reference
+
 ### Compression reduces bandwidth and storage — 3–10× reduction for JSON/text data
 Text-based data (JSON, logs, CSV, HTML) is highly redundant and typically compresses **3–10×**. Compressing at the right places (HTTP responses, Kafka batches, logs, backups, data lakes via columnar formats) cuts **network egress, cross-AZ transfer, storage and I/O**, often improving latency too, in exchange for some CPU.
+
+#### Intuition
+Text is full of repetition, like a letter that says "Dear customer" a thousand times. Squeezing out the repetition before posting or storing it saves most of the weight.
+
+#### Must know
+- Text data (JSON, logs, CSV, HTML) is very repetitive and compresses well.
+- It cuts **network egress, cross-zone transfer, storage and bytes scanned**.
+- It pays most where you are **billed per GB**.
+- Apply it at the CDN for HTTP, in Kafka batches, for logs and backups, and through columnar formats in the lake.
+- Skip images, video and tiny messages.
+
+#### Numbers to quote
+- Text typically shrinks 3–10×.
+
+#### Common mistakes
+- HTTP compression switched off at the load balancer or CDN and forgotten.
+- Logs and backups stored uncompressed.
+- Raw JSON in a data lake that is billed by bytes scanned.
 
 #### How it works
 ```mermaid
@@ -449,8 +619,30 @@ Athena charges per byte scanned. Compressed columnar Parquet is several times sm
 #### Interview angle
 > "Compression is the cheapest cost win wherever we pay per GB: Brotli at the CDN, zstd for Kafka and logs, and Parquet in the lake to cut bytes scanned."
 
+#### Sources
+- [Compression in HTTP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Compression) — MDN
+- [Use columnar storage formats](https://docs.aws.amazon.com/athena/latest/ug/columnar-storage.html) — Amazon Athena user guide
+
 ### Auto-scaling to zero — Lambda, Cloud Run, ECS Fargate: no cost when no traffic (ideal for batch workloads)
 Scale-to-zero platforms run your code **only when there's work** and charge **nothing (or nearly nothing) when idle**: AWS Lambda, Google Cloud Run, Azure Functions/Container Apps, Knative/KEDA on Kubernetes. They suit **spiky, intermittent or low-traffic** workloads: internal tools, webhooks, scheduled jobs, event processing, dev/preview environments. The trade-off is **cold starts** and per-request pricing that becomes expensive at sustained high load.
+
+#### Intuition
+A light with a motion sensor. It costs nothing while the room is empty and takes a moment to come on when someone walks in. In a room that is always busy, a plain always-on light is cheaper.
+
+#### Must know
+- The platform runs your code **only when there is work**, and charges nothing when idle.
+- Best for **spiky or occasional** workloads: webhooks, scheduled jobs, internal tools.
+- The cost is the **cold start** on the first request after idle.
+- Per-request pricing gets **expensive at steady high traffic**.
+- Rule: intermittent work on serverless, steady load on containers with commitments.
+
+#### Numbers to quote
+- Lambda costs about $0.20 per million requests plus about $0.0000167 per GB-second.
+
+#### Common mistakes
+- Steady high-traffic services on per-request pricing.
+- Latency-critical endpoints with no warm instances.
+- Always-on servers for tools that are used a few times a day.
 
 #### How it works
 ```mermaid
@@ -465,7 +657,7 @@ flowchart LR
 
 Cost crossover: Lambda at ~$0.20 per million requests + ~$0.0000167 per GB-second. A function at 512 MB running 100 ms costs ~$1 per million requests. A steady 200 requests/s (~520M/month) would cost ~$520+ per month; a couple of small always-on containers might handle that for less. Rule of thumb: **intermittent → serverless, steady high utilisation → containers or VMs with commitments**.
 
-Cold start mitigations: smaller packages, lighter runtimes, init outside handler, **provisioned concurrency** / min instances (which brings back some idle cost), SnapStart (Java on Lambda).
+Cold start mitigations: smaller packages, lighter runtimes, init outside handler, **provisioned concurrency** / min instances (which brings back some idle cost), SnapStart (Java, Python and .NET on Lambda).
 
 #### Example
 A company ran 40 internal tools and webhook handlers on always-on t3.medium instances (~$1,200/month) at under 2% utilisation. Moving them to Cloud Run with min instances 0 cost ~$60/month. For the customer-facing API (steady 1,500 RPS), they kept ECS on EC2 with savings plans, because a Lambda estimate came out ~3× more expensive at that sustained load.
@@ -500,8 +692,28 @@ Keep packages and dependencies small, initialise expensive clients outside the h
 #### Interview angle
 > "Intermittent work like webhooks, cron jobs and internal tools scales to zero on Lambda or Cloud Run. Steady high-RPS services stay on containers with savings plans, because per-request pricing loses at sustained load."
 
+#### Sources
+- [About instance autoscaling in Cloud Run services](https://cloud.google.com/run/docs/about-instance-autoscaling) — Google Cloud docs
+- [AWS Lambda pricing](https://aws.amazon.com/lambda/pricing/) — AWS
+- [KEDA concepts](https://keda.sh/docs/latest/concepts/) — KEDA docs
+
 ### Database read replicas cost tradeoff — cheaper than sharding; only add when primary is read-saturated
 Read replicas scale **reads** by copying the primary's data asynchronously to additional instances. They are far **simpler and cheaper than sharding** (no application changes beyond read/write routing), but each replica costs a full instance, adds **replication lag** (stale reads), and does nothing for write throughput. Add them when reads saturate the primary, **after** cheaper options: query optimisation, indexes and caching.
+
+#### Intuition
+Photocopying a reference book so more people can read at once. It helps the readers, but each copy costs money, may be a page behind, and does nothing for the one person who writes in the original.
+
+#### Must know
+- Replicas scale **reads only**, by copying the primary asynchronously.
+- Far simpler than sharding, but **each replica is a full instance cost**.
+- Replication lag means replica reads can be slightly stale.
+- Cheaper fixes come first: **optimise queries, add indexes, add a cache**.
+- Sharding is for write scale or data too big for one node.
+
+#### Common mistakes
+- Adding replicas when the real problem is a missing index.
+- Reading a user's own update from a lagging replica.
+- Expecting replicas to help a primary that is saturated by writes.
 
 #### How it works
 ```mermaid
@@ -553,3 +765,8 @@ Route a user's reads to the primary for a short period after they write (e.g. a 
 
 #### Interview angle
 > "Before adding replicas I fix queries and cache hot reads. Replicas then take reporting and staleness-tolerant reads with read-your-writes routing, and sharding waits until writes truly saturate one node."
+
+#### Sources
+- [Working with DB instance read replicas](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.html) — Amazon RDS user guide
+- [High availability, load balancing, and replication](https://www.postgresql.org/docs/current/high-availability.html) — PostgreSQL docs
+
