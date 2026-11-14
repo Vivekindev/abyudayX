@@ -3,6 +3,21 @@
 ### Event sourcing — append-only log of domain events is source of truth; current state = replay of events
 In event sourcing you store **every state change as an immutable domain event** (`AccountOpened`, `MoneyDeposited`, `MoneyWithdrawn`) instead of overwriting current state. The event log is the source of truth, and current state is derived by **replaying** events (often accelerated by snapshots). You get a perfect audit trail, time travel and the ability to build new views from history.
 
+#### Intuition
+A bank statement. The bank does not just keep your current balance. It keeps every deposit and withdrawal, and the balance is whatever those entries add up to. You can always see how you got to today's number.
+
+#### Must know
+- Store **every state change as an immutable event**. Do not overwrite the current state.
+- The event log is the source of truth. **Current state = replay of the events.**
+- Appends use an **expected version**, which gives optimistic concurrency without locks.
+- **Snapshots** avoid replaying a long history. **Projections** serve queries.
+- Benefits: a full audit trail, time travel, and new views built from history. It fits ledgers and workflows.
+
+#### Common mistakes
+- Using it for simple CRUD where only the current state matters.
+- No plan for changing event schemas. Old events live forever.
+- Putting personal data in immutable events with no way to delete it.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -56,8 +71,28 @@ Optimistic concurrency: the command handler loads the stream at version N, decid
 #### Interview angle
 > "For a ledger I'd use event sourcing: immutable entries appended with an expected version, balances as projections, snapshots for speed, versioned events, and crypto-shredding for PII."
 
+#### Sources
+- [Event sourcing](https://martinfowler.com/eaaDev/EventSourcing.html) — Martin Fowler
+- [Event sourcing pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing) — Azure Architecture Center
+- [Event sourcing](https://microservices.io/patterns/data/event-sourcing.html) — microservices.io
+
 ### Event store — immutable, ordered, replayable; projections rebuild read models
 An event store is the database for event sourcing: it stores **streams of events per aggregate** (append-only, ordered, with versions), supports **optimistic concurrency** on append, and offers **subscriptions** so projections can consume events in order and rebuild from the beginning at any time.
+
+#### Intuition
+A ship's logbook with numbered pages. Entries are only ever added, never changed. Anyone can read from page one to rebuild the full story of the voyage, and two officers cannot both write on page 42.
+
+#### Must know
+- The database for event sourcing: an **append-only stream of events per entity**, each with a version.
+- A unique `(stream id, version)` gives optimistic concurrency: two writers cannot both append version 5.
+- A **global position** lets projections read events in order and remember where they stopped.
+- Any read model can be **rebuilt from position zero**.
+- Options: a purpose-built store, or a plain PostgreSQL table. Kafka works as the event bus, not as this store.
+
+#### Common mistakes
+- Using a Kafka topic as the store. There is no per-entity version check and no efficient read of one entity's events.
+- Projections that cannot be rebuilt because old events were deleted.
+- Aggregates so large that every command conflicts.
 
 #### How it works
 ```mermaid
@@ -120,8 +155,27 @@ Create a new version of the read model (a new table or index), reset its checkpo
 #### Interview angle
 > "The event store keeps per-aggregate streams with a unique (stream, version) for optimistic concurrency, plus a global position for checkpointed projections. Every read model can be rebuilt from scratch."
 
+#### Sources
+- [Event sourcing pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing) — Azure Architecture Center
+- [Event sourcing](https://microservices.io/patterns/data/event-sourcing.html) — microservices.io
+
 ### CQRS — Command Query Responsibility Segregation: separate write model (commands) from read model (queries)
 CQRS separates the **write side** (commands that change state, enforcing business rules on a normalised or aggregate model) from the **read side** (queries served from models shaped for each screen or use case). Each side can use a different schema, database and scaling strategy, connected by events.
+
+#### Intuition
+A restaurant kitchen and its printed menu. The kitchen works with raw ingredients and strict recipes. The menu is a display designed for customers to read quickly. They are different things, and the menu is reprinted when the kitchen changes a dish.
+
+#### Must know
+- **Commands** change state through a strict write model. **Queries** read from models shaped for each screen.
+- The two sides can use different schemas, different databases and different scaling.
+- Events or CDC carry changes from the write side to the read side.
+- The read side is **eventually consistent**, so handle read-your-writes.
+- Apply it **only where reads and writes differ strongly**.
+
+#### Common mistakes
+- Applying CQRS to every CRUD screen.
+- Thinking CQRS requires event sourcing. They are separate ideas.
+- No plan for the user who acts and then immediately queries.
 
 #### How it works
 ```mermaid
@@ -173,8 +227,27 @@ Return the created order in the command response and show it optimistically. Rou
 #### Interview angle
 > "I apply CQRS where reads and writes diverge: commands hit a strict write model, and events feed denormalised read models in Postgres, Elasticsearch and ClickHouse, with read-your-writes handling for the user who just acted."
 
+#### Sources
+- [CQRS](https://martinfowler.com/bliki/CQRS.html) — Martin Fowler
+- [CQRS pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs) — Azure Architecture Center
+
 ### CQRS read models — optimized for query patterns, updated asynchronously via events
 A read model (projection, materialised view) is a **query-optimised copy of data**, shaped exactly for one screen or API, kept up to date by **consuming events** from the write side. You can have many read models over the same events, each in the best store for its query.
+
+#### Intuition
+A summary sheet kept beside a thick file. Whenever the file changes, someone updates the sheet. Readers use the sheet because it shows exactly what they need on one page, and if it is ever wrong it can be rewritten from the file.
+
+#### Must know
+- A read model is a **query-optimised copy of data**, shaped for one screen or API.
+- It is kept current by **consuming events**. Several read models can be built from the same events.
+- The projector must be **idempotent** (upsert, version check), because events repeat.
+- Store the **checkpoint in the same transaction** as the update.
+- Read models are disposable: rebuild them from the event history.
+
+#### Common mistakes
+- A projector that inserts blindly, so a redelivered event duplicates data.
+- Treating the read model as the source of truth.
+- Event history too short to rebuild from.
 
 #### How it works
 ```mermaid
@@ -229,8 +302,27 @@ Instead of runtime joins across services (multiple synchronous calls, latency an
 #### Interview angle
 > "Screens that combine data from many services read from a projection fed by their events: an idempotent upsert, with the checkpoint stored in the same transaction, rebuildable from the event archive."
 
+#### Sources
+- [Materialized view pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/materialized-view) — Azure Architecture Center
+- [CQRS](https://microservices.io/patterns/data/cqrs.html) — microservices.io
+
 ### Outbox pattern — write event to outbox table in same DB transaction as domain change; relay process publishes to MQ
 The transactional outbox solves the **dual-write problem**: you can't atomically update a database and publish to Kafka or RabbitMQ. Instead, the service writes the business change **and an event row into an `outbox` table in the same DB transaction**. A separate relay (a poller or CDC) reads the outbox and publishes to the broker, retrying until it succeeds.
+
+#### Intuition
+You write a letter and put it in your own out-tray in the same sitting as you update your records. A messenger empties the out-tray later and keeps trying until each letter is posted. A letter is never posted for a record that was not saved, and never forgotten for one that was.
+
+#### Must know
+- It solves the **dual write**: a database update and a broker publish cannot be made atomic.
+- Write the business change **and an event row in an `outbox` table in one transaction**.
+- A separate **relay** reads the outbox and publishes to the broker, retrying until it succeeds.
+- The relay is either CDC (Debezium) or a poller using `FOR UPDATE SKIP LOCKED`.
+- Publication is **at-least-once**, so consumers must deduplicate by event id.
+
+#### Common mistakes
+- "Save to the database, then publish to Kafka" with no outbox.
+- Publishing before the commit, which emits events for changes that roll back.
+- Never cleaning up published outbox rows.
 
 #### How it works
 ```mermaid
@@ -294,8 +386,27 @@ CDC (Debezium reading the WAL) gives low latency, no polling queries on the tabl
 #### Interview angle
 > "Every service publishes through a transactional outbox, with Debezium relaying it to Kafka keyed by aggregate id, so state and events can never disagree. Consumers dedupe by event id."
 
+#### Sources
+- [Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) — microservices.io
+- [Outbox event router](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html) — Debezium docs
+
 ### Inbox pattern — idempotent consumer with inbox table to deduplicate duplicate deliveries
 The inbox pattern is the consumer-side counterpart of the outbox: each incoming message's id is recorded in an **inbox table** within the **same transaction** as the consumer's state changes. If the message arrives again, the insert fails (unique key) and processing is skipped, which turns at-least-once delivery into **exactly-once effects**.
+
+#### Intuition
+A receptionist stamps every delivery slip in a book. If the same slip number turns up again, the stamp is already there and the parcel is not accepted a second time.
+
+#### Must know
+- The consumer-side partner of the outbox.
+- Record each message id in an **inbox table in the same transaction** as the consumer's own changes.
+- A duplicate fails the unique key and is skipped.
+- It turns at-least-once delivery into **exactly-once effects**.
+- It only covers effects in that database. An external call needs an idempotency key.
+
+#### Common mistakes
+- Inserting into the inbox and applying the effect in separate transactions.
+- Purging inbox rows before a replay could still arrive.
+- Expecting it to stop a duplicate call to a third-party API.
 
 #### How it works
 ```mermaid
@@ -351,8 +462,30 @@ At least as long as duplicates can arrive: the broker's redelivery window, plus 
 #### Interview angle
 > "Consumers use an inbox table: the message id is inserted in the same transaction as the side effect, so redeliveries and replays are no-ops. With the outbox on the producer side, that gives effectively-once messaging."
 
+#### Sources
+- [Idempotent consumer](https://microservices.io/patterns/communication-style/idempotent-consumer.html) — microservices.io
+- [Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) — microservices.io
+
 ### Change Data Capture (CDC) — Debezium reads DB write-ahead log → publishes to Kafka; zero-impact on DB
 Change Data Capture streams **every committed row change** (insert, update, delete) from a database's transaction log (Postgres WAL, MySQL binlog, Mongo oplog) into an event stream, usually Kafka via **Debezium**. Downstream systems (search, caches, warehouses, other services) stay in sync without dual writes or polling queries.
+
+#### Intuition
+A court stenographer who records everything said, in order, without interrupting anyone. Whoever needs to know what happened reads the transcript and does not have to ask each speaker.
+
+#### Must know
+- CDC streams **every committed row change** from the database's transaction log into an event stream.
+- The usual tool is **Debezium** on Kafka Connect, reading the PostgreSQL WAL or MySQL binlog.
+- It needs no application change and captures writes from **every** source, including manual SQL.
+- Uses: search index sync, cache invalidation, warehouse loading, the outbox relay.
+- Raw CDC exposes your table layout. Publish domain events through an outbox for other teams.
+
+#### Numbers to quote
+- End-to-end lag is typically about a second or less.
+
+#### Common mistakes
+- A stopped connector holding a replication slot until the database disk fills.
+- Other teams depending on your raw table-change topics.
+- An initial snapshot run against the primary at peak time.
 
 #### How it works
 ```mermaid
@@ -409,8 +542,27 @@ Generally no: raw CDC exposes your internal table structure, so renaming a colum
 #### Interview angle
 > "Search, caches and the warehouse stay in sync through Debezium CDC from the WAL, with no dual writes. Replication slot lag is alerted on, and other teams consume outbox domain events, not my raw tables."
 
+#### Sources
+- [Debezium architecture](https://debezium.io/documentation/reference/stable/architecture.html) — Debezium docs
+- [Debezium connector for PostgreSQL](https://debezium.io/documentation/reference/stable/connectors/postgresql.html) — Debezium docs
+
 ### Saga choreography vs orchestration — choreography: loose coupling, hard to trace; orchestration: central control, easier to monitor
 Both implement sagas (multi-service transactions with compensations). In **choreography**, services react to each other's events with no central brain. In **orchestration**, a coordinator explicitly commands each step. Choosing between them is about **coupling, visibility and complexity**. (Phase 6 covers each in depth.)
+
+#### Intuition
+A dance where everyone watches their neighbours and reacts, compared with a dance led by a caller announcing each step. The first needs no leader but is hard to change. The second has one person who knows the whole routine.
+
+#### Must know
+- **Choreography**: services react to each other's events. No coordinator.
+- **Orchestration**: a coordinator commands each step and holds the workflow state.
+- Choreography suits **short, stable flows**.
+- Orchestration suits **long flows with branches, timeouts and approvals**.
+- A common mix: orchestrate the core transaction, choreograph independent side effects.
+
+#### Common mistakes
+- Choreography across nine services with no tracking view.
+- An orchestrator that absorbs every domain's business rules.
+- Presenting one as always correct.
 
 #### How it works
 ```mermaid
@@ -469,8 +621,27 @@ The orchestrator can become a "god service" containing business logic from every
 #### Interview angle
 > "I orchestrate the core transaction, with explicit steps, timeouts and compensations in one place, and choreograph independent side effects through events."
 
+#### Sources
+- [Saga pattern](https://microservices.io/patterns/data/saga.html) — microservices.io
+- [Saga distributed transactions pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/saga) — Azure Architecture Center
+
 ### Event versioning and upcasting — handle schema changes by transforming old events to new schema on read
 Events are immutable and may be stored forever (event stores, long-retention topics), so their schemas will change while old events remain. **Versioning** labels each event's schema, and **upcasting** transforms old event versions into the current shape **when they're read**, so business code only handles the latest version.
+
+#### Intuition
+Old family letters written in an older script. You do not rewrite the originals. You translate each one as you read it, so the reader always sees modern language.
+
+#### Must know
+- Stored events are **immutable**, yet their schema will change over the years.
+- Give every event a **version**.
+- **Upcasting** converts an old version to the current shape **when it is read**.
+- Business code then handles only the latest version.
+- Adding an optional field needs no new version. A change of meaning needs a new event type.
+
+#### Common mistakes
+- Rewriting old events in the store, which destroys the audit record.
+- No version field, so old and new shapes cannot be told apart.
+- Never testing new code against real historical events.
 
 #### How it works
 ```mermaid
@@ -533,8 +704,30 @@ Keep a corpus of real (anonymised) historical events for each version, and in CI
 #### Interview angle
 > "Every event carries a version, history is never rewritten, and upcasters lift old versions on read, tested in CI against a corpus of historical events."
 
+#### Sources
+- [Event sourcing](https://martinfowler.com/eaaDev/EventSourcing.html) — Martin Fowler
+- [Schema evolution and compatibility](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html) — Confluent docs
+
 ### Temporal coupling problem — synchronous chains; fix with async events to decouple services
 Temporal coupling means a service can only complete its work if **other services are available right now**. Long chains of synchronous calls (A → B → C → D) multiply failure probability and latency: one slow or failed service fails the whole request. Async messaging decouples **in time**: A records its intent and returns, and others process when they can.
+
+#### Intuition
+A phone call needs both people free at the same moment. A text message does not. If your work depends on five people all answering the phone right now, one busy line stops everything.
+
+#### Must know
+- Temporal coupling: a service can finish its work **only if others are up right now**.
+- A synchronous chain multiplies failure chances and adds up latency.
+- **Asynchronous messaging decouples in time**: record the intent, return, and let others process later.
+- Keep synchronous **only what the user needs immediately** (price, stock, payment authorisation).
+- Email, loyalty points, analytics and search indexing go through events.
+
+#### Numbers to quote
+- Five services in series at 99.9% each give about 99.5% overall.
+
+#### Common mistakes
+- Calling a non-essential service synchronously inside checkout.
+- Going async with no outbox, no idempotency and no DLQ.
+- Leaving the remaining synchronous calls without timeouts.
 
 #### How it works
 ```mermaid
@@ -587,3 +780,8 @@ Synchronous: validate cart and price, check or reserve stock, authorise payment,
 
 #### Interview angle
 > "I keep only what the user needs right now on the synchronous path, like price, stock and payment authorisation, and push the rest through outbox events, so a slow loyalty or email service can never take checkout down."
+
+#### Sources
+- [Asynchronous messaging options](https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/messaging) — Azure Architecture Center
+- [Messaging](https://microservices.io/patterns/communication-style/messaging.html) — microservices.io
+

@@ -3,6 +3,21 @@
 ### Point-to-point queue — one message consumed by exactly one consumer (work queue pattern)
 A point-to-point queue delivers each message to **one** consumer. Many workers can read from the same queue, but each message is processed by only one of them (barring redelivery). It's the work-queue pattern: distribute tasks (emails, image resizes, invoice generation) across a pool of workers that scales independently of producers.
 
+#### Intuition
+A pile of job tickets on a counter with several workers. Each worker takes the next ticket, and once it is taken nobody else does that job. If the counter fills up, the tickets just wait.
+
+#### Must know
+- Each message goes to **one** consumer. Many workers can share the queue.
+- It is the **work queue** for background tasks: emails, image resizing, invoices.
+- It decouples the API from slow work and absorbs spikes.
+- Flow: receive → message hidden for a visibility timeout → process → acknowledge / delete.
+- No acknowledgement means the message reappears, so delivery is **at-least-once** and workers must be idempotent.
+
+#### Common mistakes
+- A visibility timeout shorter than the processing time, so the same job runs twice.
+- Scaling workers on CPU. Scale on queue depth or the age of the oldest message.
+- No dead-letter queue, so one bad message loops forever.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -48,8 +63,28 @@ From Little's law: required concurrency ≈ message arrival rate × processing t
 #### Interview angle
 > "Slow side effects like emails go on a queue: the API enqueues and returns, idempotent workers autoscale on queue age, and poison messages land in a DLQ."
 
+#### Sources
+- [Amazon SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html) — Amazon SQS developer guide
+- [Point-to-point channel](https://www.enterpriseintegrationpatterns.com/patterns/messaging/PointToPointChannel.html) — Enterprise Integration Patterns
+- [Queue-based load leveling pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/queue-based-load-leveling) — Azure Architecture Center
+
 ### Publish-subscribe topic — one message delivered to all subscribed consumers
 In publish-subscribe, a producer publishes an event to a **topic**, and **every subscriber** (each subscription or consumer group) receives its own copy. Producers don't know who's listening, so new consumers can be added without changing the producer. It's the backbone of event-driven architectures.
+
+#### Intuition
+A newspaper. The publisher prints one edition and every subscriber gets their own copy. The publisher has no idea who the readers are, and a new reader can subscribe tomorrow without the publisher changing anything.
+
+#### Must know
+- A message published to a **topic** is delivered to **every subscriber**.
+- The producer does not know its consumers, so a new consumer needs no producer change.
+- Each subscription is itself a work queue for that service's workers.
+- Use a **durable** topic (Kafka, SNS → SQS) so an offline subscriber misses nothing.
+- Schema changes reach consumers you may not know about. Use a schema registry.
+
+#### Common mistakes
+- Redis pub/sub for business events. A disconnected subscriber simply misses them.
+- Several services sharing one subscription, so each gets only some of the messages.
+- Changing an event's shape without checking who consumes it.
 
 #### How it works
 ```mermaid
@@ -98,8 +133,30 @@ Redis pub/sub is fire-and-forget: subscribers that are disconnected miss message
 #### Interview angle
 > "Domain events go to a durable topic, and each consuming service has its own consumer group or queue, so adding a consumer needs no change to the producer, with a schema registry guarding compatibility."
 
+#### Sources
+- [Publisher-subscriber pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber) — Azure Architecture Center
+- [Publish-subscribe channel](https://www.enterpriseintegrationpatterns.com/patterns/messaging/PublishSubscribeChannel.html) — Enterprise Integration Patterns
+
 ### Pull consumer model — consumer polls for messages (Kafka, SQS); consumer controls pace
 In the pull model, consumers **request** messages from the broker when they're ready (`poll()`, `ReceiveMessage`). The consumer controls its pace, which gives natural backpressure, easy batching and replay (rewind the offset). Kafka, SQS, Kinesis and Pub/Sub pull subscriptions use it.
+
+#### Intuition
+A buffet. You go up and take food when you are ready for more. Nobody piles plates on your table faster than you can eat.
+
+#### Must know
+- The consumer **asks** the broker for messages when it is ready.
+- The consumer sets the pace, so **backpressure is built in**.
+- A slow consumer just builds up **lag**. It is not overwhelmed.
+- It batches naturally and allows replay by resetting the offset.
+- Kafka, SQS and Kinesis work this way. Use long polling so idle consumers do not spin.
+
+#### Numbers to quote
+- SQS long polling waits up to 20 seconds. Kafka's `max.poll.interval.ms` defaults to 5 minutes.
+
+#### Common mistakes
+- Processing a poll's batch for longer than `max.poll.interval.ms`, which triggers endless rebalances.
+- Short polling SQS in a tight loop and paying for empty responses.
+- Treating growing lag as failure. It is the buffer working.
 
 #### How it works
 ```mermaid
@@ -153,8 +210,27 @@ A consumer takes longer than `max.poll.interval.ms` between polls (slow processi
 #### Interview angle
 > "Pull consumers control their own pace: lag absorbs spikes, batching is efficient and replay is just an offset reset. I tune poll size against max.poll.interval to avoid rebalance storms."
 
+#### Sources
+- [Kafka design: push vs. pull](https://kafka.apache.org/documentation/#design_pull) — Apache Kafka docs
+- [Amazon SQS short and long polling](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html) — Amazon SQS developer guide
+
 ### Push consumer model — broker pushes to consumer (RabbitMQ); simpler but broker must manage rate
 In the push model the broker **delivers messages to consumers as they arrive** (RabbitMQ consumers, SNS → HTTP/Lambda, Pub/Sub push subscriptions, webhooks). It has low latency and simple consumers, but the broker must avoid overwhelming them, using **prefetch limits**, acknowledgements and retries.
+
+#### Intuition
+A waiter who brings dishes as soon as the kitchen finishes them. That is quick and easy for the diner, unless the waiter brings twenty dishes at once. So the diner says "no more than three on my table at a time".
+
+#### Must know
+- The broker **delivers messages as they arrive**. RabbitMQ, webhooks and Lambda triggers work this way.
+- Low latency and simple consumer code.
+- The broker must not flood the consumer: set a **prefetch limit** on unacknowledged messages.
+- **Acknowledge manually after processing**, or a crash loses the message.
+- Replay is not natural, because acknowledged messages are gone.
+
+#### Common mistakes
+- Unlimited prefetch with auto-ack, which floods the consumer until it runs out of memory.
+- A push endpoint with no concurrency limit.
+- Auto-acknowledging before the work is done.
 
 #### How it works
 ```mermaid
@@ -206,8 +282,27 @@ When low latency at low volume matters and consumers are simple (webhook-style i
 #### Interview angle
 > "With push brokers like RabbitMQ I always set a prefetch limit and manual acks after processing, so the broker never floods a consumer and crashes don't lose messages."
 
+#### Sources
+- [Consumer prefetch](https://www.rabbitmq.com/docs/consumer-prefetch) — RabbitMQ docs
+- [Consumer acknowledgements and publisher confirms](https://www.rabbitmq.com/docs/confirms) — RabbitMQ docs
+
 ### Message durability — persisted to disk (Kafka, SQS) vs in-memory (RabbitMQ default)
 Durability decides whether accepted messages survive broker crashes and restarts. Durable systems write messages to disk and replicate them **before acknowledging** the producer. In-memory or transient messages are faster but disappear on failure. You choose per use case, and settings at producer, broker and queue level must all line up.
+
+#### Intuition
+A promise written in a ledger and photocopied to a second office, compared with a promise made aloud. If the power goes out, only the written one still exists.
+
+#### Must know
+- Durable means the message is **stored and replicated before the producer is acknowledged**.
+- Producer, broker and queue settings must **all** line up, or it is not durable.
+- Kafka: `replication.factor=3`, `min.insync.replicas=2`, producer `acks=all`.
+- RabbitMQ: quorum queues, persistent messages and publisher confirms.
+- Durability costs latency. Short-lived signals such as presence can stay in memory.
+
+#### Common mistakes
+- A durable queue with non-persistent messages, or the other way round.
+- Not waiting for the broker's confirmation, so a lost publish goes unnoticed.
+- Kafka `acks=1`, which loses the message if the leader dies before replicating it.
 
 #### How it works
 ```mermaid
@@ -260,8 +355,28 @@ Persistence affects how the broker stores a message once it has it. Without conf
 #### Interview angle
 > "An event is durable only when producer, broker and queue settings agree: acks=all with min.insync 2 on RF 3 in Kafka, or quorum queues with publisher confirms in RabbitMQ. Ephemeral signals can stay in memory."
 
+#### Sources
+- [Kafka design: replication](https://kafka.apache.org/documentation/#replication) — Apache Kafka docs
+- [Quorum queues](https://www.rabbitmq.com/docs/quorum-queues) — RabbitMQ docs
+- [Consumer acknowledgements and publisher confirms](https://www.rabbitmq.com/docs/confirms) — RabbitMQ docs
+
 ### Message ordering — FIFO within partition (Kafka), not across partitions; SQS FIFO queues for order
 Messaging systems trade ordering for parallelism. Most guarantee order only **within a unit**: a Kafka partition, an SQS FIFO message group, a Pub/Sub ordering key, a single RabbitMQ queue with one consumer. Ordering across units isn't guaranteed. The design trick is to **key messages so everything that must be ordered shares a unit**.
+
+#### Intuition
+A bank with several tellers. Each teller serves their own queue in strict order, but nobody can say whether a customer at teller 1 was served before one at teller 2. If one customer's transactions must stay in order, send that customer to the same teller every time.
+
+#### Must know
+- Order is guaranteed only **within one unit**: a Kafka partition or an SQS FIFO message group.
+- There is **no order across partitions**.
+- **Key messages by the entity** whose events must be ordered (order id, account id).
+- One partition gives total order and no parallelism. Per-key order gives both.
+- Retries, parallel processing inside a consumer and a DLQ can all reorder events, so add a version check.
+
+#### Common mistakes
+- Assuming a Kafka topic is globally ordered.
+- Events for one entity published with different keys.
+- Adding partitions later, which remaps keys and breaks ordering during the change.
 
 #### How it works
 ```mermaid
@@ -314,8 +429,27 @@ A topic is split into partitions, each an independent log on possibly different 
 #### Interview angle
 > "Ordering only matters per entity, so events are keyed by orderId or accountId into one partition, the producer is idempotent, and consumers check versions, while different entities process in parallel."
 
+#### Sources
+- [Main concepts and terminology](https://kafka.apache.org/documentation/#intro_concepts_and_terms) — Apache Kafka docs
+- [Amazon SQS FIFO queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fifo-queues.html) — Amazon SQS developer guide
+
 ### Dead letter queue (DLQ) — messages that fail after N retries go here for inspection
 A dead letter queue is where messages go when they **can't be processed successfully after a set number of attempts** (or are expired or rejected). Moving them aside keeps the main queue flowing, preserves the failed messages for inspection, and lets you **redrive** them after fixing the cause.
+
+#### Intuition
+The post office's undeliverable-mail bin. A letter that cannot be delivered after several attempts is set aside so the round can continue, and someone looks at the bin later.
+
+#### Must know
+- A message that still fails after **N attempts** is moved to a separate queue.
+- The main queue keeps flowing, and the failed message is kept for inspection.
+- Retry with backoff first, so short-lived failures never reach the DLQ.
+- **Alert on DLQ depth.** An ignored DLQ is silent data loss.
+- After fixing the cause, **redrive** the messages. Consumers must be idempotent.
+
+#### Common mistakes
+- A DLQ nobody monitors or owns.
+- No error details stored with the message, so nobody knows why it failed.
+- Using a DLQ on an ordered stream without considering that later events were processed first.
 
 #### How it works
 ```mermaid
@@ -365,8 +499,28 @@ If event 5 for an account goes to the DLQ and events 6 and 7 are processed, the 
 #### Interview angle
 > "Consumers retry with backoff through retry topics, then park the message in a DLQ with full error context. DLQ depth pages someone, and fixed messages are redriven to idempotent consumers."
 
+#### Sources
+- [Using dead-letter queues in Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) — Amazon SQS developer guide
+- [Dead letter exchanges](https://www.rabbitmq.com/docs/dlx) — RabbitMQ docs
+- [Non-blocking retries](https://docs.spring.io/spring-kafka/reference/retrytopic.html) — Spring for Apache Kafka docs
+
 ### Poison pill message — causes consumer to crash; detect with retry count, send to DLQ
 A poison pill is a message that **always fails processing**: malformed payload, unexpected schema, data triggering a bug, or a value too large. If the consumer keeps retrying it (or crashes and restarts on it), it **blocks the partition or queue** and nothing behind it gets processed.
+
+#### Intuition
+One jammed sheet in a printer. Nothing behind it prints until someone pulls it out, however many times you press "retry".
+
+#### Must know
+- A message that **always fails** processing: malformed data, an unexpected schema, a bug it triggers.
+- If the consumer keeps retrying or crashes on it, **everything behind it is blocked**.
+- The signature: lag growing on **one partition** while the others are healthy.
+- Defence: catch errors per message, limit retries, send to a DLQ, commit and move on.
+- Validate at the producer with a schema registry, so bad messages never enter.
+
+#### Common mistakes
+- Letting an exception crash the consumer, which then restarts on the same message.
+- Unlimited retries on an error that can never succeed.
+- No handling for deserialisation failures, which happen before your code even runs.
 
 #### How it works
 ```mermaid
@@ -415,8 +569,30 @@ No. Crashing re-reads the same message after restart (crash loop) and blocks the
 #### Interview angle
 > "Consumers never crash on a bad record: an error-handling deserializer, bounded retries, then the DLQ with the payload, plus a per-partition lag-skew alert, because a single stuck partition is the poison-pill signature."
 
+#### Sources
+- [Handling exceptions](https://docs.spring.io/spring-kafka/reference/kafka/annotation-error-handling.html) — Spring for Apache Kafka docs
+- [Using dead-letter queues in Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) — Amazon SQS developer guide
+
 ### Message deduplication — use idempotency key; consumer maintains processed-IDs set (inbox table)
 Because most messaging is at-least-once, consumers will occasionally receive the **same message twice** (redeliveries, producer retries, replays). Deduplication makes the second delivery a no-op: each message carries a **unique id**, and the consumer records processed ids (an **inbox** table or set) **atomically with its side effect**.
+
+#### Intuition
+A guest list with ticks. When a guest's name is called a second time, the doorman sees the tick and does not hand out a second welcome drink.
+
+#### Must know
+- At-least-once delivery means the **same message will sometimes arrive twice**.
+- Every message carries a **unique id assigned once by the producer**.
+- The consumer records the id in an **inbox table in the same transaction as the side effect**.
+- A duplicate hits the unique constraint and is skipped.
+- Broker features (SQS FIFO, Kafka's idempotent producer) cover only part of the problem.
+
+#### Numbers to quote
+- SQS FIFO deduplicates within a 5-minute window.
+
+#### Common mistakes
+- Recording the id and doing the work in two separate steps, which leaves a crash window.
+- Assuming Kafka's idempotent producer stops duplicate **processing**. It only stops duplicate writes to the log.
+- Never cleaning the inbox table, or cleaning it sooner than a replay could arrive.
 
 #### How it works
 ```mermaid
@@ -469,8 +645,27 @@ Record the event id in a durable store with status (e.g. a table with a unique k
 #### Interview angle
 > "Every event has a producer-assigned id, and consumers insert it into an inbox table in the same transaction as the side effect, so redeliveries and replays are harmless. External calls get derived idempotency keys."
 
+#### Sources
+- [Idempotent consumer](https://microservices.io/patterns/communication-style/idempotent-consumer.html) — microservices.io
+- [Exactly-once processing in Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-exactly-once-processing.html) — Amazon SQS developer guide
+
 ### Backpressure — slow consumer signals producer to slow down; Kafka: consumer controls offset commit rate
 Backpressure is how a system copes when producers generate work faster than consumers can handle it: instead of unbounded queues (which exhaust memory and blow latency), the overload signal propagates **upstream** so producers slow down, buffer, shed or degrade. Without it, a slow component can take down everything in front of it.
+
+#### Intuition
+A sink with the tap running faster than the drain. Either you turn the tap down, or you use a bigger basin, or water spills over the floor. Ignoring it is not an option.
+
+#### Must know
+- Producers are generating work faster than consumers can handle it.
+- **Never use an unbounded in-memory queue.** It ends in out-of-memory errors and huge latency.
+- Option 1: slow the producer (flow control, a bounded queue that blocks).
+- Option 2: absorb the surge in a durable log, where consumer lag grows and drains later.
+- Option 3: shed load (reject with 429). Option 4: scale consumers.
+
+#### Common mistakes
+- A synchronous call chain where one slow service stalls every caller.
+- Retrying immediately when a dependency is overloaded.
+- Lag that grows forever, which means consumers are under-provisioned, not buffering.
 
 #### How it works
 ```mermaid
@@ -525,8 +720,27 @@ It decouples them: producers write to the durable log at their rate (bounded by 
 #### Interview angle
 > "I never use unbounded queues. Spikes go into a durable log where lag absorbs them, synchronous paths have bounded pools that fail fast with 429, and consumers autoscale on lag."
 
+#### Sources
+- [Reactive Streams](https://www.reactive-streams.org/) — Reactive Streams initiative
+- [Queue-based load leveling pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/queue-based-load-leveling) — Azure Architecture Center
+
 ### Fan-out pattern — one event triggers multiple independent consumers (order placed → payment + inventory + email)
 Fan-out delivers one event to **many independent consumers**, each doing its own work in parallel: an order placed triggers payment, inventory, email, analytics and fraud scoring. Producers stay simple and consumers evolve independently. Fan-out also appears at the data level, as in social feeds (fan-out on write vs read).
+
+#### Intuition
+A fire alarm. One bell rings, and the fire crew, the security desk and the building manager each do their own job at the same time, without waiting for one another.
+
+#### Must know
+- **One event, many independent consumers**, each doing its own work in parallel.
+- Each consumer has its **own queue or consumer group**, with its own pace, retries and DLQ.
+- A failure in one consumer does not block the others.
+- Common setups: SNS → several SQS queues, or one Kafka topic with several consumer groups.
+- Use it for **independent** reactions. Steps that depend on each other belong in a saga.
+
+#### Common mistakes
+- Fanning out steps that must happen in order, such as shipping before payment is confirmed.
+- All consumer types sharing one queue.
+- No way to tell whether every reaction completed.
 
 #### How it works
 ```mermaid
@@ -572,8 +786,27 @@ Fan-out on write pushes each new post into every follower's precomputed timeline
 #### Interview angle
 > "OrderPlaced fans out to independent consumers, each with its own queue, retries and DLQ. Anything that depends on another step, like shipping after payment, belongs in a saga, not fan-out."
 
+#### Sources
+- [Fanout to Amazon SQS queues](https://docs.aws.amazon.com/sns/latest/dg/sns-sqs-as-subscriber.html) — Amazon SNS developer guide
+- [Publisher-subscriber pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber) — Azure Architecture Center
+
 ### Competing consumers — multiple workers on same queue share load, each message processed once
 Competing consumers means running **several consumer instances on the same queue** (or consumer group): the broker distributes messages among them so throughput scales horizontally and a crashed worker's messages go to others. Each message is handled by one consumer at a time.
+
+#### Intuition
+Several checkout tills serving a single queue of shoppers. More tills means the queue moves faster, and if one till closes, its shoppers rejoin the queue.
+
+#### Must know
+- Several consumer instances read from the **same queue or consumer group**.
+- Throughput scales out, and a crashed worker's messages go to the others.
+- SQS and RabbitMQ balance per message.
+- Kafka balances per **partition**, so the number of active consumers is capped at the partition count.
+- Order across workers is lost and duplicates are possible, so workers must be idempotent.
+
+#### Common mistakes
+- More Kafka consumers than partitions. The extras sit idle.
+- Expecting strict ordering with many workers on one queue.
+- Ignoring the pause that a Kafka rebalance causes when scaling.
 
 #### How it works
 ```mermaid
@@ -624,8 +857,27 @@ Messages the crashed worker received but didn't acknowledge become available aga
 #### Interview angle
 > "Throughput scales with competing consumers on the queue or group, autoscaled on lag. In Kafka the partition count caps parallelism, so I size partitions for peak and keep per-key order."
 
+#### Sources
+- [Competing consumers pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/competing-consumers) — Azure Architecture Center
+- [Competing consumers](https://www.enterpriseintegrationpatterns.com/patterns/messaging/CompetingConsumers.html) — Enterprise Integration Patterns
+
 ### Message schema evolution — Avro/Protobuf compatibility modes: backward (reader handles old schema), forward (reader handles new schema), full
 Producers and consumers of events are deployed independently and events may be stored for a long time, so message schemas must **evolve without breaking** either side. Serialisation formats with schemas (Avro, Protobuf, JSON Schema) plus a **Schema Registry** enforce **compatibility rules** whenever a new schema version is registered.
+
+#### Intuition
+Adding a new optional box to a paper form. Old forms without the box are still valid, and an office that has not been told about the box simply ignores it. Renaming or removing a box breaks everyone still using the old form.
+
+#### Must know
+- Producers and consumers deploy separately, so a message's shape must change **without breaking either side**.
+- **Backward** compatible: new readers can read old data. Upgrade consumers first.
+- **Forward** compatible: old readers can read new data. Upgrade producers first.
+- Safe change: **add a field with a default**. Never rename, change a type or reuse a Protobuf field number.
+- A **schema registry** rejects incompatible changes at build or publish time.
+
+#### Common mistakes
+- Renaming a field in place.
+- Plain JSON with no schema, so drift is found in production.
+- Checking only against the last version when old events may be replayed.
 
 #### How it works
 ```mermaid
@@ -678,3 +930,8 @@ Don't rename in place. Add the new field (with a default) while still populating
 
 #### Interview angle
 > "Events use Avro or Protobuf with a schema registry enforcing compatibility in CI and at produce time. Fields are only added with defaults, so producers and consumers deploy independently and old events stay replayable."
+
+#### Sources
+- [Schema evolution and compatibility](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html) — Confluent docs
+- [Updating a message type](https://protobuf.dev/programming-guides/proto3/#updating) — Protocol Buffers docs
+

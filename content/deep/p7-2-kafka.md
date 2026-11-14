@@ -3,6 +3,24 @@
 ### Topic — named logical stream of records
 A Kafka **topic** is a named, append-only stream of records (key, value, headers, timestamp), such as `orders`, `payments.v1` or `user-clicks`. Producers write to topics and consumers read from them. Physically a topic is split into **partitions** replicated across brokers. Unlike a queue, reading doesn't remove records: they're kept for the topic's **retention** period.
 
+#### Intuition
+A named notebook that people only ever add lines to. Anyone can read it from any page, reading does not tear pages out, and old pages are removed only when they pass a set age.
+
+#### Must know
+- A topic is a **named, append-only stream of records**.
+- **Reading does not delete.** Records stay until the retention period ends.
+- Many consumer groups read the same topic independently, each at its own position.
+- Physically it is split into **partitions**, which are replicated across brokers.
+- Treat topics as contracts: a naming standard, a schema, an owner and a retention setting.
+
+#### Numbers to quote
+- Default retention is 7 days.
+
+#### Common mistakes
+- Describing a topic as a queue whose messages vanish once consumed.
+- Auto-created topics with no owner or schema.
+- Picking the partition count casually. It is hard to change without disturbing key order.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -53,8 +71,27 @@ Estimate peak throughput and per-partition throughput (~10 MB/s per partition is
 #### Interview angle
 > "Each domain publishes to a governed topic with a schema, RF 3, min.insync 2 and retention sized for replay. Partition count is planned up front for peak parallelism, since changing it later breaks key ordering."
 
+#### Sources
+- [Main concepts and terminology](https://kafka.apache.org/documentation/#intro_concepts_and_terms) — Apache Kafka docs
+- [Kafka design](https://kafka.apache.org/documentation/#design) — Apache Kafka docs
+
 ### Partition — unit of parallelism; messages ordered within partition, not across
 A partition is an **ordered, immutable, append-only log**, the unit of storage, replication and parallelism in Kafka. Records within a partition have a strict order (offsets). Records in different partitions have no relative order. The producer chooses the partition (by key hash, explicitly, or sticky/round-robin for null keys).
+
+#### Intuition
+Lanes on a motorway. Cars within one lane stay in order. Cars in different lanes have no fixed order relative to each other. More lanes carry more traffic, and a given car always stays in its lane.
+
+#### Must know
+- A partition is an **ordered, append-only log**. It is Kafka's unit of ordering, parallelism and replication.
+- Records are ordered **within** a partition, never across partitions.
+- The **key decides the partition**: same key → same partition → same order.
+- Within a consumer group, one partition is read by one consumer, so **partitions cap parallelism**.
+- A hot key overloads one partition.
+
+#### Common mistakes
+- Increasing the partition count on a keyed topic and breaking per-key order during the switch.
+- Thousands of partitions "to be safe". Each one costs broker memory and recovery time.
+- Null keys on events that need ordering.
 
 #### How it works
 ```mermaid
@@ -105,8 +142,27 @@ The producer uses the sticky partitioner (Kafka 2.4+): it fills a batch for one 
 #### Interview angle
 > "Partitions are Kafka's unit of order and parallelism. I key by the entity whose events must stay ordered, size partitions for peak consumer parallelism, and watch for hot keys skewing one partition."
 
+#### Sources
+- [Main concepts and terminology](https://kafka.apache.org/documentation/#intro_concepts_and_terms) — Apache Kafka docs
+- [Kafka design: replication](https://kafka.apache.org/documentation/#replication) — Apache Kafka docs
+
 ### Offset — position of message within partition; unique and monotonically increasing
 An offset is the **sequential id of a record within a partition**: 0, 1, 2… Offsets never change and are unique per partition. Consumers track their position by **committing offsets** (stored in the internal `__consumer_offsets` topic), which lets them resume after restarts, and lets anyone **rewind** to replay.
+
+#### Intuition
+A bookmark. The page numbers in the book never change, and each reader keeps their own bookmark. You can move your bookmark back and read a chapter again.
+
+#### Must know
+- An offset is a record's **position within a partition**: 0, 1, 2 and so on. It never changes.
+- Each consumer group stores its **committed offset** per partition, which is where it resumes.
+- **When you commit decides the delivery guarantee.** Commit after processing = at-least-once.
+- **Replay** = reset the group's offsets to an earlier point.
+- Replays require idempotent consumers.
+
+#### Common mistakes
+- Auto-commit with slow processing, which can skip messages after a crash.
+- `auto.offset.reset=latest` on a new critical consumer, which silently skips history.
+- Replaying into a consumer that is not idempotent.
 
 #### How it works
 ```mermaid
@@ -159,8 +215,27 @@ It decides where a consumer group starts when it has no committed offset (new gr
 #### Interview angle
 > "Consumers commit offsets only after processing and are idempotent, so after a bug fix I reset the group's offsets to a timestamp and replay, with no producer involvement."
 
+#### Sources
+- [Consumer configs](https://kafka.apache.org/documentation/#consumerconfigs) — Apache Kafka docs
+- [Message delivery semantics](https://kafka.apache.org/documentation/#semantics) — Apache Kafka docs
+
 ### Consumer group — each partition consumed by exactly one consumer in group; parallelism = partition count
 A consumer group is a set of consumers sharing a `group.id` that **collectively consume a topic**: Kafka assigns each partition to exactly one consumer in the group, giving parallel processing with per-partition ordering. Different groups consume the same topic independently, each with its own offsets.
+
+#### Intuition
+A team splitting a stack of folders. Each folder goes to exactly one team member, so no work is duplicated. If someone leaves, their folders are shared out again. A second team can read the same folders without affecting the first.
+
+#### Must know
+- Consumers with the same `group.id` **share a topic's partitions**: each partition goes to one consumer in the group.
+- **Different groups are independent.** Each sees every record and keeps its own offsets.
+- Parallelism in a group is at most the partition count.
+- A **rebalance** reassigns partitions when a consumer joins, leaves or stalls, and pauses consumption.
+- Cooperative-sticky assignment and static membership keep those pauses short.
+
+#### Common mistakes
+- Two services sharing one group id, so each sees only part of the stream.
+- More consumers than partitions.
+- Slow message handling that exceeds the poll interval and causes a loop of rebalances.
 
 #### How it works
 ```mermaid
@@ -189,6 +264,7 @@ Rebalancing: when consumers join, leave or crash (missed heartbeats or `max.poll
 - **Eager** rebalancing stops all consumers and reassigns everything (stop-the-world).
 - **Cooperative-sticky** (`CooperativeStickyAssignor`) moves only the partitions that need to move.
 - **Static membership** (`group.instance.id`) lets a restarting consumer rejoin without triggering a rebalance (within the session timeout).
+- Kafka 4.0's **new consumer group protocol** (KIP-848, `group.protocol=consumer`) moves assignment to the broker and makes rebalances incremental, with no stop-the-world pause.
 
 #### Example
 A billing service runs 6 pods for a 6-partition topic. During a rolling deploy with eager rebalancing, each pod restart paused all consumption for ~10 s, six times. Switching to cooperative-sticky assignment with static membership (pod name as `group.instance.id`) cut the pauses to almost nothing.
@@ -223,8 +299,30 @@ They use different consumer group ids. Each group has its own committed offsets 
 #### Interview angle
 > "Each service is its own consumer group, so they read the same topic independently. Within a group, parallelism equals the partition count, and cooperative-sticky assignment with static membership keeps deploys from pausing consumption."
 
+#### Sources
+- [Consumer configs](https://kafka.apache.org/documentation/#consumerconfigs) — Apache Kafka docs
+- [Main concepts and terminology](https://kafka.apache.org/documentation/#intro_concepts_and_terms) — Apache Kafka docs
+
 ### Producer acks — acks=0 (fire and forget), acks=1 (leader only), acks=all (all ISR must ack)
 The producer's `acks` setting decides **when the broker acknowledges a write**, trading latency for durability. `acks=0` doesn't wait at all, `acks=1` waits for the partition leader to write it, and `acks=all` waits until **all in-sync replicas** have it (bounded below by `min.insync.replicas`).
+
+#### Intuition
+Sending a parcel three ways: drop it in a postbox and walk away, wait for the counter clerk to stamp a receipt, or wait until the clerk and the back office have both logged it. Each is slower and safer than the last.
+
+#### Must know
+- `acks=0`: do not wait. Fastest, and messages can be lost silently.
+- `acks=1`: wait for the partition leader only. Lost if the leader dies before followers copy it.
+- `acks=all`: wait for **every in-sync replica**.
+- For events of record: `acks=all` + `min.insync.replicas=2` + replication factor 3 + idempotence.
+- Recover throughput with batching (`linger.ms`) and compression.
+
+#### Numbers to quote
+- Since Kafka 3.0, producers default to `acks=all` with idempotence enabled.
+
+#### Common mistakes
+- `acks=all` without `min.insync.replicas`, which a lone leader can satisfy.
+- `acks=1` for payments.
+- Sending one tiny batch per message and blaming `acks=all` for the slowdown.
 
 #### How it works
 ```mermaid
@@ -282,8 +380,30 @@ Batch more per request (`linger.ms` of a few ms, larger `batch.size`), enable co
 #### Interview angle
 > "Events of record use acks=all, min.insync 2 on RF 3, idempotence and no unclean election. Batching with linger.ms and zstd compression wins back the throughput."
 
+#### Sources
+- [Producer configs](https://kafka.apache.org/documentation/#producerconfigs) — Apache Kafka docs
+- [Kafka design: replication](https://kafka.apache.org/documentation/#replication) — Apache Kafka docs
+
 ### ISR (In-Sync Replicas) — set of replicas fully caught up to leader; min.insync.replicas threshold
 The **In-Sync Replica set** is the leader plus followers that are **caught up** (have fetched within `replica.lag.time.max.ms`, default 30 s). Only ISR members count for `acks=all`, and only ISR members are eligible to become leader (with clean leader election), so the ISR is what keeps acknowledged data safe.
+
+#### Intuition
+Note-takers in a meeting. Only those keeping up with the speaker count as "in sync". A decision is recorded once all the in-sync note-takers have it, and only one of them may take over if the speaker leaves.
+
+#### Must know
+- The ISR is the **leader plus the followers that are caught up**.
+- `acks=all` waits for the ISR, not for every replica.
+- `min.insync.replicas` is the floor. If the ISR is smaller, writes are rejected.
+- Only an ISR member may become leader, unless unclean leader election is enabled.
+- Consumers read only up to the **high watermark**: data that every ISR member has.
+
+#### Numbers to quote
+- A follower leaves the ISR after falling behind for `replica.lag.time.max.ms`, 30 seconds by default.
+
+#### Common mistakes
+- Thinking `acks=all` means all replicas regardless of their state.
+- Enabling unclean leader election on important topics.
+- No alert on under-replicated partitions until writes start failing.
 
 #### How it works
 ```mermaid
@@ -335,8 +455,27 @@ If all ISR members are down, an out-of-sync replica may become leader, so the pa
 #### Interview angle
 > "Durability rests on the ISR: acks=all waits for in-sync replicas, min.insync sets the floor, unclean election is off, and I alert on under-replicated partitions before writes start failing."
 
+#### Sources
+- [Kafka design: replication](https://kafka.apache.org/documentation/#replication) — Apache Kafka docs
+- [Broker configs](https://kafka.apache.org/documentation/#brokerconfigs) — Apache Kafka docs
+
 ### Exactly-once semantics — enable.idempotence=true + transactional.id + consumer isolation=read_committed
 Kafka's exactly-once semantics (EOS) make a **consume → process → produce** pipeline produce each output exactly once, even across retries and crashes, by combining three features: the **idempotent producer** (no duplicates from retries), **transactions** (atomic writes across partitions plus consumer offset commits) and **read_committed** consumers (aborted data invisible). (Phase 6 covers exactly-once as a general concept.)
+
+#### Intuition
+A bank clerk who records the incoming cheque and posts the resulting ledger entry as one action. If the clerk is interrupted halfway, neither is recorded and the whole thing is redone cleanly.
+
+#### Must know
+- For a **consume → process → produce** pipeline inside Kafka.
+- Three parts: **idempotent producer** (no duplicates from retries), **transactions** (output and input offsets committed together), **`read_committed` consumers** (aborted data hidden).
+- A stable `transactional.id` lets the broker fence a zombie instance.
+- Kafka Streams enables it with `processing.guarantee=exactly_once_v2`.
+- It does **not** cover side effects outside Kafka. Those still need idempotency.
+
+#### Common mistakes
+- Thinking the idempotent producer alone gives exactly-once processing.
+- Consumers left on `read_uncommitted`.
+- Expecting it to protect a database write or an email.
 
 #### How it works
 ```mermaid
@@ -395,8 +534,27 @@ It only prevents duplicates caused by the producer's own retries. In a consume-p
 #### Interview angle
 > "For Kafka-to-Kafka pipelines I enable exactly_once_v2: outputs and offsets commit atomically, zombies are fenced by transactional.id, and consumers read committed only. Sinks outside Kafka stay idempotent."
 
+#### Sources
+- [Message delivery semantics](https://kafka.apache.org/documentation/#semantics) — Apache Kafka docs
+- [Exactly-once semantics are possible: here's how Kafka does it](https://www.confluent.io/blog/exactly-once-semantics-are-possible-heres-how-apache-kafka-does-it/) — Confluent
+
 ### Consumer lag — latest_offset - committed_offset per partition; monitor to detect slow consumers
 Consumer lag is **how far behind** a consumer group is: for each partition, `log end offset − committed offset` (in records), or better, **time lag** (age of the oldest unprocessed record). It's the single most important health metric for stream processing: rising lag means consumers can't keep up, and data is getting stale.
+
+#### Intuition
+The pile of unopened post on your desk. A small pile is normal. A pile that keeps growing means post is arriving faster than you open it.
+
+#### Must know
+- Lag = **latest offset − committed offset**, per partition.
+- It is the main health signal of a consumer.
+- **Time lag** (the age of the oldest unprocessed record) reflects user impact better than a record count.
+- Lag on **all** partitions means too little capacity or a slow dependency.
+- Lag on **one** partition means a hot key or a poison message.
+
+#### Common mistakes
+- No lag monitoring, so users report the delay first.
+- Alerting on a fixed record count for a bursty topic.
+- Lag approaching the retention period, after which data is lost.
 
 #### How it works
 ```mermaid
@@ -449,8 +607,27 @@ Offset lag of 10,000 records means seconds on a high-volume topic and hours on a
 #### Interview angle
 > "Consumer health is measured as time lag against the freshness SLO. Lag across all partitions means scale or fix the downstream, lag on one partition means a hot key or poison message, and KEDA autoscales on lag."
 
+#### Sources
+- [Checking consumer position](https://kafka.apache.org/documentation/#basic_ops_consumer_lag) — Apache Kafka docs
+- [Apache Kafka scaler](https://keda.sh/docs/latest/scalers/apache-kafka/) — KEDA docs
+
 ### Compacted topics — retain only latest value per key; used for changelogs, Kafka as database
 A compacted topic (`cleanup.policy=compact`) keeps **at least the latest record for each key**. Older records with the same key are eventually removed by log compaction, and a record with a `null` value (a **tombstone**) deletes the key. The topic becomes a durable, replayable **table** of current state.
+
+#### Intuition
+A contact list, not a call history. If someone's number changes ten times, you keep only the current one. Crossing out a name removes that contact.
+
+#### Must know
+- `cleanup.policy=compact` keeps **at least the latest record for each key**.
+- A record with a **null value is a tombstone**: it deletes the key.
+- The topic becomes a replayable table of current state.
+- Uses: changelogs, the latest row per database key, reference data shared between services.
+- Every record needs a key.
+
+#### Common mistakes
+- Expecting to look a key up directly. You must still consume the topic.
+- Assuming old values vanish immediately. Compaction runs later.
+- Tombstones retained for less time than a slow consumer needs to catch up.
 
 #### How it works
 ```mermaid
@@ -504,8 +681,27 @@ A record with a key and a null value, which signals that the key is deleted. Com
 #### Interview angle
 > "Reference data like prices is published to a compacted topic keyed by SKU. Each service bootstraps a local cache from offset zero and follows updates, with no runtime calls to the owner."
 
+#### Sources
+- [Log compaction](https://kafka.apache.org/documentation/#compaction) — Apache Kafka docs
+- [Topic configs](https://kafka.apache.org/documentation/#topicconfigs) — Apache Kafka docs
+
 ### Kafka Streams — stream processing library: stateful transformations with RocksDB local state stores
 Kafka Streams is a Java library (no separate cluster) for building **stream processing applications**: filters, maps, joins, aggregations and windowing over Kafka topics. State lives in **local RocksDB stores** backed by compacted **changelog topics**, so instances can fail over and restore state. Scaling is just running more instances.
+
+#### Intuition
+A clerk at a conveyor belt who keeps running totals in a notepad as items pass, and photocopies each notepad page to a safe. If the clerk is replaced, the new clerk rebuilds the notepad from the photocopies.
+
+#### Must know
+- A **Java library**, not a separate cluster. It runs inside your application.
+- It does filters, joins, aggregations and windowing over Kafka topics.
+- State lives in a **local RocksDB store**, backed up to a compacted **changelog topic**.
+- Scale by running more instances, up to the partition count.
+- KStream = a stream of events. KTable = the latest value per key.
+
+#### Common mistakes
+- Expecting it to read from or write to non-Kafka systems directly.
+- Large state with no standby replicas, so recovery takes a long time.
+- Re-keying repeatedly, which creates a repartition topic each time.
 
 #### How it works
 ```mermaid
@@ -571,8 +767,27 @@ A KStream is an unbounded sequence of independent events (each record is a fact:
 #### Interview angle
 > "For real-time aggregates like per-card spend windows, I'd use Kafka Streams: RocksDB state backed by changelogs, standby replicas for fast failover, exactly_once_v2, and scaling by adding instances."
 
+#### Sources
+- [Kafka Streams](https://kafka.apache.org/documentation/streams/) — Apache Kafka docs
+- [Kafka Streams core concepts](https://kafka.apache.org/documentation/streams/core-concepts) — Apache Kafka docs
+
 ### Kafka Connect — source connectors (DB → Kafka) and sink connectors (Kafka → DB/S3)
 Kafka Connect is a framework and runtime for **moving data between Kafka and other systems** without writing custom producers and consumers: **source connectors** import (databases via CDC, files, SaaS) and **sink connectors** export (S3, Elasticsearch, Snowflake, JDBC). It handles scaling, offsets, retries, schema conversion and fault tolerance.
+
+#### Intuition
+Ready-made plumbing adapters. You do not solder a custom pipe for every appliance. You pick the right adapter, set a few options, and the water flows.
+
+#### Must know
+- A framework for **moving data between Kafka and other systems** by configuration, with no custom code.
+- **Source connector**: into Kafka (for example Debezium reading a database's change log).
+- **Sink connector**: out of Kafka (S3, Elasticsearch, a warehouse).
+- It handles offsets, retries, scaling and schema conversion.
+- Keep business logic out of it. Use a stream processor for real transformations.
+
+#### Common mistakes
+- Writing a custom consumer for plain data movement.
+- A sink with no dead-letter queue, so one bad record stops the connector.
+- Producing thousands of tiny files in S3 from flushing too often.
 
 #### How it works
 ```mermaid
@@ -623,8 +838,27 @@ When the sink needs complex business logic, multi-step transformations, joins, c
 #### Interview angle
 > "Data movement uses Kafka Connect: Debezium sources and S3 or Elasticsearch sinks with Avro, a schema registry and DLQs. Business logic lives in stream processors, not connector transforms."
 
+#### Sources
+- [Kafka Connect](https://kafka.apache.org/documentation/#connect) — Apache Kafka docs
+- [Debezium documentation](https://debezium.io/documentation/reference/stable/index.html) — Debezium docs
+
 ### Schema Registry — Avro/Protobuf schema storage, compatibility enforcement on produce/consume
 A Schema Registry stores **versioned schemas** for topic keys and values and enforces **compatibility rules** when producers register new versions. Messages carry a small **schema id** instead of the full schema, so producers and consumers agree on structure while evolving independently. (Earlier in this phase covers the evolution rules.)
+
+#### Intuition
+A central office that keeps the approved template for every form. A form carries only its template number, and a new template is refused if old readers could no longer understand it.
+
+#### Must know
+- It stores **versioned schemas** for each topic's keys and values.
+- A message carries a small **schema id**, not the whole schema.
+- It **rejects a new schema version that breaks compatibility**.
+- Run the compatibility check in CI, and switch off auto-registration in production.
+- Clients cache schemas, so a short registry outage does not stop existing traffic.
+
+#### Common mistakes
+- JSON with no schema, where drift is discovered at runtime.
+- Applications auto-registering schemas in production.
+- Checking only against the latest version when old data will be replayed.
 
 #### How it works
 ```mermaid
@@ -677,8 +911,27 @@ Serializers cache schema ids for schemas they've already registered or looked up
 #### Interview angle
 > "All event schemas go through a schema registry with BACKWARD_TRANSITIVE checks in CI and auto-registration off in production, so no producer can ship a change that breaks consumers or old replays."
 
+#### Sources
+- [Schema Registry overview](https://docs.confluent.io/platform/current/schema-registry/index.html) — Confluent docs
+- [Schema evolution and compatibility](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html) — Confluent docs
+
 ### Kafka transactions — atomic multi-partition produce + offset commit
 Kafka transactions let a producer write to **multiple partitions and topics atomically**, together with **consumer offset commits**: either all records in the transaction become visible to read_committed consumers or none do. They're the core of Kafka's exactly-once processing and of atomic fan-out writes.
+
+#### Intuition
+Posting several letters and updating your "sent" log as one action. Either every letter goes out and the log is updated, or nothing leaves the building.
+
+#### Must know
+- A producer writes to **several partitions and topics atomically**, together with the consumer offset commit.
+- `read_committed` consumers see either all of the transaction's records or none.
+- It is a two-phase commit inside Kafka, run by a transaction coordinator.
+- An open transaction **holds back `read_committed` consumers** on those partitions, so keep transactions short.
+- It stops at Kafka's boundary. Database-plus-event atomicity needs the outbox pattern.
+
+#### Common mistakes
+- Trying to cover a database write with a Kafka transaction.
+- A producer that hangs with a transaction open and stalls unrelated consumers.
+- Two live instances sharing one `transactional.id`.
 
 #### How it works
 ```mermaid
@@ -730,8 +983,31 @@ read_committed consumers can't read past the Last Stable Offset, the first offse
 #### Interview angle
 > "Kafka transactions give atomic multi-topic writes plus offset commits for consume-process-produce. They stop at Kafka's boundary, so database plus event atomicity uses the outbox."
 
+#### Sources
+- [Message delivery semantics](https://kafka.apache.org/documentation/#semantics) — Apache Kafka docs
+- [Transactions in Apache Kafka](https://www.confluent.io/blog/transactions-apache-kafka/) — Confluent
+
 ### Retention — by time (retention.ms) or size (retention.bytes), not by consumer acknowledgement
 Kafka keeps records based on **retention policy**, not on whether anyone consumed them: by **time** (`retention.ms`, default 7 days) and/or **size** (`retention.bytes` per partition), or forever with compaction or tiered storage. Consumers that fall behind beyond retention **lose** data, while consumers within retention can replay at will.
+
+#### Intuition
+A CCTV recorder that keeps the last seven days of footage and overwrites the rest. It does not care whether anyone has watched it.
+
+#### Must know
+- Kafka deletes records by **age or size**, never because they were consumed.
+- That is what allows several consumers and replay.
+- A consumer that falls behind **past retention loses data**. Kafka does not wait.
+- Deletion happens a whole segment at a time, so data can outlive the setting slightly.
+- Disk needed = ingest rate × retention × replication factor. Tiered storage moves old segments to object storage.
+
+#### Numbers to quote
+- Default `retention.ms` is 7 days.
+- 20 MB/s for 7 days ≈ 12 TB per copy, about 36 TB with replication factor 3.
+
+#### Common mistakes
+- Assuming Kafka keeps a message until it is consumed.
+- No alert when lag approaches the retention period.
+- Forgetting to multiply by the replication factor when sizing disks.
 
 #### How it works
 ```mermaid
@@ -744,7 +1020,7 @@ flowchart LR
 ```
 
 - Deletion happens **per segment** (`segment.ms`, `segment.bytes`), so data may live somewhat longer than retention.
-- **Tiered storage** (KIP-405, Kafka 3.6+, Confluent, MSK) keeps recent data on broker disks and older data in object storage, making long retention cheap.
+- **Tiered storage** (KIP-405: early access in Kafka 3.6, production-ready since 3.9; also in Confluent and MSK) keeps recent data on broker disks and older data in object storage, making long retention cheap.
 - Per-topic overrides let you retain critical topics longer (audit: 1 year) and noisy ones shorter (clicks: 3 days).
 
 #### Example
@@ -782,8 +1058,27 @@ Queues delete messages when consumers acknowledge them. Kafka deletes by retenti
 #### Interview angle
 > "Retention is set per topic by replay needs and sized as ingest × time × RF. Tiered storage keeps long history cheap, and I alert when consumer lag approaches retention, because Kafka won't wait for slow consumers."
 
+#### Sources
+- [Topic configs](https://kafka.apache.org/documentation/#topicconfigs) — Apache Kafka docs
+- [Kafka design: log compaction and retention](https://kafka.apache.org/documentation/#compaction) — Apache Kafka docs
+
 ### Log compaction — background thread merges segments, keeps latest value per key
 Log compaction is the **background cleaner process** that implements compacted topics: it rewrites closed log segments, keeping only the **latest record for each key** (plus tombstones for a while), so the log stays bounded while preserving the last known state of every key. (Earlier in this phase covers compacted-topic use cases.)
+
+#### Intuition
+A caretaker who goes through old filing boxes after hours and throws out every superseded version of a document, leaving only the newest copy of each. The box in use today is left alone.
+
+#### Must know
+- A **background cleaner** rewrites closed segments, keeping the latest record per key.
+- **Offsets never change.** Compaction just leaves gaps.
+- The active segment is never compacted, so it must roll over periodically.
+- `max.compaction.lag.ms` forces compaction within a deadline, which matters for deletion requests.
+- Tombstones are kept for `delete.retention.ms`, then removed.
+
+#### Common mistakes
+- Expecting compaction to run immediately or on a fixed schedule.
+- Not monitoring the cleaner thread. If it dies, the topic grows forever.
+- A segment that never rolls, so the old values in it are never cleaned.
 
 #### How it works
 ```mermaid
@@ -834,3 +1129,8 @@ No. Records keep their original offsets, and compaction just removes superseded 
 
 #### Interview angle
 > "Compaction keeps the latest record per key on closed segments. I bound it with max.compaction.lag.ms and segment.ms so tombstoned data really disappears on schedule, and I monitor the log cleaner thread."
+
+#### Sources
+- [Log compaction](https://kafka.apache.org/documentation/#compaction) — Apache Kafka docs
+- [Topic configs](https://kafka.apache.org/documentation/#topicconfigs) — Apache Kafka docs
+

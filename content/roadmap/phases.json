@@ -586,7 +586,7 @@
     "tops": [
      "RabbitMQ — exchanges (direct, fanout, topic, headers), bindings, routing keys, queues",
      "RabbitMQ vs Kafka — traditional message broker vs distributed log; RabbitMQ: complex routing; Kafka: replay, high throughput",
-     "AWS SQS Standard — at-least-once, best-effort ordering, up to 256KB, infinite scale",
+     "AWS SQS Standard — at-least-once, best-effort ordering, up to 1 MiB, infinite scale",
      "AWS SQS FIFO — exactly-once processing, ordered within message group, 300 TPS (3000 with batching)",
      "AWS SNS — pub/sub fan-out to SQS, Lambda, HTTP, email, SMS; no replay",
      "AWS Kinesis Data Streams — real-time, 1MB/s per shard, 7-day retention, replay capable",
