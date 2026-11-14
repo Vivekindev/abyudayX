@@ -3,6 +3,21 @@
 ### Vertical scaling — bigger machine (more CPU, RAM, faster disk); simple but has hard limits and is expensive
 Vertical scaling (scaling up) means giving a single machine more resources: more cores, more memory, faster disks and network. No code changes are needed, which makes it the quickest fix. But there's a ceiling (the biggest instance available), cost grows faster than capacity, and one machine is still a single point of failure.
 
+#### Intuition
+Your shop is too busy, so you hire one stronger, faster shopkeeper. Nothing else about the shop changes. But there is a limit to how strong one person can be, and when that person is ill the shop is shut.
+
+#### Must know
+- Scale **up**: give one machine more CPU, memory, disk or network.
+- **No code change**, so it is the quickest fix. It is the sensible first step for databases.
+- Hard ceiling: the largest instance that exists.
+- Still a **single point of failure**, and price climbs faster than capacity at the top end.
+- Profile first. More CPU does not fix lock contention or a slow disk.
+
+#### Common mistakes
+- Jumping straight to sharding when a bigger instance would buy a year.
+- Resizing a lone instance with no failover, which is an outage.
+- Adding cores when the bottleneck is a lock or single-threaded code.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -48,8 +63,27 @@ The bottleneck may be elsewhere: lock or latch contention, a single-threaded com
 #### Interview angle
 > "For the database I'd scale up first since it's simplest and keeps strong consistency, while profiling and planning replicas and partitioning for when we approach the largest instance size."
 
+#### Sources
+- [Scalability](https://en.wikipedia.org/wiki/Scalability) — Wikipedia
+- [Modifying an Amazon RDS DB instance](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.DBInstance.Modifying.html) — Amazon RDS user guide
+
 ### Horizontal scaling — more machines; requires stateless design and coordination layer
 Horizontal scaling (scaling out) adds more machines and spreads load across them. It has no hard ceiling, gives fault tolerance (one machine dying is fine) and uses commodity hardware. But the application must be designed for it: stateless instances behind a load balancer, and state moved to shared or partitioned stores.
+
+#### Intuition
+Instead of one stronger shopkeeper you open more counters with more staff. Any counter can serve any customer, as long as the stock list and the till records are shared and not kept in one person's head.
+
+#### Must know
+- Scale **out**: add more machines behind a load balancer.
+- No hard ceiling, and one machine dying is survivable.
+- The app tier must be **stateless**. State moves to shared stores: database, Redis, object storage, queues.
+- The bottleneck then moves to the shared data layer.
+- Needs automation: health checks, autoscaling, service discovery.
+
+#### Common mistakes
+- Sessions or uploaded files kept on one instance's memory or disk.
+- Adding app servers when the database is the bottleneck.
+- A scheduled job that now runs on every instance.
 
 #### How it works
 ```mermaid
@@ -106,8 +140,27 @@ The bottleneck is downstream: the database (CPU, connections, locks), a shared c
 #### Interview angle
 > "The app tier is stateless behind a load balancer with autoscaling. Sessions, files and jobs live in Redis, S3 and queues, so scaling out is just adding instances, and the real work becomes scaling the data layer."
 
+#### Sources
+- [Scalability: horizontal and vertical scaling](https://en.wikipedia.org/wiki/Scalability) — Wikipedia
+- [The twelve-factor app: concurrency](https://12factor.net/concurrency) — 12factor.net
+
 ### Stateless services — no local state, any instance can serve any request; scale with load balancer
 A stateless service keeps **no client-specific state in its memory or disk between requests**. Everything a request needs comes with it (token, ids) or lives in shared stores. Instances become interchangeable "cattle": you can add, remove, restart or replace any of them at any time.
+
+#### Intuition
+A call centre where every agent reads the same customer file from a shared system. It does not matter which agent picks up, and an agent can go home mid-shift without anyone losing their history.
+
+#### Must know
+- The instance keeps **no client-specific state between requests**.
+- What a request needs comes with it (a token, ids) or lives in a shared store.
+- Instances are interchangeable, so you can add, kill or replace any of them.
+- This is what makes load balancing, autoscaling and rolling deploys easy.
+- For zero-downtime deploys: readiness probe, graceful shutdown, connection draining.
+
+#### Common mistakes
+- Hidden state: in-memory sessions, local files, in-memory rate limits, per-instance cron.
+- Killing pods without draining in-flight requests.
+- Calling a WebSocket gateway stateless. An open connection is state.
 
 #### How it works
 ```mermaid
@@ -157,8 +210,27 @@ Rolling updates with readiness probes (new pods receive traffic only when ready)
 #### Interview angle
 > "Services are stateless: identity comes in the JWT and state lives in Redis, the database and S3. Any pod can serve any request, and pods can be killed or added freely."
 
+#### Sources
+- [The twelve-factor app: processes](https://12factor.net/processes) — 12factor.net
+- [Pod lifecycle: termination of pods](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) — Kubernetes docs
+
 ### Stateful services — session affinity or external state store required
 Some services must keep state per client or per partition: WebSocket gateways (open connections), game servers (match state), stream processors (windowed aggregates), databases. They can't be load-balanced arbitrarily. You need **affinity** (route a client to the same instance), **partition ownership** (each instance owns a subset of keys), or **externalised state** with fast recovery.
+
+#### Intuition
+A doctor who keeps each patient's notes in their own notebook. You have to see the same doctor every time. If that doctor is away, either someone has a copy of the notebook or your history is gone.
+
+#### Must know
+- Some services must hold state: WebSocket gateways, game servers, stream processors, databases.
+- Requests cannot go to just any instance. You need **affinity** or **partition ownership**.
+- Sticky sessions are the simple form. Consistent hashing with a registry is the scalable form.
+- Plan for the instance dying: **checkpoint or replicate** the state.
+- Deploy by draining, and let clients reconnect and resume.
+
+#### Common mistakes
+- Sticky sessions for ordinary web traffic, where a session store would make the service stateless.
+- No recovery plan for the state held in memory.
+- Restarting all stateful instances at once in a deploy.
 
 #### How it works
 ```mermaid
@@ -210,8 +282,30 @@ An external session store (Redis) or stateless tokens. Sticky sessions create un
 #### Interview angle
 > "Where state is inherent, like sockets or game matches, I pin keys to owners with consistent hashing and a registry, checkpoint state, and drain on deploy. Everything else I keep stateless."
 
+#### Sources
+- [StatefulSets](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/) — Kubernetes docs
+- [Edit target group attributes: sticky sessions](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html) — AWS Elastic Load Balancing docs
+
 ### Distributed session — store sessions in Redis with TTL, enables stateless web servers
 A distributed session store keeps server-side session data (logged-in user, cart, CSRF token, preferences) in a shared store, usually **Redis with a TTL**, keyed by an opaque session id in a cookie. Any app instance can read the session, so web servers become stateless, and sessions can be revoked instantly by deleting the key.
+
+#### Intuition
+A cloakroom ticket. You carry only a numbered ticket, and the coat stays behind the counter. Any attendant can fetch your coat from the number, and the cloakroom can cancel a ticket at any time.
+
+#### Must know
+- The browser holds only an **opaque session id** in a cookie. The session data lives in **Redis with a TTL**.
+- Any app instance can serve any user, so web servers stay stateless.
+- **Revocation is instant**: delete the key.
+- Cookie flags: `HttpOnly`, `Secure`, `SameSite`. Rotate the session id at login.
+- Redis must be replicated, or a failover logs everyone out.
+
+#### Numbers to quote
+- A typical idle timeout is 15–30 minutes, with a sliding TTL refreshed on each request.
+
+#### Common mistakes
+- Not regenerating the session id after login (session fixation).
+- Putting large objects in the session.
+- Sessions with no TTL.
 
 #### How it works
 ```mermaid
@@ -268,8 +362,30 @@ Track each user's session ids in a Redis set (`user:{id}:sessions`). On "log out
 #### Interview angle
 > "Web sessions are opaque ids in HttpOnly cookies backed by Redis with a sliding TTL. Any pod can serve any user, and revocation is a key delete."
 
+#### Sources
+- [Session management cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) — OWASP
+- [Spring Session](https://docs.spring.io/spring-session/reference/) — Spring docs
+
 ### JWT for stateless auth — token carries identity, no server-side session store needed
 A JSON Web Token is a signed token carrying **claims** (user id, roles, expiry) that any service can **verify locally** with a key, with no session lookup. It enables stateless authentication across many services. The catches are revocation, token size and key management.
+
+#### Intuition
+A stamped entry pass with your name, role and an expiry time printed on it. Any guard can check the stamp without phoning the office. The weakness is that a stolen pass keeps working until it expires.
+
+#### Must know
+- A **signed** token carrying claims (user id, roles, expiry). Any service verifies it locally with a key.
+- No session lookup, which suits many services.
+- **Signed, not encrypted**: anyone can read the payload. No secrets inside.
+- **Revocation is the hard part.** Keep access tokens short-lived and pair them with a revocable refresh token.
+- Verify signature, `exp`, `iss`, `aud`, and pin the algorithm. Use asymmetric keys (RS256 / ES256) across services.
+
+#### Numbers to quote
+- Access token lifetime: 5–15 minutes. Refresh tokens last days and are rotated.
+
+#### Common mistakes
+- A long-lived JWT with no way to revoke it.
+- Storing the token in localStorage, where XSS can steal it.
+- Accepting `alg: none`, or sharing one HS256 secret with every service.
 
 #### How it works
 ```mermaid
@@ -332,8 +448,28 @@ With HS256 every verifying service needs the shared secret, which can also mint 
 #### Interview angle
 > "Services verify short-lived RS256 JWTs locally via a cached JWKS, and refresh tokens are rotated and revocable server-side. High-risk actions also check a revocation list."
 
+#### Sources
+- [JSON Web Token (RFC 7519)](https://www.rfc-editor.org/rfc/rfc7519) — IETF
+- [JSON Web Token best current practices (RFC 8725)](https://www.rfc-editor.org/rfc/rfc8725) — IETF
+- [Introduction to JSON Web Tokens](https://www.jwt.io/introduction) — jwt.io
+
 ### Twelve-factor app — config in env, statelessness, logs as streams, disposability
 The Twelve-Factor App is a methodology (from Heroku) for building services that deploy cleanly to cloud platforms and scale horizontally. Most of its 12 rules are now baseline expectations for containers and Kubernetes.
+
+#### Intuition
+A food truck built to a standard: it plugs into any site's power and water, carries nothing that belongs to one location, and can be parked or driven away in minutes. That is why the same truck works in every city.
+
+#### Must know
+- A checklist for services that deploy cleanly and scale out. Most of it is now the baseline for containers.
+- **Config in the environment**, never in code. The same build runs everywhere.
+- **Stateless, disposable processes**: share nothing, start fast, shut down gracefully.
+- **Logs to stdout** as a stream. The platform collects them.
+- Build once, then promote that one artifact through environments.
+
+#### Common mistakes
+- Passwords in a config file committed to git.
+- A separate build per environment.
+- Writing logs to local files inside a container.
 
 #### How it works
 | # | Factor | In practice |
@@ -391,8 +527,31 @@ It guarantees that what you tested is exactly what runs in production. Per-envir
 #### Interview angle
 > "Services follow twelve-factor: one immutable image promoted across environments, config and secrets injected, stateless pods, JSON logs to stdout, and graceful SIGTERM handling."
 
+#### Sources
+- [The twelve-factor app](https://12factor.net/) — 12factor.net
+- [The twelve-factor app: config](https://12factor.net/config) — 12factor.net
+
 ### Back-of-envelope estimation — QPS, storage, bandwidth, memory: always show arithmetic
 Back-of-envelope estimation turns vague requirements into numbers that drive design decisions: do we need sharding? a cache? how many servers? Interviewers care more about **clear assumptions and visible arithmetic** than precise answers. Round aggressively, state assumptions, and sanity-check.
+
+#### Intuition
+Before planning a wedding you ask how many guests. You do not need the exact number. You need to know whether it is 50 or 5,000, because that decides the hall, the kitchen and the budget.
+
+#### Must know
+- Turn requirements into rough numbers that **justify each design choice**.
+- Order: assumptions → QPS → storage → bandwidth → cache size → servers → decisions.
+- State assumptions aloud, round hard, and write the arithmetic down.
+- Always compute the **peak**, not only the average.
+- A 2× error does not matter. A 100× error changes the architecture.
+
+#### Numbers to quote
+- 86,400 seconds per day ≈ 10⁵. So 1 million requests per day ≈ 12 per second.
+- Memory read ≈ 100 ns, SSD read ≈ 100 µs, same-datacenter round trip ≈ 0.5 ms, cross-continent ≈ 150 ms.
+
+#### Common mistakes
+- Doing the sums silently in your head.
+- Skipping estimation and then sharding a system that needs 50 QPS.
+- Unit slips: KB against MB, per day against per second.
 
 #### How it works
 ```mermaid
@@ -457,8 +616,31 @@ The numbers decide the architecture: whether a single database suffices or shard
 #### Interview angle
 > "Before drawing boxes I write down DAU, actions per user, sizes and peak factor, then derive QPS, storage, bandwidth and cache size. Every component in my design is justified by those numbers."
 
+#### Sources
+- [Latency numbers every programmer should know](https://gist.github.com/jboner/2841832) — Jonas Bonér
+- [The system design primer: back-of-the-envelope calculations](https://github.com/donnemartin/system-design-primer) — Donne Martin
+
 ### QPS estimation — DAU × actions_per_day / 86400 seconds
 Queries per second is the core load number: **average QPS = DAU × actions per user per day ÷ 86,400**, then apply a **peak multiplier** (2–5× for daily peaks, 10×+ for events), and split by **read vs write**, because they scale differently.
+
+#### Intuition
+Counting customers per minute at a shop: total visitors in a day divided by the minutes it is open, then remembering that the lunch rush is several times busier than the average.
+
+#### Must know
+- **Average QPS = daily active users × actions per user per day ÷ 86,400.**
+- Multiply by a **peak factor**.
+- **Split reads from writes.** They scale with different tools.
+- One user action can fan out into many internal calls.
+- Use 10⁵ seconds per day for quick mental maths.
+
+#### Numbers to quote
+- Peak is usually 2–5× the average, and 10× or more for events.
+- 1 million per day ≈ 12 per second. 1 billion per day ≈ 12,000 per second.
+
+#### Common mistakes
+- Sizing for the average.
+- One combined number for reads and writes.
+- Ignoring internal fan-out, so backend services get far more load than expected.
 
 #### How it works
 ```mermaid
@@ -508,8 +690,31 @@ They scale with different tools: reads with caches, CDNs and replicas, writes wi
 #### Interview angle
 > "QPS is DAU times actions over 86,400, then times a peak factor, split into reads and writes, with internal fan-out added. Reads get caches and replicas, writes get partitioning and queues."
 
+#### Sources
+- [The system design primer](https://github.com/donnemartin/system-design-primer) — Donne Martin
+- [Latency numbers every programmer should know](https://gist.github.com/jboner/2841832) — Jonas Bonér
+
 ### Storage estimation — rows/day × row_size × retention_days × replication_factor
 Storage estimation tells you whether data fits on one node, how fast it grows, what it costs and when you'll need partitioning, archiving or sharding. Formula: **items per day × size per item × retention × replication factor**, plus indexes and overhead.
+
+#### Intuition
+Working out how many shelves a library needs: books arriving per day, times the thickness of a book, times how many years you keep them, times the number of copies of each.
+
+#### Must know
+- **Storage = items per day × size per item × retention × replication factor**, plus index overhead.
+- Media dominates. Put images and video in object storage and keep only metadata in the database.
+- Indexes add a large share on top of the table.
+- Tier the data: recent on fast storage, old data archived cheaply.
+- A small hot database is faster to query, back up and restore.
+
+#### Numbers to quote
+- Indexes often add 30–100%. Replication is usually ×3.
+- 1 KB = 10³, 1 MB = 10⁶, 1 GB = 10⁹, 1 TB = 10¹², 1 PB = 10¹⁵ bytes.
+
+#### Common mistakes
+- Forgetting replication and indexes.
+- Storing media as blobs in the database.
+- No retention or archiving plan, so the hot database grows forever.
 
 #### How it works
 ```mermaid
@@ -560,8 +765,31 @@ Hot data (recent, frequently accessed) needs low latency and indexes, which is e
 #### Interview angle
 > "Storage is items per day times size times retention times replication, plus index overhead. Media goes to S3 and old partitions get archived to Parquet, so the hot database stays small."
 
+#### Sources
+- [Understanding and managing Amazon S3 storage classes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html) — Amazon S3 user guide
+- [The system design primer](https://github.com/donnemartin/system-design-primer) — Donne Martin
+
 ### Bandwidth estimation — peak_QPS × average_response_size × peak_multiplier (×3–5)
 Bandwidth estimation checks whether network capacity, load balancers and egress costs can handle traffic: **bandwidth = QPS × response size** (ingress uses request size). Do it at peak. Large payloads (images, video, file downloads) usually dominate and push you toward CDNs and object storage.
+
+#### Intuition
+Working out how wide a road must be: vehicles per second at rush hour, times the size of each vehicle. A road sized for cars jams as soon as lorries, which here are images and video, start using it.
+
+#### Must know
+- **Bandwidth = peak QPS × payload size.** Egress uses response size, ingress uses request size.
+- Media dominates, which is why it goes through a **CDN and object storage**.
+- Uploads and downloads go **directly to object storage** with pre-signed URLs, not through app servers.
+- Internet egress and cross-AZ traffic are billed per GB.
+- For a plain JSON API, bandwidth is rarely the constraint.
+
+#### Numbers to quote
+- 1 byte = 8 bits. 1 Gbit/s ≈ 125 MB/s.
+- 1 MB/s sustained for a month ≈ 2.6 TB.
+
+#### Common mistakes
+- Mixing bits and bytes.
+- Proxying large file uploads through the API servers.
+- Ignoring the egress bill when serving media straight from the origin.
 
 #### How it works
 ```mermaid
@@ -609,8 +837,29 @@ Large uploads would consume API servers' bandwidth, memory and connections and t
 #### Interview angle
 > "Bandwidth is peak QPS times payload. Anything media-heavy goes through a CDN, with direct-to-S3 uploads and downloads via pre-signed URLs, so app servers only move small JSON."
 
+#### Sources
+- [Download and upload objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html) — Amazon S3 user guide
+- [The system design primer](https://github.com/donnemartin/system-design-primer) — Donne Martin
+
 ### Amdahl's Law — serial fraction limits maximum speedup: max = 1 / (S + (1-S)/N)
 Amdahl's Law: if a fraction **S** of a task is inherently serial, then with N parallel workers the speedup is at most **1 / (S + (1 − S)/N)**, and never more than **1/S** no matter how many workers you add. Serial bottlenecks (a single lock, a single leader, a single partition) cap scalability.
+
+#### Intuition
+Ten cooks can chop vegetables ten times faster, but there is one oven and the cake still takes an hour to bake. However many cooks you add, the meal can never be ready in less than that hour.
+
+#### Must know
+- If a fraction **S** of the work is serial, speedup with N workers is at most **1 / (S + (1 − S)/N)**.
+- The ceiling is **1/S**, however many workers you add.
+- In systems the serial part is a global lock, a single writer, one partition or one hot key.
+- Fix it by **partitioning the serial part**: per-key locks, more partitions, ordering per key and not globally.
+
+#### Numbers to quote
+- 10% serial → at most 10× faster. 5% serial → at most 20×.
+
+#### Common mistakes
+- Adding workers after throughput has already flattened.
+- Demanding global ordering when per-user or per-account ordering is enough.
+- Forgetting that contention can make more workers slower, not just no faster.
 
 #### How it works
 ```mermaid
@@ -662,8 +911,30 @@ Within a consumer group, a partition is consumed by one consumer at a time, so o
 #### Interview angle
 > "Amdahl's law tells me to hunt the serial fraction, like a global lock, a single writer or a hot partition. I partition that piece, for example by ordering per account instead of globally, before adding more machines."
 
+#### Sources
+- [Amdahl's law](https://en.wikipedia.org/wiki/Amdahl%27s_law) — Wikipedia
+- [Gustafson's law](https://en.wikipedia.org/wiki/Gustafson%27s_law) — Wikipedia
+
 ### Little's Law — L = λW: avg items in system = arrival rate × avg time in system
 Little's Law: in a stable system, the **average number of items in the system (L)** equals the **arrival rate (λ)** times the **average time each item spends in the system (W)**. It's a simple, universal tool for sizing thread pools, connection pools, queues and concurrency limits.
+
+#### Intuition
+A coffee shop where two customers arrive per minute and each stays five minutes holds about ten customers at any moment. If service slows and each stays ten minutes, the shop holds twenty and runs out of chairs.
+
+#### Must know
+- **L = λ × W**: items in the system = arrival rate × time each one spends in it.
+- Concurrent requests = requests per second × latency.
+- Use it to size **thread pools, connection pools and concurrency limits**.
+- When a dependency slows down, W rises, so in-flight requests rise and pools run out.
+- That is why every outbound call needs a timeout and a concurrency cap (bulkhead).
+
+#### Numbers to quote
+- 1,000 req/s at 200 ms = 200 in flight. If latency becomes 1 s, that is 1,000 in flight.
+
+#### Common mistakes
+- Sizing a pool by guesswork.
+- A huge database pool "to be safe", which only adds contention.
+- Forgetting it describes averages, so bursts need headroom.
 
 #### How it works
 ```mermaid
@@ -714,3 +985,8 @@ In-flight work L = 5,000 × 0.02 = 100 concurrent message processings. If each c
 
 #### Interview angle
 > "I size thread and connection pools with Little's law, in-flight equals rate times latency. Because a slow dependency multiplies in-flight requests, every outbound call gets a timeout and a bulkhead."
+
+#### Sources
+- [Little's law](https://en.wikipedia.org/wiki/Little%27s_law) — Wikipedia
+- [About pool sizing](https://github.com/brettwooldridge/HikariCP/wiki/About-Pool-Sizing) — HikariCP wiki
+

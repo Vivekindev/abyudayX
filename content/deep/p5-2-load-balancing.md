@@ -3,6 +3,21 @@
 ### Round robin — equal distribution ignoring server load or capacity
 Round robin sends each new request (or connection) to the **next server in a rotating list**: 1, 2, 3, 1, 2, 3… It's simple, stateless and fair when all servers are identical and requests cost about the same. It ignores how busy each server actually is.
 
+#### Intuition
+Dealing cards around a table: one to each player in turn. It is fair as long as every player is the same and every card is the same weight.
+
+#### Must know
+- Each new request goes to the **next server in the list**, in rotation.
+- Simple and needs no state. It is the default in many balancers.
+- Fair only when servers are identical and requests cost about the same.
+- It is **blind to actual load**. A server stuck on slow requests still gets its full share.
+- With long-lived connections (gRPC, WebSockets) it balances connections, not requests.
+
+#### Common mistakes
+- Using it when request cost varies a lot, such as mixing 5 ms reads with 30-second exports.
+- Mixed instance sizes with no weights.
+- Assuming round robin at L4 spreads gRPC requests evenly.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -43,8 +58,27 @@ The balancer doesn't need to track per-server load, so it's cheap, easy to repli
 #### Interview angle
 > "Round robin is fine for identical stateless pods with uniform requests. Once request cost varies, I switch to least outstanding requests or power-of-two-choices."
 
+#### Sources
+- [HTTP load balancing](https://docs.nginx.com/nginx/admin-guide/load-balancer/http-load-balancer/) — NGINX docs
+- [Supported load balancers](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers) — Envoy docs
+
 ### Weighted round robin — proportional to server CPU/memory/capacity
 Weighted round robin gives each server a **weight** proportional to its capacity: a server with weight 3 receives three times as many requests as one with weight 1. It handles mixed instance sizes, gradual migrations and canary traffic splits.
+
+#### Intuition
+Sharing work between a senior and a junior: three tasks to the senior for every one to the junior, because the senior can handle three times as much.
+
+#### Must know
+- Each server gets a **weight**. Requests are shared in proportion to it.
+- Use it for **mixed instance sizes**.
+- It is also how **canary releases** work: 95/5, then 75/25, then 50/50.
+- And for gradual migrations between fleets or datacenters.
+- Weights are static. They do not react to real-time load.
+
+#### Common mistakes
+- Guessing weights instead of measuring capacity with a load test.
+- A canary weight so small that it never gets enough traffic to judge.
+- Relying on weights alone when a server is degraded at runtime.
 
 #### How it works
 ```mermaid
@@ -90,8 +124,27 @@ Actual capacity varies with noisy neighbours, CPU throttling, GC pauses, cache w
 #### Interview angle
 > "Weights handle known capacity differences and canary splits like 95/5. For runtime load I rely on least-outstanding-requests plus health checks."
 
+#### Sources
+- [ngx_http_upstream_module: server weight](https://nginx.org/en/docs/http/ngx_http_upstream_module.html) — NGINX docs
+- [Supported load balancers: weighted round robin](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers) — Envoy docs
+
 ### Least connections — route to server with fewest active connections (best for variable request duration)
 Least connections sends each new request to the server with the **fewest active connections** (or outstanding requests). Servers stuck on slow requests naturally get fewer new ones, so load follows actual work in progress. That makes it ideal when request durations vary.
+
+#### Intuition
+At the supermarket you join the shortest queue. A till stuck with a customer who has a full trolley naturally gets fewer new customers.
+
+#### Must know
+- Send each new request to the server with the **fewest in-flight requests or connections**.
+- Load follows actual work in progress, so it suits **requests of varying duration**.
+- AWS ALB calls it "least outstanding requests". NGINX calls it `least_conn`.
+- A newly added server has zero connections and gets flooded. Pair it with **slow start**.
+- With HTTP/2, count requests, not connections.
+
+#### Common mistakes
+- Adding a cold instance with no slow start.
+- Counting TCP connections when each one multiplexes many requests.
+- Forgetting that each balancer node sees only its own connections.
 
 #### How it works
 ```mermaid
@@ -137,8 +190,27 @@ The new server has zero connections, so the balancer sends it most new requests 
 #### Interview angle
 > "For mixed fast and slow requests I'd use least outstanding requests, which ALB supports, plus slow start, so new instances aren't flooded."
 
+#### Sources
+- [HTTP load balancing: least connections](https://docs.nginx.com/nginx/admin-guide/load-balancer/http-load-balancer/) — NGINX docs
+- [Edit target group attributes: routing algorithm](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html) — AWS Elastic Load Balancing docs
+
 ### IP hash — same client IP always routes to same server (sticky sessions without cookies)
 IP hash routes each request based on a hash of the **client's IP address**, so a given client consistently lands on the same server: session affinity without cookies. It's simple, but the distribution follows IP populations, which are often very skewed, and affinity breaks when clients change IPs or servers change.
+
+#### Intuition
+Sending pupils to a classroom by the first letter of their street name. The same pupil always gets the same room, but if one huge apartment block is all on one street, that classroom overflows.
+
+#### Must know
+- The server is chosen by a **hash of the client's IP**, so one client keeps hitting the same server.
+- Gives stickiness with no cookie, and works at L4.
+- **NAT skews it**: thousands of users behind one office or mobile-carrier IP land on one server.
+- Stickiness breaks when the client's IP changes (Wi-Fi to mobile data).
+- Better: make servers stateless, or hash a stable key such as the user id with consistent hashing.
+
+#### Common mistakes
+- Using it to prop up in-memory sessions instead of moving sessions to Redis.
+- `hash mod N`, so adding one server reshuffles every client.
+- Forgetting carrier-grade NAT on Indian mobile networks.
 
 #### How it works
 ```mermaid
@@ -186,8 +258,27 @@ Cookie-based (LB-generated or app cookie) identifies the actual client regardles
 #### Interview angle
 > "I avoid IP-hash stickiness because NAT skews load and IPs change. Sessions live in Redis so any server works, and where locality matters I use consistent hashing on a stable key like the user id."
 
+#### Sources
+- [ngx_http_upstream_module: ip_hash and hash](https://nginx.org/en/docs/http/ngx_http_upstream_module.html) — NGINX docs
+- [Edit target group attributes: sticky sessions](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html) — AWS Elastic Load Balancing docs
+
 ### Random with power of two choices — pick 2 random servers, route to least loaded (better than random)
 Power of two choices (P2C): for each request, pick **two servers at random** and send the request to the **less loaded** of the two. It's almost as good as checking every server, but it needs only two load lookups and no global coordination, which is why it's used in Envoy, Linkerd, Finagle, NGINX (`random two least_conn`) and gRPC.
+
+#### Intuition
+You do not inspect every checkout queue in a hypermarket. You glance at two at random and join the shorter. That small amount of choice is almost as good as checking them all.
+
+#### Must know
+- Pick **two servers at random** and send the request to the **less loaded** one.
+- Nearly as good as checking every server, with only two lookups.
+- It avoids **herding**: many balancers all rushing to the one server that looked idle a moment ago.
+- No shared state between balancers is needed.
+- The default behind Envoy's least-request policy, and used by Linkerd and NGINX `random two`.
+
+#### Common mistakes
+- Proposing "always pick the globally least-loaded server" in a system with many independent balancers.
+- Plain random, which leaves some servers much busier than others.
+- Using connection count as the load signal for multiplexed protocols.
 
 #### How it works
 ```mermaid
@@ -231,8 +322,27 @@ Outstanding (in-flight) requests per backend, or a latency-weighted score such a
 #### Interview angle
 > "Client-side balancing uses power-of-two-choices on outstanding requests: near-optimal spread with no global state and no herding onto one server, which is how Envoy and Linkerd do it."
 
+#### Sources
+- [Supported load balancers: weighted least request](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers) — Envoy docs
+- [The power of two choices in randomized load balancing](https://www.eecs.harvard.edu/~michaelm/postscripts/mythesis.pdf) — Michael Mitzenmacher
+
 ### Layer 4 LB — operates on TCP/UDP, fast, no HTTP awareness, no SSL termination
 A Layer 4 load balancer routes based on **IP addresses and ports** (the transport layer). It forwards TCP connections or UDP datagrams to backends **without parsing application data**. It's extremely fast, handles any protocol and scales to millions of connections, but can't route by URL, header or cookie.
+
+#### Intuition
+A postal sorting office that reads only the address on the envelope and never opens the letter. It is very fast and handles any kind of letter, but it cannot sort by what is written inside.
+
+#### Must know
+- Routes by **IP address and port**. It does not parse the application data.
+- Very fast, handles huge connection counts, and works for **any TCP or UDP protocol**.
+- It balances **connections**, not requests.
+- It cannot route by URL, header or cookie.
+- Use it for databases, MQTT, game traffic, TLS pass-through and static IPs. AWS NLB is the example.
+
+#### Common mistakes
+- Putting gRPC or HTTP/2 behind L4 and wondering why one backend takes all the load.
+- Expecting path-based routing from an L4 balancer.
+- Forgetting the backend may see the balancer's IP unless client IP is preserved.
 
 #### How it works
 ```mermaid
@@ -287,8 +397,27 @@ It hashes the connection 5-tuple (source IP and port, destination IP and port, p
 #### Interview angle
 > "L4 balancers like NLB are for raw TCP and UDP: IoT MQTT, databases, TLS pass-through and static IPs. HTTP routing, retries and TLS termination belong at L7."
 
+#### Sources
+- [What is a Network Load Balancer?](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html) — AWS Elastic Load Balancing docs
+- [Maglev: a fast and reliable software network load balancer](https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/) — Google Research
+
 ### Layer 7 LB — operates on HTTP, content-aware routing, SSL termination, rewrites
 A Layer 7 load balancer understands the application protocol (HTTP/1.1, HTTP/2, gRPC, WebSocket). It terminates TLS, parses requests and routes **each request** based on host, path, headers, cookies or query. It can also retry, rewrite, compress, authenticate and observe at request granularity.
+
+#### Intuition
+A receptionist who opens each letter, reads what it is about, and walks it to the right department. Slower than sorting by address, but it reaches exactly the right desk.
+
+#### Must know
+- Understands HTTP, gRPC and WebSocket, and routes **each request** by host, path, header or cookie.
+- **Terminates TLS**, and can retry, redirect, rewrite, authenticate and apply a WAF.
+- Balances per request, which is what HTTP/2 and gRPC need.
+- Costs more CPU and latency per request than L4.
+- Examples: AWS ALB, Envoy, NGINX, a Kubernetes Ingress.
+
+#### Common mistakes
+- Retrying at the balancer, the mesh and the client all at once, which multiplies load.
+- Idle timeouts that do not match the backend, which produce 502 and 504 errors.
+- Sending large uploads through it when direct-to-storage would do.
 
 #### How it works
 ```mermaid
@@ -335,8 +464,27 @@ ClusterIP Services are L4 (kube-proxy): each long-lived HTTP/2 connection is pin
 #### Interview angle
 > "At the edge an L7 ALB or Envoy terminates TLS and routes by host and path, with WAF and per-request balancing, so gRPC and HTTP/2 spread evenly across pods."
 
+#### Sources
+- [What is an Application Load Balancer?](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html) — AWS Elastic Load Balancing docs
+- [gRPC load balancing](https://grpc.io/blog/grpc-load-balancing/) — gRPC blog
+
 ### DNS load balancing — multiple A records for same domain, TTL-based, no health checks
 DNS load balancing returns **several IP addresses** (multiple A/AAAA records) for one hostname, often rotated (round-robin DNS), so different clients connect to different servers. It's free and simple, but coarse: DNS caching, clients picking the first IP, and **no built-in health awareness** make it unreliable as the only balancing layer.
+
+#### Intuition
+A phone directory that lists three numbers for the same shop and shuffles their order. Callers spread out, but if one line is dead the directory keeps printing it, and people who copied the number keep dialling it.
+
+#### Must know
+- DNS returns **several IP addresses** for one name, so different clients connect to different servers.
+- Plain DNS has **no health checks** and no view of server load.
+- Changes take effect only as cached answers expire (TTL), and clients cache unpredictably.
+- Use DNS to choose a **region** or a highly available endpoint, not an individual server.
+- Managed DNS (Route 53) adds health checks and latency or geo routing.
+
+#### Common mistakes
+- Round-robin DNS as the only load balancer.
+- Expecting instant failover from a DNS change.
+- Assuming an even spread. One big resolver can pin many users to one IP.
 
 #### How it works
 ```mermaid
@@ -385,8 +533,27 @@ DNS (GeoDNS/latency-based with health checks, or anycast) directs users to the n
 #### Interview angle
 > "DNS only picks the region, using health-checked latency records. Inside a region, real load balancers handle instance health and per-request distribution."
 
+#### Sources
+- [Round-robin DNS](https://en.wikipedia.org/wiki/Round-robin_DNS) — Wikipedia
+- [Choosing a routing policy](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html) — Amazon Route 53 developer guide
+
 ### GSLB — Global Server Load Balancing, routes users to closest healthy datacenter
 Global Server Load Balancing distributes users across **multiple data centres or regions**, considering proximity (latency/geo), health, capacity and policy. It's the top layer of a multi-region architecture, implemented with smart DNS, anycast, or global proxy networks.
+
+#### Intuition
+An airline's control desk that sends each plane to the nearest open airport. If one airport closes, planes are diverted to the next nearest, provided that airport has spare runways.
+
+#### Must know
+- Spreads users across **regions or datacenters** by proximity, health and capacity.
+- Built with smart DNS (slower failover) or anycast (fast failover).
+- Health checks must be **deep**: a region whose database is down must leave rotation.
+- Every region needs **spare capacity** to absorb a failed neighbour.
+- The hard part is the data layer: replication, where each user's data lives, residency rules.
+
+#### Common mistakes
+- Shallow health checks that pass while the region cannot serve.
+- No headroom, so a failover overloads the surviving region.
+- Treating global routing as the whole multi-region design and ignoring data.
 
 #### How it works
 ```mermaid
@@ -438,8 +605,30 @@ A region whose load balancer and web servers respond but whose database or core 
 #### Interview angle
 > "Anycast global routing sends each user to the nearest healthy region using deep health checks, and each region has headroom to absorb a neighbour's traffic. User data is homed per region, so failover stays correct."
 
+#### Sources
+- [Cloud Load Balancing overview](https://cloud.google.com/load-balancing/docs/load-balancing-overview) — Google Cloud docs
+- [What is AWS Global Accelerator?](https://docs.aws.amazon.com/global-accelerator/latest/dg/what-is-global-accelerator.html) — AWS Global Accelerator docs
+
 ### AWS ALB (L7) vs NLB (L4) vs Classic LB — ALB for HTTP/WebSocket, NLB for ultra-low latency TCP
 AWS offers three Elastic Load Balancers: **ALB** (Application, L7: HTTP/HTTPS/gRPC/WebSocket with rich routing), **NLB** (Network, L4: TCP/UDP/TLS with ultra-low latency, static IPs and millions of connections) and the legacy **Classic LB** (old, avoid). Plus **Gateway LB** for inline security appliances.
+
+#### Intuition
+Two kinds of doorman. One reads your invitation and shows you to the right room (ALB). The other just waves people through a fixed, well-known door as fast as possible (NLB).
+
+#### Must know
+- **ALB** (L7): HTTP, HTTPS, gRPC and WebSocket. Routing by host, path and header, plus TLS, WAF and auth.
+- **NLB** (L4): TCP, UDP and TLS. Very low latency, **static IPs**, huge connection counts, PrivateLink.
+- **Classic LB** is legacy. Do not choose it for new work.
+- ALB IP addresses change, so clients must use its DNS name.
+- Need static IPs with L7 routing: put an NLB or Global Accelerator in front of the ALB.
+
+#### Numbers to quote
+- ALB default idle timeout: 60 seconds. Default deregistration delay: 300 seconds.
+
+#### Common mistakes
+- An NLB in front of gRPC services, so each connection sticks to one backend.
+- Giving a partner an ALB's IP address to allow-list.
+- Long synchronous requests through an ALB with the default timeout.
 
 #### How it works
 | | ALB | NLB | Classic (legacy) |
@@ -494,8 +683,28 @@ Put AWS Global Accelerator in front (two static anycast IPs routing to the ALB),
 #### Interview angle
 > "On AWS: ALB for HTTP, gRPC and WebSockets with path routing and WAF. NLB for raw TCP, static IPs and PrivateLink. Global Accelerator in front when partners need fixed IPs."
 
+#### Sources
+- [Elastic Load Balancing features](https://aws.amazon.com/elasticloadbalancing/features/) — AWS
+- [What is an Application Load Balancer?](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html) — AWS Elastic Load Balancing docs
+- [What is a Network Load Balancer?](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html) — AWS Elastic Load Balancing docs
+
 ### Health checks — active (periodic HTTP probe) vs passive (monitor real traffic error rates)
 Health checks tell load balancers and orchestrators which instances should receive traffic. **Active** checks probe each instance periodically (`GET /health`). **Passive** checks (outlier detection) watch real traffic and eject instances that return errors or time out. Good systems use both, with carefully designed endpoints.
+
+#### Intuition
+A manager checking on staff. Either the manager walks round every few minutes asking "all fine?" (active), or watches the complaints desk and pulls anyone whose customers keep complaining (passive). The best managers do both.
+
+#### Must know
+- **Active**: the balancer probes each instance on a schedule. **Passive**: it watches real traffic and ejects instances that fail.
+- **Liveness** = is the process stuck? Failing it **restarts** the container.
+- **Readiness** = can it take traffic now? Failing it only removes it from rotation.
+- **Liveness must never check dependencies.** A database blip would restart every pod at once.
+- Use thresholds to avoid flapping, and cap how many instances can be ejected.
+
+#### Common mistakes
+- A liveness probe that calls the database.
+- A health endpoint that always returns 200.
+- One failed probe removing an instance, which causes flapping during GC pauses.
 
 #### How it works
 ```mermaid
@@ -548,8 +757,31 @@ Active checks probe a lightweight endpoint, which may pass while real requests f
 #### Interview angle
 > "Liveness checks only the process, readiness gates traffic, and Envoy outlier detection ejects instances failing real requests, capped so a dependency blip can't eject everything."
 
+#### Sources
+- [Liveness, readiness, and startup probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) — Kubernetes docs
+- [Implementing health checks](https://aws.amazon.com/builders-library/implementing-health-checks/) — Amazon Builders' Library
+- [Outlier detection](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/outlier) — Envoy docs
+
 ### Connection draining — grace period to complete in-flight requests before removing instance
 Connection draining (deregistration delay) lets an instance that's being removed (scale-in, deploy, maintenance) **finish its in-flight requests** while the load balancer stops sending it new ones. Without it, every deploy or scale-in drops active requests and users see errors.
+
+#### Intuition
+A shop closing for the night. The door is locked so nobody new comes in, but the customers already inside are allowed to finish paying before the lights go off.
+
+#### Must know
+- An instance being removed **stops getting new requests but finishes the ones in flight**.
+- Without it, every deploy and scale-in drops active requests.
+- On Kubernetes: a `preStop` sleep, then SIGTERM, then graceful shutdown, all inside the termination grace period.
+- The `preStop` sleep exists because endpoint removal takes a few seconds to reach the proxies.
+- Work that outlasts the drain window should be an asynchronous job.
+
+#### Numbers to quote
+- AWS deregistration delay defaults to 300 seconds and is commonly lowered to 30–60.
+
+#### Common mistakes
+- No `preStop` delay, which gives a burst of 502s on every deploy.
+- A grace period shorter than the drain time, so the pod is killed mid-request.
+- Closing every WebSocket at the same instant.
 
 #### How it works
 ```mermaid
@@ -605,8 +837,30 @@ Endpoint removal propagates asynchronously to kube-proxy, ingress controllers an
 #### Interview angle
 > "Every service drains: a preStop sleep for endpoint propagation, graceful shutdown on SIGTERM, a grace period longer than the drain window, and a tuned LB deregistration delay, so deploys cause zero errors."
 
+#### Sources
+- [Pod lifecycle: termination of pods](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) — Kubernetes docs
+- [Edit target group attributes: deregistration delay](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html) — AWS Elastic Load Balancing docs
+
 ### Slow-start mode — gradually ramp up traffic to newly added instances to warm caches
 Slow start gives a newly added (or recovered) instance a **gradually increasing share of traffic** over a warm-up window (say 30–120 s) instead of its full share immediately. Cold instances (empty caches, JVM not JIT-compiled, connection pools not established) are slow at first, and flooding them causes timeouts and flapping.
+
+#### Intuition
+A new employee is not handed a full workload on the first morning. They get a few tasks, then more as they find their way around.
+
+#### Must know
+- A new instance gets a **gradually rising share of traffic** over a warm-up window.
+- New instances are slow at first: empty caches, cold JIT, unfilled connection pools.
+- Without it, a least-connections balancer **floods the new instance**, which has zero connections.
+- That can spiral: cold instances fail health checks, are removed, and more cold ones are added.
+- Also warm up before readiness, and scale out a little earlier to compensate.
+
+#### Numbers to quote
+- A typical ramp is 30–120 seconds.
+
+#### Common mistakes
+- Autoscaling a JVM service with no warm-up and no slow start.
+- Health thresholds so tight that warming instances are ejected.
+- Expecting new capacity to help the instant it registers.
 
 #### How it works
 ```mermaid
@@ -650,3 +904,8 @@ Newly launched instances immediately receive their full share of an already over
 
 #### Interview angle
 > "New instances warm their caches and JIT before readiness and get a 60-second slow-start ramp at the load balancer, so scale-outs add capacity instead of a wave of timeouts."
+
+#### Sources
+- [Slow start mode](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/slow_start) — Envoy docs
+- [Edit target group attributes: slow start mode](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html) — AWS Elastic Load Balancing docs
+

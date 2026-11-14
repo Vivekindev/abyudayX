@@ -3,6 +3,25 @@
 ### Reactive auto-scaling — scale based on current CPU%, memory%, request count, queue depth
 Reactive autoscaling watches live metrics and adds or removes capacity when they cross targets: CPU above 60%, more than 1,000 requests per instance, queue depth above 10k. It's the standard approach (AWS target tracking, Kubernetes HPA), but it always **lags** demand by detection + provisioning + warm-up time.
 
+#### Intuition
+A thermostat. It switches the heater on after the room has already turned cold, so there is always a short chilly spell before the warmth arrives.
+
+#### Must know
+- Watch a live metric and add or remove capacity when it crosses a target.
+- Formula: **desired = current × (observed metric ÷ target metric)**, rounded up.
+- It always **lags**: time to detect + time to launch + time to warm up.
+- Scale on the metric that actually saturates: CPU for CPU-bound work, requests per instance for I/O-bound work, queue depth for workers.
+- **Scale out fast, scale in slowly**, and keep headroom.
+
+#### Numbers to quote
+- A common CPU target is 50–65%, which leaves headroom for the lag.
+- Total lag is typically a few minutes on VMs and about a minute on containers.
+
+#### Common mistakes
+- Scaling an I/O-bound service on CPU, which stays low while latency climbs.
+- Aggressive scale-in, which causes flapping.
+- Autoscaling the app tier into a database that cannot take the extra connections.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -55,8 +74,27 @@ Under-capacity hurts users immediately, while over-capacity only costs money for
 #### Interview angle
 > "I autoscale on the metric that actually saturates, CPU or requests per target or queue lag, scaling out fast and in slowly with headroom, plus scheduled or predictive scaling for known peaks."
 
+#### Sources
+- [Target tracking scaling policies for Amazon EC2 Auto Scaling](https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scaling-target-tracking.html) — Amazon EC2 Auto Scaling user guide
+- [Horizontal pod autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/) — Kubernetes docs
+
 ### Predictive auto-scaling — pre-scale based on historical patterns (Black Friday, match kicks off)
 Predictive autoscaling forecasts demand from historical patterns (daily and weekly cycles, recurring events) and **provisions capacity before the load arrives**, removing the reactive lag. Scheduled scaling is the manual version: "at 19:30 on match days, set minimum to 80".
+
+#### Intuition
+A restaurant that brings in extra staff before the Friday dinner rush because it happens every Friday. It does not wait for the queue to reach the door.
+
+#### Must know
+- Forecast load from history and **add capacity before it arrives**, which removes the reactive lag.
+- **Scheduled scaling** is the manual form: raise the minimum before a known event.
+- Keep reactive scaling switched on as the safety net.
+- Warm caches and the CDN as well, not only the servers.
+- It cannot foresee viral or unplanned spikes.
+
+#### Common mistakes
+- Relying on reactive scaling for a flash sale or a match start.
+- Scheduled scale-ups that nobody ever removes, so you pay for idle capacity.
+- Assuming the cloud will have the instances at peak. Reserve capacity for big events.
 
 #### How it works
 ```mermaid
@@ -104,8 +142,27 @@ For unpredictable spikes (viral content, breaking news, incidents causing retrie
 #### Interview angle
 > "For predictable peaks like evening commutes or match starts, I pre-scale on forecasts and schedules, warm caches and the CDN, and keep reactive autoscaling plus load shedding for surprises."
 
+#### Sources
+- [Predictive scaling for Amazon EC2 Auto Scaling](https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-predictive-scaling.html) — Amazon EC2 Auto Scaling user guide
+- [Scheduled scaling for Amazon EC2 Auto Scaling](https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-scheduled-scaling.html) — Amazon EC2 Auto Scaling user guide
+
 ### AWS Auto Scaling Groups — min/desired/max, scale-out fast, scale-in slow (cooldown)
 An AWS Auto Scaling Group (ASG) manages a fleet of EC2 instances from a **launch template**, keeping the count between **min** and **max** at a **desired** value adjusted by scaling policies. It replaces unhealthy instances, spreads across AZs and integrates with load balancers.
+
+#### Intuition
+A staffing agency with a contract: never fewer than four workers, never more than forty, and replace anyone who falls ill. The number on shift today moves between those limits with demand.
+
+#### Must know
+- An ASG runs a fleet of EC2 instances from a **launch template**, between **min** and **max**, at a **desired** count.
+- It replaces unhealthy instances and spreads them across AZs.
+- Use the **load balancer's health check**, not only the EC2 status check.
+- Size **min** so that losing one AZ still leaves enough capacity.
+- Speed up scale-out with pre-baked images and warm pools. Drain on termination with lifecycle hooks.
+
+#### Common mistakes
+- EC2 status checks only, so an instance with a crashed app is never replaced.
+- A minimum too low to survive an AZ outage.
+- A long bootstrap script at launch, which makes scale-out take minutes.
 
 #### How it works
 ```mermaid
@@ -158,8 +215,30 @@ A set of pre-initialised instances kept stopped (or hibernated, or running) alon
 #### Interview angle
 > "The ASG spans three AZs sized to survive losing one, uses ELB health checks, target tracking on requests per target, warm pools for fast scale-out, and drain hooks on termination."
 
+#### Sources
+- [What is Amazon EC2 Auto Scaling?](https://docs.aws.amazon.com/autoscaling/ec2/userguide/what-is-amazon-ec2-auto-scaling.html) — Amazon EC2 Auto Scaling user guide
+- [Warm pools for Amazon EC2 Auto Scaling](https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-warm-pools.html) — Amazon EC2 Auto Scaling user guide
+
 ### Kubernetes HPA — Horizontal Pod Autoscaler based on CPU/memory or custom metrics
 The Horizontal Pod Autoscaler adjusts a Deployment's **replica count** based on observed metrics: CPU and memory utilisation relative to requests, or custom and external metrics (RPS, queue lag) via the metrics APIs. It's the default pod-level autoscaler, working alongside the Cluster Autoscaler or Karpenter, which add nodes when pods can't be scheduled.
+
+#### Intuition
+A shop manager who opens more tills when queues grow and closes them when it is quiet. Opening is quick. Closing is done cautiously in case the rush returns.
+
+#### Must know
+- HPA changes the **number of pods** from observed metrics.
+- **desired = ceil(current replicas × observed ÷ target)**.
+- CPU utilisation is measured **against the pod's CPU request**. No request, no CPU-based scaling.
+- It can scale on custom metrics such as requests per second or queue lag.
+- Pods need nodes to run on: pair it with the Cluster Autoscaler or Karpenter.
+
+#### Numbers to quote
+- The controller evaluates every 15 seconds. The default scale-down stabilisation window is 5 minutes.
+
+#### Common mistakes
+- No resource requests, so HPA shows `<unknown>`.
+- HPA and VPA both acting on CPU, which fight each other.
+- Forgetting node capacity, so new pods sit Pending.
 
 #### How it works
 ```mermaid
@@ -223,8 +302,27 @@ HPA computes CPU utilisation as usage divided by the pod's CPU request. Without 
 #### Interview angle
 > "HPA scales on CPU against realistic requests, plus RPS per pod from Prometheus. It scales up fast and down slowly with stabilisation windows, and Karpenter adds nodes quickly enough that pods don't sit pending."
 
+#### Sources
+- [Horizontal pod autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/) — Kubernetes docs
+- [HorizontalPodAutoscaler walkthrough](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/) — Kubernetes docs
+
 ### Kubernetes VPA — Vertical Pod Autoscaler: right-sizes CPU/memory requests automatically
 The Vertical Pod Autoscaler observes actual CPU and memory usage over time and **recommends or applies better resource requests and limits** for pods. It fixes the common problem of guessed requests: over-provisioning wastes money, under-provisioning causes throttling, OOM kills and bad scheduling.
+
+#### Intuition
+A tailor who watches how you actually move for a month and then adjusts the suit. Until then you were wearing a size somebody guessed.
+
+#### Must know
+- VPA observes real usage and **recommends or applies CPU and memory requests** for each pod.
+- It fixes guessed requests: too high wastes money, too low causes throttling and OOM kills.
+- Modes: `Off` (recommend only), `Initial` (set on new pods), `Auto` (may evict pods to resize).
+- **Do not combine it with HPA on the same CPU or memory metric.**
+- Safest start: run it in `Off` mode and apply the recommendations yourself.
+
+#### Common mistakes
+- Turning on `Auto` in production and being surprised by pod restarts.
+- HPA on CPU together with VPA on CPU.
+- Confusing it with HPA. HPA changes how many pods. VPA changes how big each one is.
 
 #### How it works
 ```mermaid
@@ -250,7 +348,7 @@ spec:
         maxAllowed: { cpu: "2",  memory: 4Gi }
 ```
 
-Note: Kubernetes 1.27+ supports in-place pod resizing (beta), which reduces the need for evictions.
+Note: in-place pod resizing (alpha in 1.27, stable since Kubernetes 1.35) lets CPU and memory change without recreating the pod, and VPA's `InPlaceOrRecreate` mode uses it, which reduces the need for evictions.
 
 #### Example
 A platform team runs VPA in recommendation mode across 300 services: many requested 2 CPU / 4 GiB while using 0.3 CPU / 700 MiB. Right-sizing from recommendations cut cluster cost ~35%. For a memory-hungry batch worker with variable inputs, `Auto` mode raises memory requests after OOM kills, which stabilised it.
@@ -284,8 +382,27 @@ Requests drive scheduling. Over-requesting reserves capacity that's never used, 
 #### Interview angle
 > "I run VPA in recommendation mode to right-size requests, which typically cuts cost a lot, and scale replicas with HPA on request-rate metrics so the two never fight over CPU."
 
+#### Sources
+- [Vertical pod autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/vertical-pod-autoscale/) — Kubernetes docs
+- [Resize CPU and memory resources assigned to containers](https://kubernetes.io/docs/tasks/configure-pod-container/resize-container-resources/) — Kubernetes docs
+
 ### KEDA — Kubernetes Event-Driven Autoscaling: scale on Kafka lag, SQS queue depth, etc.
 KEDA (Kubernetes Event-Driven Autoscaler) scales workloads based on **external event sources** (Kafka consumer lag, SQS/RabbitMQ queue length, Redis lists, Prometheus queries, cron schedules), including **scaling to zero** when there's no work. It feeds an HPA under the hood and activates or deactivates deployments.
+
+#### Intuition
+A post office that opens counters according to the pile of unsorted mail, not according to how tired the clerks look. With no mail at all, it sends everyone home.
+
+#### Must know
+- KEDA scales workloads on **external event sources**: Kafka lag, SQS depth, a Prometheus query, a cron schedule.
+- It can **scale to zero** when there is no work.
+- Backlog is the right signal for async workers. CPU is not.
+- Kafka consumers are capped at the **number of partitions**. Extra consumers sit idle.
+- Under the hood it drives an ordinary HPA.
+
+#### Common mistakes
+- Scaling queue consumers on CPU.
+- A maximum replica count above the partition count.
+- Scale-to-zero on a latency-sensitive queue, where the first message waits for a pod to start.
 
 #### How it works
 ```mermaid
@@ -347,8 +464,30 @@ The number of partitions: each partition is consumed by at most one consumer in 
 #### Interview angle
 > "Async workers scale with KEDA on Kafka lag or queue depth, scaling to zero when idle and capped at the partition count, which tracks real backlog far better than CPU."
 
+#### Sources
+- [KEDA concepts](https://keda.sh/docs/latest/concepts/) — KEDA docs
+- [Apache Kafka scaler](https://keda.sh/docs/latest/scalers/apache-kafka/) — KEDA docs
+
 ### Spot / preemptible instances — 70–90% cheaper with 2-min interruption notice; use for stateless batch
 Spot (AWS), preemptible/Spot VMs (GCP) and Spot (Azure) sell spare cloud capacity at **70–90% discounts**. The provider can **reclaim them with short notice** (2 minutes on AWS). They're ideal for fault-tolerant, stateless or checkpointed work, and dangerous for anything that can't tolerate sudden termination.
+
+#### Intuition
+A standby flight ticket. It is far cheaper, but you can be bumped at short notice when a full-fare passenger turns up. Fine for a flexible trip, not for your own wedding.
+
+#### Must know
+- Spare cloud capacity sold at a deep discount, which the provider can **take back at short notice**.
+- Good for stateless, fault-tolerant or checkpointed work: CI, batch, ML training, stateless web tiers.
+- Not for databases or any single instance you cannot lose.
+- **Diversify** across instance types and AZs, and keep an **on-demand base**.
+- Handle the interruption notice: drain, deregister, checkpoint.
+
+#### Numbers to quote
+- Up to about 90% cheaper than on-demand. AWS gives a 2-minute warning.
+
+#### Common mistakes
+- One instance type in one AZ, so the whole fleet is reclaimed together.
+- No handler for the interruption notice, so requests fail.
+- A long batch job with no checkpoints, which restarts from zero.
 
 #### How it works
 ```mermaid
@@ -403,8 +542,30 @@ Split it into small idempotent tasks (or checkpoint state regularly to durable s
 #### Interview angle
 > "Stateless and batch work runs mostly on diversified Spot with an On-Demand base, interruption draining and checkpointed jobs, roughly 70% cheaper. Stateful systems stay on-demand."
 
+#### Sources
+- [Spot Instances](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-spot-instances.html) — Amazon EC2 user guide
+- [Spot Instance interruptions](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-interruptions.html) — Amazon EC2 user guide
+
 ### Serverless auto-scaling — Lambda scales to thousands of concurrent executions automatically
 Serverless functions (AWS Lambda, Google Cloud Functions/Run, Azure Functions) scale **per request**: each concurrent request gets an execution environment, created on demand, up to account or function limits. There are no servers or autoscaling policies to manage, and you pay per invocation and duration.
+
+#### Intuition
+A taxi rank with no fixed fleet. Each passenger who appears gets their own cab, summoned on the spot. Nobody plans the number of cabs, but summoning a fresh one takes a moment, and a thousand cabs arriving together can jam the street they are heading to.
+
+#### Must know
+- Each concurrent request gets its own execution environment, created on demand. No capacity planning.
+- **Concurrency = requests per second × duration.** Account and function limits cap it.
+- **Cold start**: a new environment adds latency. Provisioned concurrency keeps some warm.
+- It can **overwhelm downstream systems**, especially a relational database's connections. Use RDS Proxy and reserved concurrency.
+- Best for spiky, event-driven work. Steady high load is usually cheaper on containers.
+
+#### Numbers to quote
+- AWS Lambda: default 1,000 concurrent executions per region, 15-minute maximum run time.
+
+#### Common mistakes
+- A Lambda opening a database connection per execution with no proxy.
+- Ignoring cold starts on a latency-critical path.
+- Assuming serverless is always cheaper.
 
 #### How it works
 ```mermaid
@@ -459,8 +620,30 @@ Sustained high-throughput workloads (cost exceeds containers), latency-critical 
 #### Interview angle
 > "Spiky, event-driven work like thumbnails, webhooks and cron fits Lambda. I cap concurrency to protect databases, pool connections through RDS Proxy, and move sustained high-throughput services to containers."
 
+#### Sources
+- [Understanding Lambda function scaling](https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html) — AWS Lambda developer guide
+- [Amazon RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html) — Amazon RDS user guide
+
 ### Scale-to-zero — Lambda, Cloud Run: no instances running when no traffic (cold start tradeoff)
 Scale-to-zero means a service runs **no instances when idle** and starts them on the first request. You pay nothing for idle time, which is ideal for spiky, low-traffic or dev/preview workloads. The cost is a **cold start** delay on the first request after idle.
+
+#### Intuition
+A hall light on a motion sensor. It costs nothing while nobody is there, and the first person through the door waits a second in the dark.
+
+#### Must know
+- The service runs **no instances when idle** and starts one on the first request.
+- You pay nothing for idle time.
+- The price is a **cold start** on the first request after idle.
+- Good for internal tools, preview environments, occasional workers and low-traffic APIs.
+- Latency-critical services keep a minimum of warm instances.
+
+#### Numbers to quote
+- A cold start ranges from about 100 ms to several seconds, depending on runtime and image size.
+
+#### Common mistakes
+- Scale-to-zero on login or checkout.
+- A heavy JVM start-up with no snapshot or native image.
+- Many instances cold-starting together and each opening a full database pool.
 
 #### How it works
 ```mermaid
@@ -512,3 +695,8 @@ Use Lambda SnapStart or CRaC (snapshot after initialisation), GraalVM native ima
 
 #### Interview angle
 > "Internal tools, previews and occasional workers scale to zero to save cost. Customer-facing latency-critical services keep a minimum of warm instances and fast-start runtimes."
+
+#### Sources
+- [About instance autoscaling in Cloud Run services](https://cloud.google.com/run/docs/about-instance-autoscaling) — Google Cloud Run docs
+- [Understanding the Lambda execution environment lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html) — AWS Lambda developer guide
+

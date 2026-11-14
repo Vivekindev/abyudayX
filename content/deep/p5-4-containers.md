@@ -3,6 +3,21 @@
 ### Docker — image layers, Dockerfile best practices (multi-stage build, minimal base image)
 Docker packages an application with its runtime and dependencies into an **image**: a stack of read-only **layers**, each produced by a Dockerfile instruction. Containers run from images as isolated processes. Good Dockerfiles produce **small, secure, cache-friendly** images.
 
+#### Intuition
+A shipping container for software. You pack the app with everything it needs, seal it, and the same sealed box runs on a laptop, a test server or production without "it worked on my machine".
+
+#### Must know
+- An **image** is a stack of read-only **layers**, one per Dockerfile instruction. A container is a running instance of it.
+- Layers are cached, so order the Dockerfile from **rarely changing to often changing**.
+- **Multi-stage build**: compile in one stage, copy only the result into a small runtime image.
+- Use a minimal base, run as a **non-root user**, and pin versions.
+- Never put secrets in an image. They stay in the layer history.
+
+#### Common mistakes
+- Copying the source before installing dependencies, which breaks the cache on every build.
+- Shipping the compiler, build tools and sources in the final image.
+- Running as root.
+
 #### How it works
 ```mermaid
 flowchart TB
@@ -69,8 +84,30 @@ If an attacker exploits the application, root inside the container makes contain
 #### Interview angle
 > "Images are multi-stage builds on a minimal JRE or distroless base, running as non-root with pinned versions and scanning in CI. That gives about a 5× smaller image, faster pulls and far fewer CVEs."
 
+#### Sources
+- [Building best practices](https://docs.docker.com/build/building/best-practices/) — Docker docs
+- [Multi-stage builds](https://docs.docker.com/build/building/multi-stage/) — Docker docs
+
 ### Container vs VM — process isolation vs full OS, millisecond vs second startup time
 A **virtual machine** virtualises hardware: each VM runs a full guest OS on a hypervisor. A **container** virtualises the OS: containers are isolated processes sharing the host kernel, using Linux namespaces (isolation) and cgroups (resource limits). Containers are lighter and faster, while VMs give stronger isolation.
+
+#### Intuition
+A VM is a separate house with its own foundations, plumbing and wiring. A container is a flat in an apartment block: your own locked door, but the building's structure and plumbing are shared with the neighbours.
+
+#### Must know
+- A **VM** virtualises hardware and runs its **own full operating system**.
+- A **container** is an isolated process that **shares the host kernel** (namespaces for isolation, cgroups for limits).
+- Containers start faster, are smaller, and pack more densely onto a host.
+- VMs give **stronger isolation**, because the kernel is not shared.
+- MicroVMs such as Firecracker sit in between, and are used for untrusted code.
+
+#### Numbers to quote
+- Containers start in milliseconds to seconds and are megabytes in size. VMs take seconds to minutes and are gigabytes.
+
+#### Common mistakes
+- Calling a container a "lightweight VM". It has no kernel of its own.
+- Running untrusted multi-tenant code in plain containers.
+- Forgetting that containers on one node compete for CPU and I/O.
 
 #### How it works
 ```mermaid
@@ -130,8 +167,27 @@ No. All containers share the host kernel, so a kernel exploit could let one tena
 #### Interview angle
 > "Containers give us density and second-level scaling for our own services. Untrusted or strongly isolated workloads go in microVMs or sandboxed runtimes, because containers share the host kernel."
 
+#### Sources
+- [What is a container?](https://www.docker.com/resources/what-container/) — Docker
+- [Firecracker](https://firecracker-microvm.github.io/) — Firecracker project
+
 ### Kubernetes control plane — API server (gateway), scheduler (pod placement), controller manager, etcd (cluster state)
 The Kubernetes control plane is the cluster's brain. You declare **desired state** (YAML objects) to the API server, it's stored in **etcd**, and **controllers** continuously reconcile actual state toward desired state, while the **scheduler** decides which node runs each pod.
+
+#### Intuition
+A thermostat for a whole datacenter. You tell it the state you want ("five copies of this app"). It keeps comparing that with reality and corrects any difference, indefinitely.
+
+#### Must know
+- You declare **desired state**, and controllers keep **reconciling** actual state toward it.
+- **API server**: the front door. Authentication, authorisation, validation.
+- **etcd**: the Raft-replicated store that holds all cluster state.
+- **Scheduler**: picks a node for each new pod.
+- **Controller manager**: runs the loops (Deployment, ReplicaSet, Node and others).
+
+#### Common mistakes
+- Thinking the control plane runs your containers. The kubelet on each node does.
+- Self-managing etcd with no backups.
+- Believing running pods stop if the control plane goes down. They keep running, but nothing heals or changes.
 
 #### How it works
 ```mermaid
@@ -181,8 +237,27 @@ etcd stores the entire cluster state, so if it's lost or unavailable the control
 #### Interview angle
 > "Kubernetes is reconciliation loops around a declarative store: the API server and etcd hold desired state, the scheduler places pods and controllers converge reality. I use a managed control plane so etcd isn't my operational burden."
 
+#### Sources
+- [Kubernetes components](https://kubernetes.io/docs/concepts/overview/components/) — Kubernetes docs
+- [Cluster architecture](https://kubernetes.io/docs/concepts/architecture/) — Kubernetes docs
+
 ### Kubernetes worker nodes — kubelet (runs pods), kube-proxy (network rules), container runtime (containerd)
 Worker nodes run the actual workloads. Each node runs the **kubelet** (agent that starts and monitors pods), a **container runtime** (containerd/CRI-O) and **kube-proxy** (implements Service networking), plus a CNI plugin for pod networking.
+
+#### Intuition
+The factory floor. Head office (the control plane) issues the orders. On each floor a supervisor (the kubelet) starts the machines, checks they are running and reports back.
+
+#### Must know
+- **kubelet**: the agent on every node. It starts pods, runs probes and reports status.
+- **Container runtime** (containerd): pulls images and runs the containers.
+- **kube-proxy**: programs the rules that send Service traffic to pods.
+- **CNI plugin**: gives each pod an IP and routes between nodes.
+- Nodes are replaceable. Watch their memory, disk and PID pressure.
+
+#### Common mistakes
+- Confusing kube-proxy with an Ingress controller.
+- No requests or limits, so the kubelet evicts pods when the node is under memory pressure.
+- Running out of pod IP addresses in the subnet.
 
 #### How it works
 ```mermaid
@@ -232,8 +307,27 @@ It detects MemoryPressure from eviction thresholds and evicts pods to reclaim me
 #### Interview angle
 > "On each node the kubelet runs pods, containerd provides isolation, and kube-proxy or Cilium implement Services. I watch node pressure conditions and plan pod IP capacity for the VPC CNI."
 
+#### Sources
+- [Kubernetes components: node components](https://kubernetes.io/docs/concepts/overview/components/) — Kubernetes docs
+- [Nodes](https://kubernetes.io/docs/concepts/architecture/nodes/) — Kubernetes docs
+
 ### Pod, Deployment, Service (ClusterIP/NodePort/LoadBalancer), Ingress, ConfigMap, Secret, PVC
 These are the core Kubernetes objects you combine to run an application: **Pods** (the running unit), **Deployments** (manage replicated pods and rollouts), **Services** (stable network endpoints), **Ingress** (HTTP routing from outside), **ConfigMaps/Secrets** (configuration) and **PVCs** (persistent storage).
+
+#### Intuition
+A restaurant chain. A pod is one kitchen. A Deployment is head office saying "keep three kitchens open". A Service is the single phone number that reaches whichever kitchen is free. Ingress is the street entrance that directs customers inside.
+
+#### Must know
+- **Pod**: the smallest running unit, one or more containers. Short-lived.
+- **Deployment**: keeps N replicas running and does rolling updates.
+- **Service**: a stable virtual IP and DNS name in front of changing pods. ClusterIP is internal, LoadBalancer provisions a cloud balancer.
+- **Ingress / Gateway**: HTTP routing by host and path from outside the cluster.
+- **ConfigMap / Secret**: configuration. **PVC**: a request for durable storage.
+
+#### Common mistakes
+- Thinking Secrets are encrypted. By default they are only base64-encoded.
+- One LoadBalancer Service per app, when one shared Ingress would do.
+- A Service whose label selector matches no pods, so it has no endpoints.
 
 #### How it works
 ```mermaid
@@ -293,8 +387,28 @@ By default they're base64-encoded, not encrypted, and anyone with read access to
 #### Interview angle
 > "Each service is a Deployment behind a ClusterIP Service, exposed through one shared Ingress or Gateway. Config comes from ConfigMaps, and secrets sync from Secrets Manager via External Secrets with encryption at rest."
 
+#### Sources
+- [Workloads](https://kubernetes.io/docs/concepts/workloads/) — Kubernetes docs
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) — Kubernetes docs
+- [Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) — Kubernetes docs
+
 ### Rolling update — replace pods gradually; rollback on failure
 A rolling update replaces old pods with new ones **gradually**: start some new pods, wait until they're ready, then terminate some old ones, and repeat. Capacity is maintained throughout, so deployments cause no downtime, and a bad version can be rolled back to the previous ReplicaSet.
+
+#### Intuition
+Changing the tyres on a moving convoy one vehicle at a time. Each vehicle pulls over, gets new tyres, rejoins, and only then does the next one pull over. The convoy never stops.
+
+#### Must know
+- Old pods are replaced by new ones **gradually**, so capacity is kept and there is no downtime.
+- `maxSurge` and `maxUnavailable` set the pace.
+- A new pod must pass its **readiness probe** before old ones are removed. That gate is what stops a broken release.
+- **Two versions run side by side** during the rollout, so every release must be backward compatible.
+- Roll back with `kubectl rollout undo`.
+
+#### Common mistakes
+- No readiness probe, so crashing pods count as running and replace the healthy ones.
+- A schema change that breaks the old version while it is still serving.
+- No graceful shutdown, so requests drop as old pods terminate.
 
 #### How it works
 ```mermaid
@@ -354,8 +468,27 @@ Database schema (the new version's migrations must not break the old version, so
 #### Interview angle
 > "Deploys are rolling updates gated by real readiness probes, with maxUnavailable 0 and automatic rollback on a stalled rollout. Every release stays backward compatible because two versions coexist mid-rollout."
 
+#### Sources
+- [Deployments: rolling update](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) — Kubernetes docs
+- [Performing a rolling update](https://kubernetes.io/docs/tutorials/kubernetes-basics/update/update-intro/) — Kubernetes docs
+
 ### StatefulSet — stable network identity, ordered deployment (Kafka, Cassandra, databases)
 A StatefulSet runs pods that need **stable identities and storage**: each pod gets a fixed ordinal name (`kafka-0`, `kafka-1`), a stable DNS name through a headless Service, and **its own PersistentVolume** that follows it across rescheduling. Pods are created, updated and deleted in order.
+
+#### Intuition
+Assigned seats and lockers in an office. Each person has a fixed name badge and their own locker. If they move desks, the badge and the locker go with them. A Deployment is hot-desking: any seat, no personal locker.
+
+#### Must know
+- For pods that need a **stable identity and their own storage**.
+- Each pod gets a fixed name (`kafka-0`, `kafka-1`), a stable DNS name and **its own volume** that follows it.
+- Pods are started, updated and removed in order.
+- Used for Kafka, Cassandra, ZooKeeper, Elasticsearch and databases.
+- In practice prefer a managed service or a mature operator over hand-rolled StatefulSets.
+
+#### Common mistakes
+- Running a database as a Deployment.
+- Forgetting cloud block volumes are tied to one AZ, so a pod cannot follow its data to another zone.
+- Updating too many replicas at once and losing quorum.
 
 #### How it works
 ```mermaid
@@ -407,8 +540,27 @@ It's possible with a mature operator (CloudNativePG, Crunchy, Zalando) handling 
 #### Interview angle
 > "Stateful systems need StatefulSets for stable identity and per-pod volumes, but I'd prefer managed Kafka and databases, or a mature operator, over hand-rolled StatefulSets."
 
+#### Sources
+- [StatefulSets](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/) — Kubernetes docs
+- [StatefulSet basics](https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set/) — Kubernetes docs
+
 ### DaemonSet — one pod per node (log collectors, node-level monitoring, Istio sidecar)
 A DaemonSet ensures **one copy of a pod runs on every node** (or every node matching a selector). When nodes join, the pod is added automatically, and when they leave it's removed. It's the standard way to run node-level agents.
+
+#### Intuition
+A security guard posted at the door of every building. When a new building opens, a guard is assigned automatically, without anyone asking.
+
+#### Must know
+- Runs **one copy of a pod on every node** (or every matching node).
+- New nodes get the pod automatically.
+- Used for **node-level agents**: log shippers, metrics exporters, network and storage plugins, security agents.
+- Its cost is multiplied by the number of nodes, so keep the agents light.
+- An Istio sidecar is **not** a DaemonSet. It is injected into each application pod.
+
+#### Common mistakes
+- Using a Deployment for a log collector, which leaves some nodes uncovered.
+- Missing tolerations, so tainted nodes get no agent.
+- Rolling a buggy agent to every node at once.
 
 #### How it works
 ```mermaid
@@ -456,8 +608,30 @@ Those nodes have taints the DaemonSet doesn't tolerate (control-plane nodes, GPU
 #### Interview angle
 > "Node-level agents like log shippers, metrics exporters and CNI run as DaemonSets with tolerations and modest resource requests, so every new node is covered automatically."
 
+#### Sources
+- [DaemonSet](https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/) — Kubernetes docs
+- [Logging architecture](https://kubernetes.io/docs/concepts/cluster-administration/logging/) — Kubernetes docs
+
 ### Kubernetes resource requests vs limits — request = scheduling guarantee, limit = throttle ceiling
 Each container declares **requests** (what it's guaranteed, used by the scheduler to place pods) and **limits** (the maximum it may use). CPU over the limit is **throttled**. Memory over the limit is **OOM-killed**. Requests and limits together determine the pod's QoS class and eviction priority.
+
+#### Intuition
+Booking a table at a restaurant. The request is the table reserved for you. The limit is the most the restaurant will ever let you take. Go over on seats and you are made to wait. Go over on food you cannot pay for and you are thrown out.
+
+#### Must know
+- **Request**: what the container is guaranteed. The scheduler places pods using requests.
+- **Limit**: the most it may use.
+- **CPU over the limit is throttled.** The container slows down but keeps running.
+- **Memory over the limit is OOM-killed.** The container restarts.
+- Always set memory requests and limits. For a JVM, keep the heap below the memory limit.
+
+#### Numbers to quote
+- A common JVM setting is `-XX:MaxRAMPercentage=70` to `75`, leaving room for non-heap memory.
+
+#### Common mistakes
+- Heap size set equal to the memory limit, which gets the pod OOM-killed.
+- A tight CPU limit on a latency-sensitive service, which causes throttling while the node is idle.
+- No requests at all, so the pod is first to be evicted.
 
 #### How it works
 ```mermaid
@@ -512,8 +686,27 @@ CFS quotas throttle a container once it uses its quota within each 100 ms period
 #### Interview angle
 > "Every container gets right-sized requests and a memory limit, with JVM heap at about 70% of it. For latency-sensitive services I skip CPU limits to avoid throttling and watch throttling metrics."
 
+#### Sources
+- [Resource management for pods and containers](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/) — Kubernetes docs
+- [Pod quality of service classes](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/) — Kubernetes docs
+
 ### Node affinity, taints and tolerations — control which pods run on which nodes
 Kubernetes gives two complementary controls over placement. **Node affinity** (and nodeSelector) **attracts** pods to nodes with certain labels. **Taints** **repel** pods from nodes unless the pod has a matching **toleration**. Combined with pod (anti-)affinity and topology spread constraints, they shape where workloads run.
+
+#### Intuition
+Affinity is a magnet that pulls a pod toward certain nodes. A taint is a "keep out" sign on a node. A toleration is a pass that lets a particular pod ignore that sign.
+
+#### Must know
+- **Node affinity** attracts pods to nodes with given labels.
+- **Taints** repel pods from a node. A **toleration** lets a pod onto it.
+- A dedicated pool needs both: the taint keeps others out, the affinity keeps yours in.
+- **Topology spread constraints** distribute replicas across nodes and AZs for availability.
+- Rules that are too strict leave pods stuck in Pending.
+
+#### Common mistakes
+- A toleration without affinity. The pod may go there, but nothing makes it.
+- All replicas landing on one node or one AZ.
+- Expensive GPU nodes left untainted, so ordinary pods fill them.
 
 #### How it works
 ```mermaid
@@ -575,8 +768,31 @@ Run enough replicas and spread them across zones with `topologySpreadConstraints
 #### Interview angle
 > "I use taints and tolerations for dedicated pools like PCI or GPU, node affinity to attract pods to the right hardware, and topology spread across AZs so losing a zone never takes out a service."
 
+#### Sources
+- [Assigning pods to nodes](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/) — Kubernetes docs
+- [Taints and tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/) — Kubernetes docs
+- [Pod topology spread constraints](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/) — Kubernetes docs
+
 ### Service mesh (Istio/Linkerd) — sidecar Envoy proxy, mTLS between services, traffic management, observability
 A service mesh moves cross-cutting networking concerns out of application code into the infrastructure: every pod gets a **proxy** (a sidecar like Envoy, or a per-node proxy in ambient mode) that handles **mTLS, retries, timeouts, traffic splitting, circuit breaking and telemetry**. A control plane (istiod, the Linkerd control plane) configures all the proxies.
+
+#### Intuition
+Every employee gets a personal assistant who handles all their calls: checks who is calling, encrypts the line, redials when it drops and keeps a log. The employee just talks. One office sets the rules for all the assistants.
+
+#### Must know
+- A **proxy beside every service** handles networking concerns, configured by a central control plane.
+- It provides **mTLS**, retries, timeouts, traffic splitting and uniform metrics **with no application code changes**.
+- Works across languages.
+- Costs: memory and latency per proxy, and real operational complexity.
+- Worth it with many services. For a handful, libraries are simpler.
+
+#### Numbers to quote
+- Each sidecar hop typically adds around a millisecond of latency and tens of megabytes of memory.
+
+#### Common mistakes
+- Adopting a mesh for five services.
+- Retries configured in the mesh, in the app and in the client together.
+- Forgetting that the proxy must be ready before the app makes its first call.
 
 #### How it works
 ```mermaid
@@ -635,8 +851,27 @@ The control plane acts as a certificate authority and issues short-lived certifi
 #### Interview angle
 > "With dozens of services I'd add Linkerd or Istio for automatic mTLS, uniform golden-signal metrics and canary traffic splits, with retries configured in the mesh only, so they don't multiply."
 
+#### Sources
+- [The Istio service mesh](https://istio.io/latest/about/service-mesh/) — Istio docs
+- [Linkerd overview](https://linkerd.io/2/overview/) — Linkerd docs
+
 ### Helm — Kubernetes package manager, templated manifests, release management
 Helm packages Kubernetes manifests into **charts**: templated YAML plus default `values.yaml`. You install a chart as a **release** with environment-specific values, and Helm tracks revisions so you can **upgrade and roll back**. It's also how most third-party software (Prometheus, NGINX ingress, cert-manager) is distributed for Kubernetes.
+
+#### Intuition
+A form letter with blanks. The letter is written once, and each recipient gets a copy with their own name and details filled in. If a letter went out wrong, you can resend the previous version.
+
+#### Must know
+- A **chart** is a set of templated Kubernetes manifests plus default values.
+- Installing a chart with your values creates a **release**, and Helm keeps its revision history.
+- `helm upgrade --install` to deploy, `helm rollback` to return to a previous revision.
+- It is how most third-party software is installed on Kubernetes.
+- Usually applied through GitOps (Argo CD or Flux), with Git as the source of truth.
+
+#### Common mistakes
+- Secrets in a values file committed to git.
+- Editing resources by hand with `kubectl`, so the cluster drifts from the chart.
+- Charts so full of template logic that nobody can read them.
 
 #### How it works
 ```mermaid
@@ -693,3 +928,8 @@ Helm when you need parameterised, reusable packages with versioning and release 
 
 #### Interview angle
 > "Services deploy from a shared, versioned Helm chart with secure defaults, synced by Argo CD from Git. That gives us standard probes, PDBs and HPAs everywhere, and rollbacks are just a revision."
+
+#### Sources
+- [Using Helm](https://helm.sh/docs/intro/using_helm/) — Helm docs
+- [Charts](https://helm.sh/docs/topics/charts/) — Helm docs
+
