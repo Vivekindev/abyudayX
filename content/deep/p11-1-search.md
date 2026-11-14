@@ -3,6 +3,24 @@
 ### Web crawler — BFS URL frontier with priority queue; politeness: per-domain rate limit, robots.txt, crawl-delay
 A web crawler discovers and downloads pages at scale: it starts from seed URLs, fetches pages, extracts links, and adds new URLs to a **frontier** (a prioritised queue). Production crawlers balance **coverage, freshness and priority** against **politeness** (never overloading any site) and **robustness** (traps, duplicates, failures).
 
+#### Intuition
+A librarian sent to copy every book in a city. They keep a to-do list of shelves, visit the important ones first, never crowd a single library with requests, and note which books they already have.
+
+#### Must know
+- Loop: take a URL from the **frontier**, fetch the page, extract links, add new URLs back.
+- The frontier is a **priority queue**: important and fast-changing pages first.
+- **Politeness**: one queue per host with a delay, and obey `robots.txt`.
+- **Deduplicate** URLs (normalise, then a Bloom filter) and content (fingerprints).
+- Shard work **by host**, so one worker owns each site's rate limit.
+
+#### Numbers to quote
+- 1 billion pages a month is about 400 pages per second. At 100 KB each that is about 100 TB a month raw.
+
+#### Common mistakes
+- No per-host rate limit, so the crawler overloads sites and gets banned.
+- Crawler traps: endless calendars, filter combinations, session ids in URLs.
+- A DNS lookup on every fetch with no cache.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -56,8 +74,31 @@ Normalise URLs (lowercase host, remove default ports, sort query parameters, str
 #### Interview angle
 > "The crawler is a prioritised frontier feeding per-host politeness queues, sharded by host. robots.txt and DNS are cached, URLs are normalised and checked against a Bloom filter, near-duplicate content is caught with SimHash, and recrawls follow each page's change rate."
 
+#### Sources
+- [Web crawler](https://en.wikipedia.org/wiki/Web_crawler) — Wikipedia
+- [Robots Exclusion Protocol (RFC 9309)](https://www.rfc-editor.org/rfc/rfc9309) — IETF
+- [Introduction to robots.txt](https://developers.google.com/search/docs/crawling-indexing/robots/intro) — Google Search Central
+
 ### URL deduplication — canonical URL normalization + Bloom filter to avoid recrawling
 URL deduplication prevents a crawler (or link processor) from fetching the **same resource many times under different URL spellings**. It has two parts: **normalisation and canonicalisation** (turn variants into one canonical form) and a fast **seen-set** (a Bloom filter in front of a persistent store) to check billions of URLs cheaply.
+
+#### Intuition
+The same house written as "12 Main St", "12 main street" and "12 Main St, back door". Before visiting, you rewrite every address in one standard form and check it against the list of houses already visited.
+
+#### Must know
+- One page appears under many URL spellings: tracking parameters, session ids, upper and lower case.
+- **Normalise first**: lowercase host, drop the default port and fragment, strip tracking parameters, sort query parameters.
+- Then check a **seen-set**: a Bloom filter in front of an exact store.
+- After fetching, follow redirects and `rel=canonical` to one final URL.
+- Normalising too hard merges pages that are actually different.
+
+#### Numbers to quote
+- A Bloom filter for 1 billion URLs at 1% false positives needs about 1.2 GB.
+
+#### Common mistakes
+- Treating every URL variant as a new page.
+- Stripping query parameters that the site uses for real content.
+- Only a Bloom filter with no exact store, so state is lost on restart.
 
 #### How it works
 ```mermaid
@@ -104,8 +145,31 @@ The Bloom filter answers "definitely not seen" for most new URLs instantly in me
 #### Interview angle
 > "URLs are normalised (case, ports, dot segments, tracking params, sorted query, no fragment), canonicalised after fetch, and checked against a Bloom filter backed by an exact URL store."
 
+#### Sources
+- [URI normalization](https://en.wikipedia.org/wiki/URI_normalization) — Wikipedia
+- [Uniform Resource Identifier: normalization and comparison (RFC 3986)](https://www.rfc-editor.org/rfc/rfc3986#section-6) — IETF
+- [How to specify a canonical URL](https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls) — Google Search Central
+
 ### Inverted index construction — tokenize → normalize → build term→postings list mapping
 Building an inverted index turns documents into a searchable structure: **analyse** text (tokenise, lowercase, remove stop words, stem), then for each term **accumulate postings** (doc ids, frequencies, positions), sort and **compress** them, and write **segments**. At scale it's done incrementally (Lucene segments) or in batch (MapReduce-style). (Phase 10 covers the structure itself.)
+
+#### Intuition
+Making the index at the back of a book. You read every page, note each meaningful word with its page number, then sort the notes by word so each word has its list of pages.
+
+#### Must know
+- **Analyse** the text: split into tokens, lowercase, stem.
+- For each term, collect a **postings list** of the documents that contain it.
+- Sort, compress and write the lists as **immutable segments**.
+- Small segments are **merged** in the background.
+- New documents become searchable after a **refresh**, so search is near real time.
+
+#### Numbers to quote
+- Elasticsearch refreshes every 1 second by default.
+
+#### Common mistakes
+- Bulk loading with refresh and replicas left on, which is many times slower.
+- Different analysers at index time and query time.
+- Forgetting that an update is a delete plus an add.
 
 #### How it works
 ```mermaid
@@ -152,8 +216,28 @@ MapReduce-style: map each document to (term, docId, positions) pairs after analy
 #### Interview angle
 > "Indexing analyzes text into terms, buffers postings and writes immutable segments that refresh every second and merge in the background. Bulk loads disable refresh and replicas, then restore them."
 
+#### Sources
+- [Near real-time search](https://www.elastic.co/docs/manage-data/data-store/near-real-time-search) — Elasticsearch docs
+- [Elasticsearch from the bottom up](https://www.elastic.co/blog/found-elasticsearch-from-the-bottom-up) — Elastic blog
+- [Tune for indexing speed](https://www.elastic.co/docs/deploy-manage/production-guidance/optimize-performance/indexing-speed) — Elasticsearch docs
+
 ### Postings list — docID + term frequency + position offsets; sorted by docID for merge operations
 A postings list holds, for one term, every document containing it, **sorted by doc id**, often with **term frequency** (for scoring) and **positions** (for phrase and proximity queries). Sorting enables fast **merge-based intersection and union**, and **delta encoding + compression** keeps lists small enough to stream from cache.
+
+#### Intuition
+The list of page numbers next to one word in a book's index. Because the numbers are in order, you can run a finger down two lists at once to find the pages that have both words.
+
+#### Must know
+- For one term: the **sorted list of document ids** that contain it.
+- It can also hold term frequency (for scoring) and positions (for phrase queries).
+- **Sorted lists** make intersection a simple merge.
+- Ids are stored as **gaps and compressed**, so lists stay small.
+- Skip pointers let the engine jump ahead in a long list.
+
+#### Common mistakes
+- Indexing positions and offsets on every field, which bloats the index.
+- Expecting phrase queries to work on a field indexed without positions.
+- Scoring every match for a very common term when a filter would do.
 
 #### How it works
 ```mermaid
@@ -201,8 +285,27 @@ Dynamic pruning algorithms (WAND, block-max WAND, MaxScore) use per-term and per
 #### Interview angle
 > "Postings are doc-id-sorted, delta-compressed lists with skip data, intersected shortest-first. I index positions only on fields that need phrases, and block-max WAND avoids scoring every match."
 
+#### Sources
+- [Elasticsearch from the bottom up](https://www.elastic.co/blog/found-elasticsearch-from-the-bottom-up) — Elastic blog
+- [index_options](https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/index-options) — Elasticsearch docs
+
 ### TF-IDF — term frequency (how often term appears in doc) × inverse document frequency (log(N/df))
 TF-IDF scores how important a term is to a document within a collection: **term frequency** (a term appearing often in a document suggests relevance) × **inverse document frequency** (terms appearing in few documents are more discriminative). A query's score sums the TF-IDF of its terms, often combined with vector-space cosine similarity.
+
+#### Intuition
+A word matters for a document if the document uses it a lot and few other documents use it at all. "The" is everywhere, so it tells you nothing. "Marathon" is rare, so it tells you a lot.
+
+#### Must know
+- **TF**: how often the term appears in this document.
+- **IDF**: how rare the term is across all documents, `log(N / df)`.
+- **Score = TF × IDF**, summed over the query terms.
+- Rare, repeated terms score high. Common words score near zero.
+- Weaknesses: repetition keeps adding score, and long documents are favoured.
+
+#### Common mistakes
+- Presenting TF-IDF as what modern engines use. They use BM25.
+- Forgetting the logarithm in IDF.
+- Expecting it to match synonyms. It is purely word matching.
 
 #### How it works
 ```mermaid
@@ -253,8 +356,30 @@ Term frequency grows linearly (or log-linearly) without saturation, rewarding re
 #### Interview angle
 > "TF-IDF weighs terms by in-document frequency times rarity. It's the intuition behind ranking, but in production I'd use BM25 for saturation and length normalisation, plus semantic signals."
 
+#### Sources
+- [tf–idf](https://en.wikipedia.org/wiki/Tf%E2%80%93idf) — Wikipedia
+- [Practical BM25, part 2: the BM25 algorithm and its variables](https://www.elastic.co/blog/practical-bm25-part-2-the-bm25-algorithm-and-its-variables) — Elastic blog
+
 ### BM25 — improved TF-IDF: saturates term frequency, normalizes by document length; default in Elasticsearch
 BM25 (Okapi BM25) is the standard lexical ranking function and the default in Lucene, Elasticsearch, OpenSearch and Solr. It improves TF-IDF with **term-frequency saturation** (k1: extra occurrences matter less and less) and **document-length normalisation** (b: long documents don't win just by being long).
+
+#### Intuition
+TF-IDF with two pieces of common sense added. Saying a word 100 times is not 100 times more relevant than saying it once. And a long document should not win just because it has more words.
+
+#### Must know
+- The standard text ranking function, and the default in Lucene and Elasticsearch.
+- **Term-frequency saturation** (`k1`): extra occurrences add less and less.
+- **Length normalisation** (`b`): long documents are not favoured.
+- It is still lexical: it matches words, not meaning.
+- In practice, tune **field boosts** (such as `title^3`) before `k1` and `b`.
+
+#### Numbers to quote
+- Defaults: k1 = 1.2, b = 0.75.
+
+#### Common mistakes
+- Tweaking k1 and b when the real problem is field weighting.
+- One combined text field, so a long description outranks a precise title.
+- Expecting BM25 alone to handle synonyms or popularity.
 
 #### How it works
 ```mermaid
@@ -302,8 +427,27 @@ BM25's IDF and average document length are computed per shard from local statist
 #### Interview angle
 > "Lexical relevance is BM25 per field with boosts like title^3, tuned mostly through fields rather than k1 and b, then combined with popularity signals and dense vectors in hybrid ranking."
 
+#### Sources
+- [Okapi BM25](https://en.wikipedia.org/wiki/Okapi_BM25) — Wikipedia
+- [Practical BM25, part 2: the BM25 algorithm and its variables](https://www.elastic.co/blog/practical-bm25-part-2-the-bm25-algorithm-and-its-variables) — Elastic blog
+
 ### Tokenization — split text on whitespace and punctuation; language-specific tokenizers (ICU, MeCab for Japanese)
 Tokenization splits text into **tokens** (terms), the units that get indexed and matched. Simple whitespace and punctuation splitting works for English-ish text, but real systems need language-aware tokenizers: no spaces in Chinese, Japanese and Thai, compound words in German, scripts and transliteration in Indian languages, and special handling of emails, SKUs and hyphens.
+
+#### Intuition
+Cutting a sentence into word cards before filing them. Where you cut decides what can be found later. Cut "t-shirt" as one card and a search for "shirt" misses it.
+
+#### Must know
+- Tokenisation splits text into **tokens**, the units that are indexed and matched.
+- It is the **most important analyser choice**.
+- Splitting on spaces fails for Chinese, Japanese and Thai, which need language-aware tokenisers.
+- Codes, SKUs and emails need an **exact (keyword) sub-field**.
+- Test with the `_analyze` API, and use the same rules for indexing and querying.
+
+#### Common mistakes
+- "iphone15" not matching "iPhone 15" because letters and digits were not split.
+- A whitespace tokeniser on text that has no spaces.
+- Splitting product codes into meaningless pieces.
 
 #### How it works
 ```mermaid
@@ -349,8 +493,27 @@ These languages don't separate words with spaces, so a whitespace tokenizer prod
 #### Interview angle
 > "I design analyzers per field and test them with _analyze: word_delimiter for SKUs and hyphenated words, synonyms for variants like tshirt, keyword sub-fields for exact codes, and ICU or kuromoji for non-space languages."
 
+#### Sources
+- [Tokenizer reference](https://www.elastic.co/docs/reference/text-analysis/tokenizer-reference) — Elasticsearch docs
+- [Word delimiter graph token filter](https://www.elastic.co/docs/reference/text-analysis/analysis-word-delimiter-graph-tokenfilter) — Elasticsearch docs
+
 ### Stemming — reduce words to root form (running → run); Porter, Snowball stemmers
 Stemming chops words down to a common **stem** using rules ("running", "runs" → "run"; "connection", "connected" → "connect"), so different inflections match each other. It's fast and language-specific (Porter, Snowball/Porter2, KStem, light stemmers). Stems aren't necessarily real words, and aggressive stemmers can conflate unrelated words.
+
+#### Intuition
+Trimming word endings so that "run", "runs" and "running" all land in the same pigeonhole. The trimming is done by simple rules, so the result is sometimes not a real word.
+
+#### Must know
+- Stemming **chops words to a common root** using rules.
+- It improves **recall**: plurals and tenses match each other.
+- It is fast and specific to a language.
+- **Over-stemming** merges unrelated words ("organ" and "organization").
+- Good practice: a stemmed field for recall plus an exact field that is **boosted**.
+
+#### Common mistakes
+- An aggressive stemmer that turns "shorts" into "short".
+- Stemming brand names.
+- A different stemmer at index time and query time.
 
 #### How it works
 ```mermaid
@@ -395,8 +558,27 @@ Over-stemming reduces unrelated words to the same stem ("universal", "university
 #### Interview angle
 > "I use a light stemmer on a recall field plus an unstemmed field boosted for exact matches, protecting brand and product terms, so 'shorts' doesn't turn into 'short'."
 
+#### Sources
+- [Stemming](https://www.elastic.co/docs/manage-data/data-store/text-analysis/stemming) — Elasticsearch docs
+- [Snowball](https://snowballstem.org/) — Snowball project
+
 ### Lemmatization — context-aware stemming (better → good); computationally heavier than stemming
 Lemmatization reduces words to their **dictionary form (lemma)** using vocabulary and morphological analysis, often with part-of-speech context: "better" → "good", "ran" → "run", "mice" → "mouse", "meeting" (noun) stays "meeting" while "meeting" (verb) → "meet". It's more accurate than stemming, but slower and needs language resources.
+
+#### Intuition
+Looking a word up in a dictionary to find its headword, which stemming's scissors cannot do. "Better" becomes "good" and "mice" becomes "mouse", because the dictionary knows they belong together.
+
+#### Must know
+- It reduces a word to its **dictionary form** using vocabulary and grammar.
+- It handles irregular forms that stemming misses: ran → run, paid → pay.
+- It often needs the **part of speech** to choose correctly.
+- It is **more accurate but slower**, and needs language resources.
+- Usually run in an offline enrichment step, not per query.
+
+#### Common mistakes
+- Paying for lemmatisation on short product queries, where light stemming is enough.
+- Different pipelines for indexing and querying.
+- Running a heavy NLP model inline on every write.
 
 #### How it works
 ```mermaid
@@ -440,8 +622,27 @@ The correct dictionary form depends on how a word is used: "saw" is "see" as a v
 #### Interview angle
 > "For short product queries light stemming is enough. For precision-critical text like legal documents I'd lemmatize in an enrichment pipeline, so irregular forms like paid and pay match."
 
+#### Sources
+- [Lemmatization](https://en.wikipedia.org/wiki/Lemmatization) — Wikipedia
+- [Linguistic features: lemmatization](https://spacy.io/usage/linguistic-features#lemmatization) — spaCy docs
+
 ### Stop words — filter high-frequency words (the, a, is) to reduce index size
 Stop words are extremely common words ("the", "a", "is", "of") that carry little meaning for ranking. Historically engines removed them to save index space and speed up queries. Today, with compression and BM25's low IDF for common terms, removing them is often **unnecessary or harmful** (phrases like "to be or not to be", "The Who", "vitamin A").
+
+#### Intuition
+Words like "the" and "of" are the packing material of a sentence. Old search engines threw the packing away to save space. Sometimes the packing is the whole parcel, as in the band "The Who".
+
+#### Must know
+- Stop words are very common words with little meaning for ranking.
+- Old engines **removed** them to save space and time.
+- **The modern default is to keep them.** BM25 already gives them almost no weight.
+- Removing them breaks phrases and names made of common words.
+- Remove selectively at most, for example on long description fields.
+
+#### Common mistakes
+- A global stop-word filter that makes "The Who" or "It" unsearchable.
+- Removing them "for performance" out of habit.
+- Different stop lists at index time and query time.
 
 #### How it works
 ```mermaid
@@ -486,8 +687,30 @@ It indexes bigrams that combine common words with their neighbours (e.g. "the_of
 #### Interview angle
 > "I keep stop words on titles and names (BM25 down-weights them and compression makes them cheap) and use common_grams for fast phrases, so searches like 'The Office' still work."
 
+#### Sources
+- [Stop token filter](https://www.elastic.co/docs/reference/text-analysis/analysis-stop-tokenfilter) — Elasticsearch docs
+- [Stop word](https://en.wikipedia.org/wiki/Stop_word) — Wikipedia
+
 ### Elasticsearch cluster — master node (cluster state), data nodes (store/query shards), coordinating nodes
 An Elasticsearch cluster is a set of nodes with **roles**: **master-eligible** nodes manage cluster state (indices, mappings, shard allocation) via a quorum-based election, **data** nodes store shards and execute searches and indexing, **coordinating** (client) nodes route requests and merge results, and **ingest** nodes run preprocessing pipelines. Separating roles keeps large clusters stable.
+
+#### Intuition
+A warehouse company. A small management office keeps the map of which shelf is in which building. The warehouses hold the stock and do the picking. A front desk takes each order, asks the right warehouses and combines the answers.
+
+#### Must know
+- **Master nodes** manage cluster state: which indices exist and where the shards live.
+- **Data nodes** store shards and run the searches and indexing.
+- **Coordinating nodes** fan a request out to shards and merge the results.
+- Use **three dedicated master nodes**, so heavy queries cannot destabilise the cluster.
+- A search has two phases: **query** (each shard returns its top ids) then **fetch** (get those documents).
+
+#### Numbers to quote
+- Keep the JVM heap at or below about 30 GB and leave the rest of the memory to the file-system cache.
+
+#### Common mistakes
+- Master nodes that also serve heavy search and indexing.
+- An even number of master-eligible nodes.
+- All copies of a shard in one availability zone.
 
 #### How it works
 ```mermaid
@@ -539,8 +762,30 @@ The coordinating node forwards the query to one copy (primary or replica) of eve
 #### Interview angle
 > "A production Elasticsearch cluster has three dedicated masters, data nodes sized for shard count and page cache, coordinating nodes for heavy fan-in, zone-aware replicas and hot/warm tiers managed by ILM."
 
+#### Sources
+- [Node roles](https://www.elastic.co/docs/reference/elasticsearch/configuration-reference/node-settings) — Elasticsearch docs
+- [Quorum-based decision making](https://www.elastic.co/docs/deploy-manage/distributed-architecture/discovery-cluster-formation/modules-discovery-quorums) — Elasticsearch docs
+
 ### Elasticsearch shard — Lucene index; primary + replica; max ~50GB per shard for performance
 An Elasticsearch index is split into **primary shards** (each a full Lucene index holding a subset of documents), and each primary has **replica shards** on other nodes for high availability and read throughput. Shard count and size strongly affect performance: aim for roughly **10–50 GB per shard** and avoid thousands of tiny shards.
+
+#### Intuition
+One huge filing cabinet split into several smaller cabinets in different rooms, each with a photocopy kept in another room. Too few cabinets and each is unwieldy. Thousands of tiny ones and you spend all day walking between rooms.
+
+#### Must know
+- An index is split into **primary shards**. Each shard is a complete Lucene index.
+- Each primary has **replicas** on other nodes for availability and read capacity.
+- The **number of primaries is fixed at creation**. Replicas can change at any time.
+- A document goes to `hash(routing) % number_of_primaries`.
+- For time-series data, use rollover by size so shard sizes stay sensible.
+
+#### Numbers to quote
+- Aim for roughly 10–50 GB per shard.
+
+#### Common mistakes
+- Thousands of tiny shards, which waste heap and slow the master.
+- Shards far above 50 GB, which are slow to recover and move.
+- Daily indices with a fixed shard count whatever the volume.
 
 #### How it works
 ```mermaid
@@ -594,8 +839,27 @@ Each shard is a Lucene index with its own memory overhead (segments, caches), fi
 #### Interview angle
 > "I size shards at 10 to 50 GB using rollover and data streams for time series, keep replicas at least one across zones, and avoid shard explosions that eat heap and slow masters."
 
+#### Sources
+- [Size your shards](https://www.elastic.co/docs/deploy-manage/production-guidance/optimize-performance/size-shards) — Elasticsearch docs
+- [Elasticsearch from the bottom up](https://www.elastic.co/blog/found-elasticsearch-from-the-bottom-up) — Elastic blog
+
 ### Elasticsearch queries — match (full-text), term (exact), bool (must/should/must_not/filter), range, fuzzy, phrase, nested
 Elasticsearch's Query DSL combines **full-text queries** (analysed, scored) with **term-level queries** (exact, not analysed) inside a **bool** query. Using the right query type, and putting non-scoring conditions in **filter context** (cached, no scoring), is the core of fast, relevant search.
+
+#### Intuition
+Two kinds of question. "How well does this match?" is like judging essays, and gives a score. "Is this true or false?" is like ticking a checklist, which is quicker and can be remembered for next time.
+
+#### Must know
+- **`match`** analyses the text and scores relevance. **`term`** matches an exact value with no analysis.
+- **`bool`** combines clauses: `must`, `should`, `filter`, `must_not`.
+- **Filter context does not score and is cached.** Put exact conditions there.
+- Use a `keyword` field for exact filters, not an analysed `text` field.
+- Deep pagination uses `search_after`, not a large `from`.
+
+#### Common mistakes
+- A `term` query on an analysed text field, which finds nothing.
+- Price, status and tenant conditions in `must` when they belong in `filter`.
+- Arrays of objects without the `nested` type, which match the wrong combinations.
 
 #### How it works
 ```json
@@ -670,8 +934,27 @@ By default Elasticsearch flattens object arrays into multi-valued fields, losing
 #### Interview angle
 > "Relevance conditions go in must and should, exact constraints in filter context for caching, keyword fields for term filters, search_after for deep pagination, and nested mappings for variant arrays."
 
+#### Sources
+- [Boolean query](https://www.elastic.co/docs/reference/query-languages/query-dsl/query-dsl-bool-query) — Elasticsearch docs
+- [Query and filter context](https://www.elastic.co/docs/explore-analyze/query-filter/languages/querydsl) — Elasticsearch docs
+
 ### Elasticsearch aggregations — terms (counts), date_histogram, stats, percentiles, nested agg
 Aggregations compute analytics over the documents matching a query: **bucket aggregations** group documents (terms, date_histogram, range, filters, geohash grids) and **metric aggregations** compute values (sum, avg, min/max, stats, cardinality, percentiles), and they can be **nested** (buckets within buckets). They power facets, dashboards (Kibana) and analytics APIs.
+
+#### Intuition
+`GROUP BY` for search results. Sort the matching documents into piles (per day, per city), then measure each pile (count, sum, average).
+
+#### Must know
+- **Bucket aggregations** group documents: terms, date histogram, ranges.
+- **Metric aggregations** compute values: sum, average, percentiles, distinct count.
+- They nest: buckets inside buckets, with metrics per bucket.
+- They read **doc values**, a column-style store on disk.
+- Some results are **approximate**: top terms across shards, distinct counts, percentiles.
+
+#### Common mistakes
+- Using Elasticsearch counts for exact financial reports.
+- A terms aggregation on a huge-cardinality field, which trips memory limits.
+- Aggregating raw events over long time ranges with no pre-aggregation.
 
 #### How it works
 ```json
@@ -736,8 +1019,30 @@ Pre-aggregate with transforms or rollup jobs into summary indices (per hour, per
 #### Interview angle
 > "Elasticsearch aggregations power facets and near-real-time dashboards over doc values, with transforms for pre-aggregation. Exact financial reporting comes from the warehouse, since terms and cardinality can be approximate."
 
+#### Sources
+- [Aggregations](https://www.elastic.co/docs/explore-analyze/query-filter/aggregations) — Elasticsearch docs
+- [Terms aggregation](https://www.elastic.co/docs/reference/aggregations/search-aggregations-bucket-terms-aggregation) — Elasticsearch docs
+
 ### Autocomplete — edge n-gram analyzer (index), completion suggester (FST-based, very fast)
 Autocomplete suggests completions as users type. In Elasticsearch there are two main approaches: **edge n-gram fields** (index prefixes of each word, flexible and searchable with full query features) and the **completion suggester** (an in-memory FST of weighted suggestions, extremely fast prefix lookups but less flexible). Production systems often add a popularity-ranked query-log layer.
+
+#### Intuition
+A librarian who starts pulling books as soon as you say "har…". They can do it because every title was filed in advance under each of its opening letters: h, ha, har, harr.
+
+#### Must know
+- **Edge n-grams**: index every prefix of each word. Flexible, and works with filters and scoring.
+- **Completion suggester**: an in-memory structure of weighted suggestions. The fastest option, but prefix-only.
+- With edge n-grams, the **search analyser must not use n-grams**.
+- Popular suggestions come from **query logs**.
+- Debounce on the client and cache hot prefixes.
+
+#### Numbers to quote
+- Debounce keystrokes by about 100–200 ms.
+
+#### Common mistakes
+- The n-gram analyser applied to the query too, which matches far too much.
+- A request on every keystroke with no debounce or cancel.
+- Showing raw query-log text with no filtering.
 
 #### How it works
 ```mermaid
@@ -794,8 +1099,31 @@ Serve popular prefixes from cache (CDN or Redis with short TTL), since a small s
 #### Interview angle
 > "Autocomplete blends query-log suggestions from a completion FST with product prefix matches from edge n-gram fields (searched with a non-n-gram analyzer), plus client debouncing and CDN-cached hot prefixes."
 
+#### Sources
+- [Suggesters](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/search-suggesters) — Elasticsearch docs
+- [Edge n-gram tokenizer](https://www.elastic.co/docs/reference/text-analysis/analysis-edgengram-tokenizer) — Elasticsearch docs
+- [Search-as-you-type field type](https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/search-as-you-type) — Elasticsearch docs
+
 ### Spell correction — edit distance (Levenshtein), phonetic matching (Soundex, Metaphone)
 Spell correction handles typos and misspellings so "iphnoe" finds "iPhone" and "samsng" finds "Samsung". Techniques: **edit distance** (Levenshtein/Damerau: insertions, deletions, substitutions, transpositions), **phonetic algorithms** (Soundex, Metaphone, Double Metaphone for sound-alike words), and **query-log-based** corrections ("did you mean") learned from user behaviour.
+
+#### Intuition
+A shopkeeper who understands "samsng" because it is one letter away from "samsung", and "amool" because it sounds like "amul". They also remember what past customers meant when they said the same thing.
+
+#### Must know
+- **Edit distance** counts the single-character changes between two words.
+- **Fuzzy matching** accepts terms within a small edit distance.
+- **Phonetic matching** matches words that sound alike.
+- The best corrections often come from **query logs**: what users typed next after a failed search.
+- Always rank exact matches above fuzzy ones.
+
+#### Numbers to quote
+- Elasticsearch `fuzziness: AUTO` allows 0 edits for 1–2 characters, 1 for 3–5, and 2 for longer words.
+
+#### Common mistakes
+- Fuzzy matching on very short words ("cat" matching "car").
+- No `prefix_length`, which makes fuzzy queries slow.
+- Not tracking the zero-result rate.
 
 #### How it works
 ```mermaid
@@ -841,8 +1169,28 @@ Fuzzy matching builds a Levenshtein automaton and must examine all terms within 
 #### Interview angle
 > "Typos are handled by fuzzy AUTO with prefix_length 1, phonetic sub-fields for brand names, and corrections mined from query logs, with exact matches always boosted. I track the zero-result rate."
 
+#### Sources
+- [Levenshtein distance](https://en.wikipedia.org/wiki/Levenshtein_distance) — Wikipedia
+- [Fuzzy query](https://www.elastic.co/docs/reference/query-languages/query-dsl/query-dsl-fuzzy-query) — Elasticsearch docs
+- [How to write a spelling corrector](https://norvig.com/spell-correct.html) — Peter Norvig
+
 ### Faceted search — aggregations + post_filter; show category/price/brand counts alongside results
 Faceted search shows **filter options with counts** (brand: Nike (120), Adidas (85); price ranges; ratings) next to results, and lets users narrow down. It's implemented with **aggregations** on the result set, plus careful use of **post_filter** (or filtered aggregations) so selecting one facet value doesn't zero out the counts of its sibling values.
+
+#### Intuition
+The filter panel on a shopping site: "Nike (120), Adidas (85)". After you tick Nike, you still want to see how many Adidas items there are, in case you want to add them.
+
+#### Must know
+- Facets are **filter options with counts**, shown beside the results.
+- They are built from **aggregations** over the result set.
+- **`post_filter`** applies the user's selection to the hits only, after the counts are computed.
+- Multi-select rule: each facet is counted with **every filter except its own**.
+- Facet fields are keyword or numeric fields.
+
+#### Common mistakes
+- Putting the facet selection in the main query, so the other options vanish.
+- Too many facets on high-cardinality fields, which is slow.
+- Counts that do not match the results because filters were applied inconsistently.
 
 #### How it works
 ```mermaid
@@ -902,8 +1250,27 @@ Run the main query without facet selections (only text and global filters), appl
 #### Interview angle
 > "Facets are aggregations on doc-value fields. Selections go into post_filter, and each facet aggregates with every filter except its own, so multi-select counts stay meaningful."
 
+#### Sources
+- [Filter search results](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/filter-search-results) — Elasticsearch docs
+- [Faceted search](https://en.wikipedia.org/wiki/Faceted_search) — Wikipedia
+
 ### Search relevance tuning — field boosting (title^3), function_score (recency), learning to rank
 Relevance tuning makes the **best results appear first**: weight fields differently (title above description), blend text relevance with **business signals** (popularity, recency, margin, availability, distance) via `function_score` or rank features, and at scale train **learning-to-rank (LTR)** models on click and conversion data. Changes are validated with offline metrics (NDCG) and online A/B tests.
+
+#### Intuition
+A good shop assistant does not just find items that match your words. They put the in-stock, popular, recent ones in front, and they learn from what customers actually buy.
+
+#### Must know
+- **Field boosts**: a match in the title counts for more than one in the description.
+- **Business signals** are blended in: popularity, recency, stock, distance.
+- **Learning to rank** re-orders the top results with a model trained on clicks.
+- Use log or saturating forms of popularity, so big items do not swamp everything.
+- **Measure every change**: NDCG offline, A/B tests online.
+
+#### Common mistakes
+- Tuning by gut feel with no evaluation set.
+- A popularity boost so strong that new items never appear.
+- Training on raw clicks without correcting for position bias.
 
 #### How it works
 ```mermaid
@@ -963,8 +1330,28 @@ Offline: build judgment lists (queries with graded relevance labels from experts
 #### Interview angle
 > "Relevance is BM25 with field boosts, blended through function_score with saturated popularity, recency and stock signals, optionally LTR re-ranking, and every change is gated on NDCG and A/B-tested conversion."
 
+#### Sources
+- [Function score query](https://www.elastic.co/docs/reference/query-languages/query-dsl/query-dsl-function-score-query) — Elasticsearch docs
+- [Learning to rank](https://en.wikipedia.org/wiki/Learning_to_rank) — Wikipedia
+- [Discounted cumulative gain](https://en.wikipedia.org/wiki/Discounted_cumulative_gain) — Wikipedia
+
 ### Index lifecycle management (ILM) — hot → warm → cold → delete phases for time-series indices
 ILM automates managing time-based indices (logs, metrics, events) through **phases**: **hot** (actively written and queried, fast hardware), **warm** (read-only, fewer replicas, cheaper nodes, force-merged), **cold/frozen** (rarely queried, searchable snapshots on object storage) and **delete**. With **rollover** and **data streams**, indices are created and retired automatically by size or age.
+
+#### Intuition
+Office paperwork. This week's files stay on the desk, last month's go to the cabinet, last year's go to cheap storage in the basement, and after the retention period they are shredded.
+
+#### Must know
+- ILM moves time-based indices through phases automatically.
+- **Hot**: being written, on fast disks. **Warm**: read-only, on cheaper nodes.
+- **Cold / frozen**: rarely queried, stored on object storage. **Delete**: removed after retention.
+- **Rollover** starts a new index at a size or age limit, which keeps shard sizes sensible.
+- The gain is cost: old data does not sit on expensive hardware.
+
+#### Common mistakes
+- Keeping every day of logs on the hot tier.
+- Fixed daily indices, which are tiny on quiet days and huge on busy ones.
+- No delete phase, so storage grows forever.
 
 #### How it works
 ```mermaid
@@ -1017,3 +1404,8 @@ Instead of fixed daily indices (tiny on quiet days, huge on busy ones), rollover
 
 #### Interview angle
 > "Time-series indices use data streams with size-based rollover and ILM: hot NVMe for a week, warm shrunk and force-merged, frozen searchable snapshots on S3, then delete. That cuts cost by more than half while old data stays searchable."
+
+#### Sources
+- [Index lifecycle management](https://www.elastic.co/docs/manage-data/lifecycle/index-lifecycle-management) — Elasticsearch docs
+- [Data tiers](https://www.elastic.co/docs/manage-data/lifecycle/data-tiers) — Elasticsearch docs
+

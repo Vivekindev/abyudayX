@@ -3,6 +3,24 @@
 ### Dense vector embeddings — neural encoder maps text/image to fixed-dim float vector in semantic space
 An embedding model turns text, images or other items into a **fixed-length vector of floats** (e.g. 384, 768, 1,536 dimensions), placing semantically similar items close together. "Cheap flights to Goa" and "budget airfare Goa" land near each other even with no shared words. Similarity is measured with **cosine similarity**, dot product or Euclidean distance.
 
+#### Intuition
+Giving every sentence a pin on a huge map, where sentences with similar meaning are pinned close together. "Cheap flights to Goa" and "budget airfare Goa" share no words, but their pins are neighbours.
+
+#### Must know
+- An embedding model turns text or an image into a **fixed-length list of numbers** (a vector).
+- **Similar meaning gives nearby vectors.** Closeness is measured with cosine similarity.
+- Use the **same model for documents and queries**. A new model means re-embedding everything.
+- **Chunk** long documents, so each vector covers one idea.
+- Embeddings are weak on exact codes and names, so pair them with keyword search.
+
+#### Numbers to quote
+- Typical sizes are 384, 768 or 1,536 dimensions. 1 million vectors × 768 dimensions × 4 bytes ≈ 3 GB.
+
+#### Common mistakes
+- Mixing vectors from two different models in one index.
+- One vector for a whole long document.
+- Expecting embeddings to match SKUs, error codes or names exactly.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -54,8 +72,27 @@ Vectors from different models live in different spaces and aren't comparable, so
 #### Interview angle
 > "Documents are chunked and embedded with one versioned model, normalised for cosine similarity and quantised to save memory. Exact identifiers still come from BM25, so I combine both."
 
+#### Sources
+- [Embeddings](https://developers.google.com/machine-learning/crash-course/embeddings) — Google machine learning crash course
+- [Sentence Transformers documentation](https://www.sbert.net/) — SBERT
+
 ### Semantic search — find similar meaning, not exact keyword match; handles synonyms, paraphrases
 Semantic search ranks results by **meaning**: the query and documents are embedded, and the nearest document vectors are returned. It handles synonyms, paraphrases, cross-lingual queries and natural-language questions that keyword (lexical) search misses, and is usually combined with lexical search for exact matches.
+
+#### Intuition
+A librarian who understands what you mean. Ask for "a laptop that stays cool while gaming" and they bring books about thermal design, even though none of your words are in the titles.
+
+#### Must know
+- It ranks by **meaning**: embed the query, then return the nearest document vectors.
+- It handles synonyms, paraphrases and natural-language questions that keyword search misses.
+- Pipeline: chunk and embed documents offline, embed the query online, search with metadata filters.
+- **It always returns something**, so use a similarity threshold for "no good answer".
+- It is weak on exact identifiers, which is why it is usually run **hybrid with BM25**.
+
+#### Common mistakes
+- Semantic-only search for queries that contain order numbers or product codes.
+- No threshold, so irrelevant nearest neighbours are shown as answers.
+- No labelled evaluation set, so quality is judged by feel.
 
 #### How it works
 ```mermaid
@@ -109,8 +146,30 @@ Add a `dense_vector` field (Elasticsearch/OpenSearch kNN with HNSW), backfill em
 #### Interview angle
 > "Semantic search retrieves by meaning through query embeddings and filtered ANN, with similarity thresholds for 'no good answer'. I always run it hybrid with BM25 so exact codes and names still match."
 
+#### Sources
+- [Semantic search](https://www.sbert.net/examples/sentence_transformer/applications/semantic-search/README.html) — Sentence Transformers docs
+- [Semantic search](https://en.wikipedia.org/wiki/Semantic_search) — Wikipedia
+
 ### Approximate Nearest Neighbor (ANN) — find K most similar vectors without exhaustive search
 Exact nearest-neighbour search compares the query against **every vector** (O(N × d)), which is too slow for millions or billions of vectors. ANN algorithms trade a little **recall** for orders-of-magnitude speed using graphs (HNSW), clustering (IVF), quantisation (PQ), trees (Annoy) or hashing (LSH).
+
+#### Intuition
+Finding the nearest petrol station. You do not measure the distance to every station in the country. You look in your own neighbourhood, and you almost always get the right answer far faster.
+
+#### Must know
+- Exact search compares the query with **every** vector, which is too slow at millions of vectors.
+- ANN **trades a little accuracy for a huge speed-up**.
+- Main families: graphs (HNSW), clustering (IVF), compression (PQ).
+- The key metric is **recall@k**: the share of the true nearest neighbours that were found.
+- You tune recall against latency and memory.
+
+#### Numbers to quote
+- Typical targets are 95–99% recall. Brute force is fine below about 100,000 vectors.
+
+#### Common mistakes
+- Never measuring recall against a brute-force ground truth.
+- Filtering after the ANN search, which leaves too few results.
+- Using ANN on a small dataset where exact search is fast enough.
 
 #### How it works
 ```mermaid
@@ -161,8 +220,30 @@ If filters are applied after ANN retrieval (post-filtering), the top-k candidate
 #### Interview angle
 > "At millions of vectors I use ANN, HNSW or IVF-PQ, tuned for recall@k against brute-force ground truth within the latency budget, with filter-aware search and exact re-ranking of candidates."
 
+#### Sources
+- [Nearest neighbor search: approximation methods](https://en.wikipedia.org/wiki/Nearest_neighbor_search#Approximation_methods) — Wikipedia
+- [ANN benchmarks](https://ann-benchmarks.com/) — Erik Bernhardsson
+
 ### HNSW — Hierarchical Navigable Small World: graph-based ANN, O(log N) query, best recall/speed tradeoff
 HNSW builds a **multi-layer proximity graph**: upper layers are sparse long-range "highways", lower layers are dense local neighbourhoods. A search starts at the top, greedily moves toward the query, and descends layer by layer, finding nearest neighbours in roughly **O(log N)** hops. It's the default index in most vector databases.
+
+#### Intuition
+Travelling across a country: motorways first to get to the right region, then main roads, then local streets to the exact address. The upper layers of the graph are the motorways.
+
+#### Must know
+- A **multi-layer graph** linking each vector to its near neighbours.
+- Upper layers are sparse with long jumps. The bottom layer holds every vector.
+- Search starts at the top and **moves greedily closer**, dropping down layer by layer.
+- It is the default index in most vector databases.
+- It is **memory-heavy**: the vectors and the graph both live in RAM.
+
+#### Numbers to quote
+- `M` (links per node) is commonly 16–48. `efSearch` sets recall against latency at query time.
+
+#### Common mistakes
+- Running out of memory with full-precision vectors and a large `M`.
+- Many deletes and updates with no periodic rebuild, so recall decays.
+- Raising `efSearch` without checking the latency cost.
 
 #### How it works
 ```mermaid
@@ -213,8 +294,30 @@ A single machine can't hold a billion float32 vectors (3+ TB at 768 dims) in RAM
 #### Interview angle
 > "HNSW is my default vector index: M around 16, efConstruction around 200, efSearch tuned for about 98% recall at single-digit milliseconds, with quantisation for memory and periodic rebuilds after heavy churn."
 
+#### Sources
+- [Efficient and robust approximate nearest neighbor search using hierarchical navigable small world graphs](https://arxiv.org/abs/1603.09320) — Malkov and Yashunin
+- [hnswlib](https://github.com/nmslib/hnswlib) — nmslib, GitHub
+
 ### FAISS — Meta's ANN library: IVF (inverted file index) + PQ (product quantization for compression)
 FAISS (Facebook AI Similarity Search) is a C++/Python library with GPU support for **similarity search and clustering of dense vectors**. It offers many index types, notably **IVF** (cluster vectors with k-means, then search only the closest clusters) and **PQ** (product quantisation: compress vectors into short codes), composable as `IVF65536,PQ64`, plus HNSW and flat (exact) indexes.
+
+#### Intuition
+Two tricks. First, sort the vectors into neighbourhoods and search only the few nearest ones. Second, replace each vector with a short code, like describing a colour as "roughly teal" and not by its exact values.
+
+#### Must know
+- FAISS is a **library** for vector similarity search, with GPU support.
+- **IVF** clusters the vectors and searches only the nearest clusters (`nprobe` of them).
+- **PQ** compresses each vector into a short code, cutting memory many times over.
+- Combined as IVF-PQ, it handles **billions of vectors**.
+- It is **not a database**: no replication, filtering or persistence service.
+
+#### Numbers to quote
+- PQ can turn a 3,072-byte vector (768 float32 values) into 64 bytes, about 48× smaller.
+
+#### Common mistakes
+- Treating FAISS as a production database by itself.
+- Too low an `nprobe`, which gives poor recall.
+- Training the clusters on data that no longer looks like production.
 
 #### How it works
 ```mermaid
@@ -261,8 +364,27 @@ FAISS when you need a high-performance embedded index or offline batch similarit
 #### Interview angle
 > "For billion-scale batch similarity I'd use FAISS IVF-PQ on GPUs, searching nprobe clusters over compressed codes and re-ranking exactly. For an online service with filters and upserts, a vector database."
 
+#### Sources
+- [Faiss wiki](https://github.com/facebookresearch/faiss/wiki) — Faiss, GitHub
+- [Billion-scale similarity search with GPUs](https://arxiv.org/abs/1702.08734) — Johnson, Douze and Jégou
+
 ### Vector databases — Pinecone, Weaviate, Milvus, Qdrant, pgvector (Postgres extension)
 Vector databases store embeddings with metadata and serve **filtered ANN queries** as an operational service: upserts and deletes, metadata filters, hybrid search, replication and sharding, persistence, multi-tenancy, backups and APIs. Options range from managed services (Pinecone) to open-source engines (Milvus, Qdrant, Weaviate) and extensions of existing databases (**pgvector**, Elasticsearch/OpenSearch kNN, Redis, MongoDB Atlas Vector Search).
+
+#### Intuition
+A normal database remembers facts and finds them by exact match. A vector database remembers meanings and finds the closest ones, and still lets you add, change, filter and back up records.
+
+#### Must know
+- It stores embeddings **with metadata** and serves **filtered nearest-neighbour queries**.
+- It adds the operational side: upserts, deletes, replication, sharding, persistence.
+- **pgvector** keeps vectors inside Postgres. Simple, and good to tens of millions of vectors.
+- Dedicated engines (Qdrant, Milvus, Weaviate, Pinecone) suit larger scale.
+- **Every query needs a tenant filter**, and the index must stay in sync with the source data.
+
+#### Common mistakes
+- A missing tenant filter, which leaks another customer's data.
+- No pipeline to re-embed documents when they change.
+- Adding a new database when pgvector in the existing Postgres would be enough.
 
 #### How it works
 ```mermaid
@@ -319,8 +441,30 @@ Treat the source store as truth. Emit change events (CDC/outbox) on document cre
 #### Interview angle
 > "For moderate scale I'd keep vectors in pgvector next to tenant data with RLS and HNSW, synced by CDC re-embedding. I'd move to Qdrant or Milvus only when scale or filtered-ANN load demands it."
 
+#### Sources
+- [pgvector](https://github.com/pgvector/pgvector) — pgvector, GitHub
+- [Qdrant documentation](https://qdrant.tech/documentation/) — Qdrant
+
 ### Hybrid search — BM25 keyword + dense vector; combine with Reciprocal Rank Fusion (RRF)
 Hybrid search runs **lexical (BM25)** and **semantic (vector)** retrieval in parallel and **fuses** the result lists. BM25 nails exact terms, codes and names, and vectors capture meaning and paraphrases. Fusion is commonly **Reciprocal Rank Fusion**, which combines ranks rather than incomparable raw scores.
+
+#### Intuition
+Two librarians. One matches your exact words, the other understands what you mean. Ask both, then merge their lists by how highly each one ranked a book.
+
+#### Must know
+- Run **keyword search (BM25) and vector search in parallel**, then merge the two lists.
+- BM25 catches exact codes, names and rare terms. Vectors catch meaning and paraphrases.
+- **RRF** merges by **rank, not raw score**: `score = Σ 1 / (k + rank)`.
+- Raw scores from the two systems are not comparable, which is why ranks are used.
+- Often followed by a re-ranker on the top results.
+
+#### Numbers to quote
+- The usual RRF constant is k = 60.
+
+#### Common mistakes
+- Adding a BM25 score and a cosine score directly.
+- Running the two retrievals one after the other and doubling latency.
+- Assuming hybrid is better without measuring on labelled queries.
 
 #### How it works
 ```mermaid
@@ -369,8 +513,27 @@ Exact identifiers and rare tokens: product SKUs, order or error codes, names of 
 #### Interview angle
 > "Production retrieval is hybrid: BM25 and kNN run in parallel, fused with RRF and re-ranked by a cross-encoder, so error codes and paraphrased questions both work, measured on labelled queries."
 
+#### Sources
+- [Reciprocal rank fusion outperforms Condorcet and individual rank learning methods](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) — Cormack, Clarke and Büttcher
+- [Reciprocal rank fusion](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/reciprocal-rank-fusion) — Elasticsearch docs
+
 ### Embedding models — text-embedding-3-small (OpenAI), BERT, BGE, E5, Cohere Embed
 Embedding models convert text (or images) into vectors. Choices differ in **quality on your domain and language**, **dimensions** (cost and memory), **max input length**, **latency and cost** (API vs self-hosted), **licensing and data residency**, and **multilingual support**. Benchmarks like MTEB help shortlist, but your own evaluation decides.
+
+#### Intuition
+Choosing a translator. Some are fast and cheap, some are better at a particular language or subject. The only reliable way to choose is to test them on your own documents.
+
+#### Must know
+- Models differ in **quality on your domain and language**, dimensions, input length, speed and cost.
+- **Hosted APIs**: no infrastructure, but a cost per token, and data leaves your network.
+- **Self-hosted open models**: full control and data residency, but you run the inference.
+- Public benchmarks (MTEB) help you **shortlist**. Your own labelled queries decide.
+- Follow each model's conventions, such as "query:" and "passage:" prefixes.
+
+#### Common mistakes
+- An English-only model for Hindi or mixed-language queries.
+- Picking the top benchmark model with no test on your own data.
+- Leaving out the model's required prefixes.
 
 #### How it works
 ```mermaid
@@ -420,8 +583,28 @@ Hosted: no infrastructure, strong quality and easy scaling, but per-token cost, 
 #### Interview angle
 > "I shortlist embedding models from MTEB and decide on our own labelled queries across English, Hindi and Hinglish, weighing quality against dimensions, cost and data residency, which often means self-hosting a multilingual model."
 
+#### Sources
+- [MTEB leaderboard](https://huggingface.co/spaces/mteb/leaderboard) — Hugging Face
+- [MTEB: massive text embedding benchmark](https://arxiv.org/abs/2210.07316) — Muennighoff et al.
+- [BGE-M3](https://huggingface.co/BAAI/bge-m3) — BAAI, Hugging Face
+
 ### RAG (Retrieval-Augmented Generation) — vector search retrieves context, LLM generates answer
 Retrieval-Augmented Generation answers questions by first **retrieving relevant passages** from your knowledge base (hybrid or vector search), then giving them to an **LLM as context** to generate a grounded answer with citations. It lets LLMs use private, fresh knowledge without retraining, and reduces hallucination when done well.
+
+#### Intuition
+An open-book exam. The model does not answer from memory. It is first handed the relevant pages from your documents and told to answer only from those pages, quoting them.
+
+#### Must know
+- Two steps: **retrieve** relevant passages, then give them to an **LLM as context** to write the answer.
+- The model can use private and fresh knowledge **without retraining**.
+- Answer quality is **limited by retrieval quality**.
+- Retrieval must respect **user permissions**.
+- Ask for citations, and for a refusal when the context does not contain the answer.
+
+#### Common mistakes
+- Retrieval that ignores access control, so users see restricted content.
+- Treating retrieved text as instructions, which allows prompt injection.
+- No evaluation set for retrieval and answer faithfulness.
 
 #### How it works
 ```mermaid
@@ -474,8 +657,31 @@ RAG injects knowledge at query time: it's fresh (update the index, not the model
 #### Interview angle
 > "RAG ingests chunks with ACL metadata, retrieves permission-filtered hybrid results, re-ranks, and generates cited answers that refuse when unsupported, with golden-set evaluation of faithfulness and prompt-injection defences."
 
+#### Sources
+- [Retrieval-augmented generation for knowledge-intensive NLP tasks](https://arxiv.org/abs/2005.11401) — Lewis et al.
+- [What is retrieval-augmented generation?](https://aws.amazon.com/what-is/retrieval-augmented-generation/) — AWS
+- [OWASP Top 10 for large language model applications](https://owasp.org/projects/top-10-for-large-language-model-applications) — OWASP
+
 ### Re-ranking — cross-encoder (slower, higher quality) re-ranks top-K ANN results for final list
 Re-ranking is a **second stage**: a fast retriever (BM25, vectors, hybrid) fetches the top 50–200 candidates, and a slower, more accurate model re-scores them to produce the final order. **Cross-encoders** read the query and document **together** (full attention between them), so they judge relevance far better than embeddings computed separately (bi-encoders).
+
+#### Intuition
+Hiring in two rounds. A quick CV screen picks 100 candidates from thousands. Then a careful interview, too slow to give everyone, picks the best 10 of those.
+
+#### Must know
+- A **second stage**: fast retrieval fetches about 100 candidates, a slower model re-orders them.
+- A **cross-encoder** reads the query and the document **together**, so it judges relevance better.
+- It cannot be precomputed, so it is only affordable on a small candidate set.
+- It improves precision at the top of the list.
+- **It cannot fix recall.** It only re-orders what the first stage found.
+
+#### Numbers to quote
+- Re-rank roughly 50–200 candidates down to the top 10.
+
+#### Common mistakes
+- Re-ranking too many candidates, or on CPU, which blows the latency budget.
+- Expecting the re-ranker to surface documents the retriever never returned.
+- Skipping the measurement of first-stage recall.
 
 #### How it works
 ```mermaid
@@ -522,3 +728,9 @@ Enough to contain the relevant documents (check stage-1 recall@N on labelled dat
 
 #### Interview angle
 > "Search and RAG are two-stage: hybrid retrieval fetches about 100 candidates, and a GPU-served cross-encoder re-ranks them to the top 10. Re-ranking only reorders, so recall must come from the first stage."
+
+#### Sources
+- [Passage re-ranking with BERT](https://arxiv.org/abs/1901.04085) — Nogueira and Cho
+- [Cross-encoder usage](https://www.sbert.net/docs/cross_encoder/usage/usage.html) — Sentence Transformers docs
+- [Rerank overview](https://docs.cohere.com/docs/rerank-overview) — Cohere docs
+

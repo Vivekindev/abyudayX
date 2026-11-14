@@ -3,6 +3,21 @@
 ### OLTP vs OLAP — row-oriented (many small writes) vs columnar (analytical aggregations)
 **OLTP** (online transaction processing) systems run the business: many small, concurrent reads and writes of individual rows (place order, update balance) with ACID guarantees and millisecond latency. **OLAP** (online analytical processing) systems analyse the business: large scans and aggregations over millions or billions of rows (revenue by city per month), typically in **columnar** stores optimised for read throughput.
 
+#### Intuition
+The shop till and the accountant's ledger. The till handles one sale at a time, very fast. The accountant looks across the whole year's sales to find patterns. They are different jobs and need different tools.
+
+#### Must know
+- **OLTP** runs the business: many small, fast reads and writes of single rows.
+- **OLAP** analyses the business: large scans and aggregations over millions of rows.
+- OLTP uses **row storage** with indexes. OLAP uses **columnar storage**.
+- Data moves from OLTP to OLAP through CDC or ETL.
+- **Never run heavy analytics on the production primary.**
+
+#### Common mistakes
+- Month-end reports run straight against the transactional database.
+- Using a columnar warehouse for single-row transactional updates.
+- Different teams computing the same metric with different definitions.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -58,8 +73,27 @@ Change data capture (Debezium reading the WAL or binlog → Kafka → warehouse 
 #### Interview angle
 > "OLTP stays on Postgres for ACID point operations. Analytics gets CDC into a columnar warehouse modelled with dbt, so finance queries never touch checkout's database."
 
+#### Sources
+- [Online analytical processing](https://en.wikipedia.org/wiki/Online_analytical_processing) — Wikipedia
+- [What's the difference between OLAP and OLTP?](https://aws.amazon.com/compare/the-difference-between-olap-and-oltp/) — AWS
+
 ### Star schema — fact table (events) + dimension tables (who, what, when, where); Kimball model
 A star schema (Kimball dimensional modelling) organises analytical data into a central **fact table** of measurable events (orders, payments, page views) with foreign keys to **dimension tables** describing context (customer, product, date, store). Queries join the fact to a few dimensions and aggregate, which is simple for analysts and fast for columnar engines.
+
+#### Intuition
+A receipt in the middle with labels around it. The receipt holds the numbers: quantity and amount. The labels say who bought, what, when and where. Drawn on paper it looks like a star.
+
+#### Must know
+- A central **fact table** holds measurable events: orders, payments, page views.
+- **Dimension tables** around it describe the context: customer, product, date, store.
+- Queries join the fact to a few dimensions and aggregate.
+- Decide the **grain** first: exactly what one fact row represents.
+- **Slowly changing dimension Type 2** keeps history when an attribute changes.
+
+#### Common mistakes
+- Mixing grains in one fact table, which double counts.
+- Overwriting dimension attributes, so past reports change.
+- Skipping the grain decision and discovering it later through wrong totals.
 
 #### How it works
 ```mermaid
@@ -134,8 +168,27 @@ A technique to keep history of dimension attribute changes: instead of overwriti
 #### Interview angle
 > "Analytics is modelled as Kimball star schemas: a declared grain per fact table, conformed dimensions, and SCD Type 2 where history matters, so past revenue never shifts when a customer moves."
 
+#### Sources
+- [Dimensional modeling techniques](https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/kimball-techniques/dimensional-modeling-techniques/) — Kimball Group
+- [Star schema](https://en.wikipedia.org/wiki/Star_schema) — Wikipedia
+
 ### Snowflake schema — normalized dimensions; reduces redundancy but more JOINs
 A snowflake schema is a star schema whose **dimensions are normalised into sub-dimensions**: product → category → department, customer → city → state. It reduces redundancy and update anomalies in dimensions, at the cost of **more joins** at query time. (Not to be confused with the Snowflake data warehouse product.)
+
+#### Intuition
+A star whose points branch again. In place of one product label that includes the category and department, the product points to a category card, which points to a department card.
+
+#### Must know
+- A star schema whose **dimensions are normalised** into sub-tables.
+- It removes repeated values inside dimensions.
+- The cost is **more joins** on every query.
+- Columnar warehouses compress repeated values very well, so the saving is small.
+- **Star is the usual default.** It is unrelated to the Snowflake warehouse product.
+
+#### Common mistakes
+- Confusing the schema with the Snowflake product.
+- Deep normalisation that makes dashboards slow and SQL hard to write.
+- Arguing for it on storage cost alone.
 
 #### How it works
 ```mermaid
@@ -189,8 +242,30 @@ Columnar formats store each column separately with dictionary and run-length enc
 #### Interview angle
 > "I keep hierarchies normalised where another team maintains them, but expose flattened star dimensions to BI, since columnar compression makes the redundancy nearly free and fewer joins keep queries fast."
 
+#### Sources
+- [Snowflake schema](https://en.wikipedia.org/wiki/Snowflake_schema) — Wikipedia
+- [Dimensional modeling techniques](https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/kimball-techniques/dimensional-modeling-techniques/) — Kimball Group
+
 ### Columnar storage — Parquet, ORC: compress and encode columns together; 10–100× faster for analytics
 Columnar file formats such as **Parquet** and **ORC** store data column by column within row groups, with per-column encoding (dictionary, RLE, delta), compression (Snappy, ZSTD) and statistics (min/max, null counts, bloom filters). Engines read only needed columns and skip row groups using statistics, which makes data-lake analytics fast and cheap. (Phase 3 covers columnar execution.)
+
+#### Intuition
+A spreadsheet stored one column at a time. To total the "amount" column you read only that column, and because similar values sit together it squeezes down very small.
+
+#### Must know
+- Data is stored **column by column**, not row by row.
+- A query **reads only the columns it needs**.
+- Similar values together compress very well.
+- Files carry min/max statistics, so whole blocks can be **skipped**.
+- Partition by a common filter such as date, and avoid many tiny files.
+
+#### Numbers to quote
+- Aim for files of about 128 MB to 1 GB. Parquet is often 5–10× smaller than JSON.
+
+#### Common mistakes
+- Analytics on raw JSON or CSV in a data lake.
+- Thousands of tiny files from streaming writes, with no compaction.
+- No partitioning, so every query scans everything.
 
 #### How it works
 ```mermaid
@@ -239,8 +314,27 @@ Streaming or frequent micro-batch writes create thousands of tiny files. Each fi
 #### Interview angle
 > "Lake data is ZSTD Parquet partitioned by date and sorted by common filters, compacted into 128 MB to 1 GB files and managed by Iceberg or Delta, so queries scan a tiny fraction of the bytes."
 
+#### Sources
+- [Apache Parquet documentation](https://parquet.apache.org/docs/) — Apache Parquet
+- [File format](https://parquet.apache.org/docs/file-format/) — Apache Parquet
+
 ### Data warehouse — Snowflake (cloud-native), BigQuery (serverless), Redshift (columnar, AWS)
 A cloud data warehouse is a managed, columnar, massively parallel SQL engine for analytics: **Snowflake** (separate storage and compute "virtual warehouses", multi-cloud), **BigQuery** (serverless, pay per bytes scanned or slots), **Redshift** (AWS, provisioned or serverless, with Spectrum for S3). They provide SQL, governance, concurrency, time travel and BI integrations.
+
+#### Intuition
+A dedicated analysis room, separate from the shop floor. All the company's data is brought in, tidied and arranged so anyone can ask a question in SQL without disturbing the tills.
+
+#### Must know
+- A managed, columnar SQL engine built for analytics over large data.
+- **Storage and compute are separate**, so each scales alone and workloads do not block each other.
+- Typical flow: land raw data, transform it with SQL (dbt), serve tidy tables to dashboards.
+- You pay per compute time or per bytes scanned.
+- **Cost control matters**: partition tables and stop idle compute.
+
+#### Common mistakes
+- `SELECT *` on a huge unpartitioned table.
+- One shared compute cluster for loading, dashboards and data science.
+- Ad-hoc SQL everywhere with no shared, tested models.
 
 #### How it works
 ```mermaid
@@ -291,8 +385,27 @@ Partition tables (by date) and require partition filters, cluster on frequently 
 #### Interview angle
 > "The warehouse (BigQuery or Snowflake) gets CDC and SaaS data into raw layers, dbt builds tested marts, and BI reads only marts, with partitioning, clustering, auto-suspend and quotas keeping cost predictable."
 
+#### Sources
+- [Key concepts and architecture](https://docs.snowflake.com/en/user-guide/intro-key-concepts) — Snowflake docs
+- [BigQuery overview](https://cloud.google.com/bigquery/docs/introduction) — Google Cloud docs
+
 ### Data lake — raw files in S3/GCS, queried via Athena/Presto on-demand; flexible but no ACID
 A data lake stores **raw and processed data as files in object storage** (S3, GCS, ADLS) in open formats (JSON, CSV, Parquet, Avro), cheaply and at any scale, decoupled from compute. Engines like **Athena, Trino/Presto, Spark and EMR** query it on demand. Without a table format, lakes lack ACID transactions, schema enforcement and easy updates.
+
+#### Intuition
+A huge storeroom where everything is kept in its original box. It is cheap and takes anything, and you bring your own tools when you want to look inside. With no labels it turns into a junk room.
+
+#### Must know
+- **Files in object storage** in open formats, with compute brought in on demand.
+- It is cheap and takes any kind of data: logs, events, images, exports.
+- Layers: raw (bronze), cleaned (silver), business-ready (gold).
+- A **catalog** records what data exists and its schema.
+- A plain lake has **no transactions**, and updates and deletes are hard.
+
+#### Common mistakes
+- No catalog or ownership, which gives a "data swamp".
+- Readers seeing half-written data during a multi-file write.
+- No workable way to delete one user's data for a privacy request.
 
 #### How it works
 ```mermaid
@@ -340,8 +453,27 @@ No atomic commits (readers can see partially written data), concurrent writers c
 #### Interview angle
 > "Raw data lands in an S3 lake as bronze, silver and gold Parquet with a catalog and Lake Formation permissions. I add Iceberg once we need ACID, deletes or schema evolution."
 
+#### Sources
+- [What is a data lake?](https://aws.amazon.com/what-is/data-lake/) — AWS
+- [What is Amazon Athena?](https://docs.aws.amazon.com/athena/latest/ug/what-is.html) — Amazon Athena user guide
+
 ### Lakehouse — ACID transactions on data lake; Delta Lake, Apache Iceberg, Apache Hudi
 A lakehouse adds a **table format** on top of data-lake files: a transactional **metadata layer** (manifests or logs) that provides **ACID commits, snapshots and time travel, schema evolution, row-level updates and deletes, partition evolution** and efficient planning, while data stays in open Parquet files on cheap object storage and any engine can query it.
+
+#### Intuition
+The same storeroom with a proper stock ledger added. The boxes stay where they are, but the ledger says exactly which boxes make up each table right now, and a change counts only once the ledger is updated.
+
+#### Must know
+- A **table format** adds a metadata layer over plain files in object storage.
+- It gives **atomic commits**: a reader never sees a half-finished write.
+- It adds row-level updates and deletes, schema changes and **time travel** to old snapshots.
+- The data stays in open Parquet files that many engines can read.
+- Formats: **Iceberg, Delta Lake, Hudi**.
+
+#### Common mistakes
+- No compaction, so small files pile up and queries slow down.
+- Never expiring old snapshots, so storage keeps growing.
+- Several writers on the same partitions with no conflict handling.
 
 #### How it works
 ```mermaid
@@ -393,8 +525,28 @@ Copy-on-write rewrites affected data files with the updates applied at write tim
 #### Interview angle
 > "CDC lands in Iceberg tables in S3 (merge-on-read upserts plus hourly compaction), queried by Trino, Spark and Snowflake from one copy, with snapshots for rollback and SQL deletes for GDPR."
 
+#### Sources
+- [Apache Iceberg documentation](https://iceberg.apache.org/docs/latest/) — Apache Iceberg
+- [Lakehouse: a new generation of open platforms that unify data warehousing and advanced analytics](https://www.cidrdb.org/cidr2021/papers/cidr2021_paper17.pdf) — Armbrust, Ghodsi, Xin and Zaharia
+- [Delta Lake documentation](https://docs.delta.io/latest/index.html) — Delta Lake
+
 ### Batch processing — Apache Spark: RDD, DataFrame, Spark SQL, lazy evaluation, Catalyst optimizer
 Apache Spark is the dominant distributed **batch** (and micro-batch streaming) engine: you express transformations on **DataFrames/Datasets** (or Spark SQL), Spark builds a **lazy logical plan**, optimises it with **Catalyst** (predicate pushdown, column pruning, join reordering) and runs it as **stages and tasks** across executors, with in-memory processing and fault tolerance via lineage.
+
+#### Intuition
+A head chef who reads the whole recipe before cooking. Seeing every step, they reorder and combine them to save work, then hand the tasks out to many cooks working in parallel.
+
+#### Must know
+- Spark processes large datasets **in parallel across many machines**.
+- You describe transformations on DataFrames or in SQL.
+- **Lazy evaluation**: nothing runs until an action needs a result.
+- The optimiser rewrites the plan first: filter early, read fewer columns.
+- A **shuffle** (join, group by) moves data between machines and is the expensive part.
+
+#### Common mistakes
+- Data skew: one huge key makes a single task run for hours.
+- `collect()` on a large dataset, which crashes the driver.
+- Shuffling a big table to join a tiny one that could be broadcast.
 
 #### How it works
 ```mermaid
@@ -446,8 +598,27 @@ Because transformations only build a plan, Catalyst can optimise the whole pipel
 #### Interview angle
 > "Batch jobs run on Spark DataFrames, filtering partitions early, broadcasting small tables and letting AQE handle skew, then writing well-sized Parquet or Iceberg files. Shuffles are where cost hides."
 
+#### Sources
+- [Spark SQL, DataFrames and Datasets guide](https://spark.apache.org/docs/latest/sql-programming-guide.html) — Apache Spark docs
+- [Performance tuning](https://spark.apache.org/docs/latest/sql-performance-tuning.html) — Apache Spark docs
+
 ### Stream processing — Apache Flink: event time vs processing time, watermarks, stateful operators, exactly-once
 Apache Flink is a true streaming engine for **continuous, stateful computations** over unbounded data with low latency. Key ideas: **event time** (when the event happened) vs processing time, **watermarks** to handle out-of-order and late events, large **keyed state** (RocksDB) with **checkpoints** for exactly-once state consistency, and **windows** (tumbling, sliding, session).
+
+#### Intuition
+Sorting post by the date written on each letter, not the date it arrived. Some letters come late, so you wait a little before closing each day's pile, and you note your place so you can resume after an interruption.
+
+#### Must know
+- It processes events **continuously as they arrive**, with low latency.
+- **Event time** is when it happened. **Processing time** is when it was handled.
+- A **watermark** says "no more events older than T are expected", which lets a window close.
+- State is kept per key and saved in **checkpoints**.
+- Exactly-once needs checkpoints, a replayable source and a transactional or idempotent sink.
+
+#### Common mistakes
+- Using processing time, so results change with delays and replays.
+- A watermark stuck on an idle partition, so windows never fire.
+- A sink that is not idempotent, so a recovery produces duplicates.
 
 #### How it works
 ```mermaid
@@ -500,8 +671,27 @@ It periodically injects checkpoint barriers into the streams. As barriers flow t
 #### Interview angle
 > "Real-time features run on Flink with event-time windows and watermarks for late mobile data, keyed RocksDB state, checkpoints to S3, and a transactional Kafka sink for exactly-once alerts."
 
+#### Sources
+- [Timely stream processing](https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/time/) — Apache Flink docs
+- [Stateful stream processing](https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/) — Apache Flink docs
+
 ### Kafka Streams — lightweight stream processing: stateful with embedded RocksDB, runs inside application
 Kafka Streams is a **Java library** (no separate cluster) for stream processing on Kafka: your application instances consume topics, run stateful transformations with **local RocksDB state stores** backed by **changelog topics**, and produce results to topics. It scales by running more instances (up to the partition count), with exactly-once via Kafka transactions. (Phase 7 covers internals.)
+
+#### Intuition
+A small calculator built into each of your own service instances. There is no separate machine room to run. Each instance processes its share of the topic and keeps its working notes on local disk.
+
+#### Must know
+- A **Java library**, not a cluster. It runs **inside your application**.
+- It reads Kafka topics, processes them and writes to Kafka topics.
+- State lives in a **local RocksDB store**, backed up to a changelog topic.
+- You scale by running more instances, up to the number of partitions.
+- Choose it for Kafka-to-Kafka processing in a service. Choose Flink for large shared pipelines.
+
+#### Common mistakes
+- Expecting it to read from or write to systems other than Kafka.
+- Long restarts while a large state store is rebuilt, with no standby replicas.
+- Re-keying often, which creates many repartition topics.
 
 #### How it works
 ```mermaid
@@ -549,8 +739,27 @@ They let an application expose its local state stores (e.g. windowed counts) for
 #### Interview angle
 > "For Kafka-to-Kafka aggregations inside our services I'd use Kafka Streams with windowed RocksDB state, standby replicas and interactive queries, with no extra cluster. Flink is for the heavy shared pipelines."
 
+#### Sources
+- [Kafka Streams](https://kafka.apache.org/documentation/streams/) — Apache Kafka docs
+- [Kafka Streams architecture](https://kafka.apache.org/documentation/streams/architecture) — Apache Kafka docs
+
 ### Lambda architecture — batch layer (Spark, correctness) + speed layer (Flink, low latency) + serving layer
 Lambda architecture runs **two parallel pipelines** over the same data: a **batch layer** that periodically recomputes accurate results from the full immutable dataset, and a **speed layer** that processes recent data in real time for low-latency (approximate or provisional) results. A **serving layer** merges the two views for queries.
+
+#### Intuition
+Two clerks doing the same sums. One works fast and gives a rough running total. The other redoes everything carefully each night. The report uses the careful figures up to yesterday and the quick ones for today.
+
+#### Must know
+- **Two pipelines** over the same data.
+- **Batch layer**: slow, recomputes accurate results from all the data.
+- **Speed layer**: fast, provisional results for recent data.
+- A **serving layer** merges the two views.
+- Main drawback: **the same logic is written twice** and drifts apart.
+
+#### Common mistakes
+- Proposing it as the modern default.
+- Batch and real-time numbers that disagree because the two code paths diverged.
+- No clear cut-over point between the batch view and the live view.
 
 #### How it works
 ```mermaid
@@ -595,8 +804,27 @@ When real-time results must be available immediately but authoritative numbers (
 #### Interview angle
 > "Lambda pairs a correct batch layer with a fast speed layer, but duplicated logic drifts. Today I'd prefer Kappa or a unified engine, keeping batch recompute only where billing-grade reconciliation demands it."
 
+#### Sources
+- [Lambda architecture](https://en.wikipedia.org/wiki/Lambda_architecture) — Wikipedia
+- [Questioning the Lambda architecture](https://www.oreilly.com/radar/questioning-the-lambda-architecture/) — Jay Kreps, O'Reilly
+
 ### Kappa architecture — stream-only using Kafka as event log; reprocess historical data by replaying from offset 0
 Kappa architecture uses **one stream processing pipeline** for everything: all data flows through a durable, replayable log (Kafka with long retention or tiered storage), real-time results come from the streaming job, and **reprocessing** (bug fixes, logic changes) is done by **replaying the log** through a new version of the job, with no separate batch layer.
+
+#### Intuition
+One clerk and a complete tape of every transaction. If the method was wrong, a second clerk replays the tape from the start with the corrected method, and you switch to the new results once they catch up.
+
+#### Must know
+- **One streaming pipeline** for everything. There is no separate batch layer.
+- All data sits in a **durable, replayable log** such as Kafka.
+- To fix or change logic, **replay the log** through a new version of the job.
+- Write to a new output, then switch over once it has caught up.
+- It needs long log retention and deterministic, event-time processing.
+
+#### Common mistakes
+- Log retention too short to replay what you need.
+- Logic based on processing time, so a replay gives different results.
+- Replaying at full speed on the production cluster.
 
 #### How it works
 ```mermaid
@@ -641,8 +869,27 @@ It must be durable and replayable for as far back as you may need to reprocess (
 #### Interview angle
 > "I prefer Kappa: one Flink pipeline over a long-retention Kafka log with tiered storage, where a bug fix means replaying into a new versioned table and switching over once it catches up."
 
+#### Sources
+- [Questioning the Lambda architecture](https://www.oreilly.com/radar/questioning-the-lambda-architecture/) — Jay Kreps, O'Reilly
+- [Tiered storage](https://kafka.apache.org/documentation/#tiered_storage) — Apache Kafka docs
+
 ### ELT vs ETL — load raw first then transform (ELT with dbt) vs transform before loading (ETL with SSIS/Informatica)
 **ETL** (extract, transform, load) transforms data in a separate processing tier before loading it into the warehouse. **ELT** (extract, load, transform) loads **raw data first** into a scalable warehouse or lakehouse, then transforms it **inside** with SQL (dbt). Cloud warehouses made ELT the modern default: keep raw data, transform flexibly and version transformations as code.
+
+#### Intuition
+ETL prepares the vegetables before they enter the kitchen. ELT brings them in raw and prepares them inside, where there is plenty of counter space, and keeps the raw ones in case the recipe changes.
+
+#### Must know
+- **ETL**: transform on a separate system, then load the finished tables.
+- **ELT**: **load raw data first**, then transform inside the warehouse with SQL.
+- ELT keeps the raw history, so a metric can be recomputed when its definition changes.
+- **dbt** treats transformations as code: SQL models, tests, lineage.
+- Transform before loading only when you must, for example to mask personal data.
+
+#### Common mistakes
+- An ETL job that discards the raw data, so history cannot be recomputed.
+- Full refreshes of huge tables when incremental models would do.
+- Sensitive data landing raw with no masking.
 
 #### How it works
 ```mermaid
@@ -699,8 +946,27 @@ When regulations or policy forbid landing certain raw data centrally (PII or car
 #### Interview angle
 > "Analytics is ELT: Fivetran or Debezium land raw data, and dbt builds tested incremental models from staging to marts, with PII masked on the way in and raw history kept so definitions can be recomputed."
 
+#### Sources
+- [What is dbt?](https://docs.getdbt.com/docs/introduction) — dbt docs
+- [About incremental models](https://docs.getdbt.com/docs/build/incremental-models) — dbt docs
+
 ### Apache Airflow — workflow orchestration: DAGs, schedulers, workers, metadata DB; define pipelines as code
 Apache Airflow orchestrates **batch workflows as code**: Python-defined **DAGs** of tasks with dependencies, schedules, retries, SLAs, backfills and a UI showing every run. A **scheduler** decides what runs when, **executors and workers** run tasks, and a **metadata database** stores state. It orchestrates work done elsewhere (Spark, dbt, SQL, APIs) and shouldn't do the heavy lifting itself.
+
+#### Intuition
+A project manager with a schedule chart. They do not lay bricks. They know which job must finish before the next starts, chase the ones that fail, and can re-run last Tuesday's work on request.
+
+#### Must know
+- It runs **batch workflows defined as code**: a DAG of tasks with dependencies.
+- A **scheduler** decides what runs when. Workers run the tasks.
+- It provides retries, backfills and a UI showing every run.
+- **It orchestrates. It does not do the heavy processing itself.**
+- Tasks must be **idempotent** and keyed by the run's date, so re-runs are safe.
+
+#### Common mistakes
+- Heavy data processing on the Airflow workers.
+- Tasks that append rather than overwrite, so a re-run duplicates data.
+- Using it for streaming or low-latency events.
 
 #### How it works
 ```mermaid
@@ -756,8 +1022,27 @@ Generally no. Airflow is an orchestrator: tasks should trigger work in systems b
 #### Interview angle
 > "Airflow DAGs orchestrate idempotent, date-partitioned tasks (sensor, Spark on EMR, dbt build, publish) with retries and deferrable sensors. Backfilling a corrected file is just re-running that date."
 
+#### Sources
+- [Architecture overview](https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/overview.html) — Apache Airflow docs
+- [Best practices](https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html) — Apache Airflow docs
+
 ### CDC with Debezium — reads DB WAL (binary log) → publishes change events to Kafka; zero impact on source DB
 Debezium captures **row-level changes from databases' transaction logs** (Postgres WAL via logical decoding, MySQL binlog, MongoDB oplog/change streams, SQL Server CDC, Oracle LogMiner/XStream) and publishes them as events to Kafka (via Kafka Connect) or other sinks (Debezium Server). It's the standard way to feed analytics, search, caches and other services from operational databases. (Phase 7 covers the event-driven usage.)
+
+#### Intuition
+A clerk who reads the bank's own journal and announces each entry to anyone interested. The clerk never asks the tellers to do anything extra. The journal already records every change.
+
+#### Must know
+- It reads the database's **transaction log** and publishes every row change as an event.
+- The application needs no change and there are **no dual writes**.
+- It takes an initial snapshot, then streams changes in commit order.
+- Events are keyed by primary key, so changes to one row stay in order.
+- On Postgres, the **replication slot must be monitored**.
+
+#### Common mistakes
+- A stalled connector whose slot holds WAL until the database disk is full.
+- Calling it "zero impact". It is low impact when run well.
+- Using raw table changes as a public contract, where outbox events fit better.
 
 #### How it works
 ```mermaid
@@ -808,8 +1093,30 @@ Events are keyed by the table's primary key and produced to Kafka partitions by 
 #### Interview angle
 > "Operational data streams through Debezium CDC into Kafka with Avro schemas, feeding the lakehouse, search and caches within minutes. Replication slot lag is alerted on and capped so a stalled connector can't fill the primary's disk."
 
+#### Sources
+- [Debezium connector for PostgreSQL](https://debezium.io/documentation/reference/stable/connectors/postgresql.html) — Debezium docs
+- [Debezium architecture](https://debezium.io/documentation/reference/stable/architecture.html) — Debezium docs
+
 ### ClickHouse — columnar OLAP engine, 100–1000× faster than MySQL for aggregations, real-time ingestion
 ClickHouse is an open-source **columnar OLAP database** built for very fast analytical queries over huge datasets with **real-time ingestion**: vectorised execution, aggressive compression, sparse primary indexes, and the **MergeTree** family of table engines. It's popular for product analytics, observability (logs and metrics), ad-tech and real-time dashboards.
+
+#### Intuition
+A racing car built for one track: adding up huge columns of numbers. It reads only the columns it needs, in big chunks, on every CPU core at once.
+
+#### Must know
+- An open-source **columnar database for fast analytics** with real-time ingestion.
+- Data is stored sorted by the table's `ORDER BY` key, which acts as the main index.
+- **Insert in batches**, not row by row.
+- Materialised views pre-aggregate data as it arrives.
+- Weak at frequent single-row updates and at large joins.
+
+#### Numbers to quote
+- Roughly one batched insert per second per table. Compression of about 10× is common.
+
+#### Common mistakes
+- Many tiny inserts, which cause "too many parts" errors.
+- An `ORDER BY` key that does not match how queries filter.
+- Using it as a transactional database.
 
 #### How it works
 ```mermaid
@@ -861,8 +1168,27 @@ In batches (thousands to hundreds of thousands of rows per insert, roughly one i
 #### Interview angle
 > "For real-time product analytics I'd use ClickHouse: batched Kafka ingestion into MergeTree tables sorted by the common filters, materialised views for per-minute rollups and denormalised wide tables, giving second-level queries over billions of events."
 
+#### Sources
+- [What is ClickHouse?](https://clickhouse.com/docs/intro) — ClickHouse docs
+- [MergeTree table engine](https://clickhouse.com/docs/engines/table-engines/mergetree-family/mergetree) — ClickHouse docs
+
 ### Apache Druid — real-time OLAP: ingest from Kafka, sub-second queries, time-series optimized
 Apache Druid is a distributed **real-time analytics database** designed for **sub-second slice-and-dice queries** over event data at high concurrency: streaming ingestion from Kafka/Kinesis (queryable within seconds), time-partitioned **segments** with columnar storage and bitmap indexes, optional **rollup** at ingestion, and a separation of ingestion, historical and query (broker) nodes.
+
+#### Intuition
+A live scoreboard for event data. Events show up within seconds, the board is organised by time, and thousands of people can watch different slices of it at once.
+
+#### Must know
+- A real-time analytics database for **sub-second queries on event data**.
+- It ingests from Kafka, and data is queryable **within seconds**.
+- Data is split into **time-based segments**, so queries should filter by time.
+- **Rollup** pre-aggregates at ingestion and shrinks the data many times over.
+- Built for **many concurrent users**, such as customer-facing dashboards.
+
+#### Common mistakes
+- Rollup that throws away detail you later need. Keep raw data elsewhere.
+- Queries with no time filter.
+- Expecting warehouse-style joins.
 
 #### How it works
 ```mermaid
@@ -911,8 +1237,27 @@ During ingestion, events with the same timestamp bucket (e.g. minute) and dimens
 #### Interview angle
 > "For high-concurrency, user-facing real-time dashboards I'd consider Druid: Kafka ingestion visible in seconds, per-minute rollup, bitmap indexes and sketches. Raw events stay in the lake for drill-down."
 
+#### Sources
+- [Design](https://druid.apache.org/docs/latest/design/) — Apache Druid docs
+- [Data rollup](https://druid.apache.org/docs/latest/ingestion/rollup) — Apache Druid docs
+
 ### Presto / Trino — federated SQL query engine: query S3, Hive, Cassandra, MySQL with single SQL
 Trino (formerly PrestoSQL) and Presto are **distributed SQL query engines** that query data **where it lives**: S3/Iceberg/Hive tables, MySQL, Postgres, Cassandra, Kafka, Elasticsearch and more, through **connectors**, and can even join across sources in one query. A coordinator plans queries and workers execute them in memory with pipelined, MPP execution. Amazon Athena is built on Presto/Trino.
+
+#### Intuition
+An interpreter who speaks to many storerooms. You ask one question in SQL, and the interpreter fetches the pieces from S3, Postgres and Cassandra and combines them. It owns no storeroom of its own.
+
+#### Must know
+- A **distributed SQL engine** that queries data **where it lives**.
+- **Connectors** reach object storage, relational databases, Kafka and more.
+- One query can join across different sources.
+- It **stores no data** itself: a coordinator plans, workers execute.
+- Amazon Athena is the serverless version.
+
+#### Common mistakes
+- Heavy federated scans against a production OLTP database.
+- Expecting warehouse-level concurrency and guarantees.
+- Slow lake queries that are really a file-layout problem.
 
 #### How it works
 ```mermaid
@@ -961,3 +1306,8 @@ Large scans or joins pushed to an OLTP database can saturate its CPU and I/O and
 
 #### Interview angle
 > "Trino gives analysts interactive SQL over the Iceberg lakehouse, plus occasional federation to replicas, with resource groups per team. It never runs heavy scans against production OLTP."
+
+#### Sources
+- [Trino concepts](https://trino.io/docs/current/overview/concepts.html) — Trino docs
+- [Connectors](https://trino.io/docs/current/connector.html) — Trino docs
+

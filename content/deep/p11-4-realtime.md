@@ -3,6 +3,24 @@
 ### WebSocket upgrade — HTTP Upgrade header (101 Switching Protocols), then full-duplex ws:// protocol
 A WebSocket starts life as an ordinary HTTP/1.1 request carrying `Upgrade: websocket`. If the server agrees, it answers **101 Switching Protocols** and the same TCP (usually TLS) connection becomes a **full-duplex, message-framed** channel. Both sides can then send at any time with ~2–14 bytes of framing overhead, without repeating HTTP headers.
 
+#### Intuition
+A phone call that starts as a text message: "Can we switch to a call?" If the other side agrees, the line stays open and both people can talk whenever they like.
+
+#### Must know
+- It begins as a normal HTTP request with an `Upgrade: websocket` header.
+- The server answers **101 Switching Protocols**, and the same connection becomes a **two-way channel**.
+- After that, either side can send at any time with very little overhead.
+- **Authenticate at the handshake** and check the `Origin` header.
+- Send **heartbeats** (ping/pong) to detect dead connections and keep idle timeouts away.
+
+#### Numbers to quote
+- Ping every 20–30 seconds. Many load balancers drop idle connections after about 60 seconds.
+
+#### Common mistakes
+- No heartbeat, so a dead connection looks alive for minutes.
+- No `Origin` check with cookie auth, which allows cross-site hijacking.
+- No resume on reconnect, so messages sent during the gap are lost.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -61,8 +79,30 @@ Likely half-open connections: the network path died (Wi-Fi switch, NAT timeout) 
 #### Interview angle
 > "Clients upgrade to wss with a short-lived token and an Origin check. Heartbeats every 25 s catch half-open sockets, and reconnects resume from the last sequence number so nothing is silently missed."
 
+#### Sources
+- [The WebSocket protocol (RFC 6455)](https://www.rfc-editor.org/rfc/rfc6455) — IETF
+- [Writing WebSocket servers](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers) — MDN
+
 ### WebSocket scalability — fan-out via Redis Pub/Sub across multiple WebSocket server instances
 Each WebSocket server only knows its own connections. When user A on server 1 messages a room that has users on servers 2 and 3, the message must be **fanned out across instances**. The common pattern is a **pub/sub backplane** (Redis Pub/Sub, Redis Streams, NATS, Kafka): every server subscribes to the channels its connected users care about and pushes received messages to the local sockets.
+
+#### Intuition
+Several post offices, each knowing only its own customers. To reach someone at another office, you put the letter on a shared conveyor belt that every office watches, and each office delivers to its own people.
+
+#### Must know
+- Each server knows **only its own connections**.
+- A **pub/sub backplane** (Redis, NATS, Kafka) carries messages between servers.
+- Every server subscribes for the rooms its users are in and pushes to its local sockets.
+- **Save the message first, then publish.** Pub/sub keeps nothing for offline users.
+- Use sequence numbers, so a reconnecting client can fetch what it missed.
+
+#### Numbers to quote
+- One tuned server holds roughly 100,000 to 1 million idle connections. Fan-out rate is usually the real limit.
+
+#### Common mistakes
+- Relying on pub/sub alone for delivery.
+- All clients reconnecting at once after a deploy, with no jittered backoff.
+- Unbounded send buffers for slow clients, which eat server memory.
 
 #### How it works
 ```mermaid
@@ -120,8 +160,30 @@ Redis Pub/Sub delivers only to currently connected subscribers and keeps nothing
 #### Interview angle
 > "Gateways only hold sockets. Messages are persisted with sequence numbers, then fanned out over sharded pub/sub. Clients backfill gaps on reconnect, and huge rooms switch to batched delivery."
 
+#### Sources
+- [Redis Pub/Sub](https://redis.io/docs/latest/develop/pubsub/) — Redis docs
+- [Core NATS](https://docs.nats.io/learn/core-nats/) — NATS docs
+
 ### Server-Sent Events — HTTP streaming, server pushes events, client auto-reconnects; simpler than WebSocket
 Server-Sent Events (SSE) is a **one-way, server-to-client** stream over a normal HTTP response with `Content-Type: text/event-stream`. The browser's `EventSource` API parses events, **reconnects automatically**, and sends `Last-Event-ID` so the server can resume. It works through ordinary HTTP infrastructure and is ideal for feeds, notifications, progress and LLM token streaming.
+
+#### Intuition
+A radio broadcast over an ordinary web request. The server keeps talking and the browser keeps listening. If the signal drops, the browser tunes back in by itself and says where it stopped.
+
+#### Must know
+- A **one-way stream from server to client** over a normal HTTP response.
+- The browser's `EventSource` **reconnects automatically**.
+- It sends `Last-Event-ID` on reconnect, so the server can **resume**.
+- It works through ordinary HTTP infrastructure and is simpler than WebSocket.
+- Good for notifications, live feeds, progress updates and LLM token streams.
+
+#### Numbers to quote
+- On HTTP/1.1 browsers allow about 6 connections per origin. HTTP/2 removes that limit.
+
+#### Common mistakes
+- A proxy that buffers the response, so events arrive in bursts.
+- No event ids, so nothing can be replayed after a reconnect.
+- Choosing it when the client also needs to send frequent messages.
 
 #### How it works
 ```mermaid
@@ -185,8 +247,30 @@ Give every event a monotonically increasing id (per stream or per user), keep a 
 #### Interview angle
 > "For one-way live updates I'd pick SSE over HTTP/2: ids on every event, a short Redis replay buffer for Last-Event-ID resume, keep-alive comments, and buffering disabled at the proxy."
 
+#### Sources
+- [Using server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events) — MDN
+- [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) — HTML Living Standard
+
 ### Long polling — client holds connection (30s timeout) until event; reconnects immediately after response
 Long polling emulates push over plain request/response: the client sends a request, the server **holds it open** until there is new data or a timeout (~25–30 s), responds, and the client **immediately sends the next request**. It works everywhere (old browsers, strict proxies) and is the classic fallback when WebSocket or SSE aren't available.
+
+#### Intuition
+Asking "anything new?" and the other person staying silent until there is something to say, or until half a minute passes. Then you ask again straight away.
+
+#### Must know
+- The client sends a request and the server **holds it open** until there is data or a timeout.
+- The client **immediately sends the next request**.
+- It works everywhere, so it is the classic **fallback** when WebSocket and SSE are blocked.
+- A **cursor** (`since=`) prevents missing events between requests.
+- The server must be **asynchronous**, or held requests use up all its threads.
+
+#### Numbers to quote
+- Hold for about 25–30 seconds, and keep that below every proxy timeout on the path.
+
+#### Common mistakes
+- A thread-per-request server holding thousands of idle polls.
+- No cursor, so events between two polls are lost.
+- A hold time longer than a proxy timeout, which gives random 504 errors.
 
 #### How it works
 ```mermaid
@@ -243,8 +327,30 @@ Each held request occupies a worker thread for up to the full timeout while doin
 #### Interview angle
 > "Long polling is my compatibility fallback: async handlers, a since-cursor so nothing is missed, batched responses, and a hold time under every proxy timeout."
 
+#### Sources
+- [Known issues and best practices for the use of long polling and streaming in bidirectional HTTP (RFC 6202)](https://www.rfc-editor.org/rfc/rfc6202) — IETF
+- [Long polling](https://javascript.info/long-polling) — javascript.info
+
 ### Real-time presence system — heartbeat every 30s with TTL=60s in Redis; expire = offline; publish change via Pub/Sub
 Presence ("online", "last seen", "typing") is soft state: clients **heartbeat** every ~30 s, the server records the user in Redis with a **TTL of ~60 s** (two missed beats), and an expired key means **offline**. State changes are **published** to the user's contacts or room via pub/sub. It's deliberately eventually consistent: a few seconds of staleness is fine; correctness at huge fan-out matters more.
+
+#### Intuition
+A sign-in sheet that erases your name unless you tick it again every half minute. Nobody has to notice you leaving. If the ticks stop, your name simply disappears.
+
+#### Must know
+- Clients send a **heartbeat**. The server stores "online" with a **short TTL**.
+- If the key expires, the user is **offline**. No logout message is needed.
+- **Publish only changes** (offline → online), never every heartbeat.
+- Send presence only to people who are actually looking at that user.
+- Presence is approximate by design. A few seconds of staleness is fine.
+
+#### Numbers to quote
+- Heartbeat every 30 seconds with a 60-second TTL (two missed beats means offline).
+
+#### Common mistakes
+- Relying on an explicit "I am offline" message, which a crash never sends.
+- Notifying every contact on every change.
+- No grace period, so users on flaky mobile networks flicker on and off.
 
 #### How it works
 ```mermaid
@@ -297,8 +403,27 @@ Disconnects aren't reliable: phones lose signal, apps get killed, gateways crash
 #### Interview angle
 > "Presence is soft state: heartbeats refresh a 60 s TTL, only transitions get published, offline is debounced for flaky mobiles, and updates go only to clients actually viewing that user."
 
+#### Sources
+- [EXPIRE](https://redis.io/docs/latest/commands/expire/) — Redis command reference
+- [Redis Pub/Sub](https://redis.io/docs/latest/develop/pubsub/) — Redis docs
+
 ### Live leaderboard — Redis sorted set: ZADD adds score, ZRANGE gets rank, ZRANK gets position; push via WebSocket
 Redis **sorted sets** keep members ordered by score in a skip list, giving **O(log N)** updates and rank lookups. That makes them the standard tool for live leaderboards: `ZADD`/`ZINCRBY` to update a score, `ZREVRANGE … WITHSCORES` for the top N, `ZREVRANK` for a player's position, with changes pushed to clients via WebSocket or SSE.
+
+#### Intuition
+A scoreboard that re-sorts itself the instant any score changes. You can ask for the top ten or for any one player's position, and both answers come back at once.
+
+#### Must know
+- A Redis **sorted set** keeps members ordered by score.
+- `ZADD` / `ZINCRBY` update a score. `ZREVRANGE` returns the top N. `ZREVRANK` returns one player's rank.
+- All of these are **O(log N)**.
+- Use one key per period (daily, weekly) with a TTL.
+- **Redis is the serving index, not the source of truth.** Keep a durable log of score events.
+
+#### Common mistakes
+- No tie-break rule, so players with equal scores are ordered arbitrarily.
+- Pushing an update to clients on every single score change.
+- Redis as the only copy, so a failover loses the board.
 
 #### How it works
 ```mermaid
@@ -359,8 +484,27 @@ Fold time into the score: score = points × 10^10 + (MAX_TIMESTAMP − achieved_
 #### Interview angle
 > "The leaderboard is a Redis sorted set per period: ZINCRBY on writes, ZREVRANK for my rank, composite scores for ties, a throttled top-N push, and a durable score log to rebuild after failover."
 
+#### Sources
+- [Redis sorted sets](https://redis.io/docs/latest/develop/data-types/sorted-sets/) — Redis docs
+- [ZREVRANK](https://redis.io/docs/latest/commands/zrevrank/) — Redis command reference
+
 ### Real-time collaborative editing — OT (Operational Transformation, Google Docs) vs CRDT (conflict-free, Figma, Notion)
 Collaborative editors let several people edit the same document simultaneously with local, instant edits. Concurrent operations must **converge** to the same result everywhere. **Operational Transformation (OT)** transforms each incoming operation against concurrent ones, usually through a central server that orders operations (Google Docs). **CRDTs** (conflict-free replicated data types) give every element a unique, ordered identity so operations commute and merge in any order without a central arbiter (Yjs, Automerge; Figma uses a CRDT-inspired, server-authoritative model).
+
+#### Intuition
+Two people editing the same sentence at once. OT has a referee who adjusts each edit to account for the other. A CRDT gives every character a permanent name tag, so edits can be merged in any order and still agree.
+
+#### Must know
+- Each user's edits apply **locally at once**, and all copies must **converge** to the same result.
+- **OT** transforms each operation against concurrent ones, usually with a central server ordering them.
+- A **CRDT** gives elements unique ids, so operations merge in any order with no central arbiter.
+- CRDTs support offline and peer-to-peer use, but carry more metadata.
+- Store an operation log plus periodic snapshots.
+
+#### Common mistakes
+- Writing your own transform logic when a proven library exists.
+- Loading a document by replaying its entire history.
+- CRDT tombstones that grow forever with no compaction.
 
 #### How it works
 ```mermaid
@@ -423,8 +567,31 @@ When offline editing or peer-to-peer sync matters (mobile, local-first apps), wh
 #### Interview angle
 > "Edits apply locally and sync over WebSocket to a per-document session server that orders and transforms them (OT), or merges them with a CRDT like Yjs if offline matters, with an op log plus snapshots for fast loads."
 
+#### Sources
+- [Yjs documentation](https://docs.yjs.dev/) — Yjs
+- [Conflict-free replicated data types](https://crdt.tech/) — crdt.tech
+- [How Figma's multiplayer technology works](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/) — Figma blog
+
 ### Online gaming — authoritative server model, UDP for state updates, client-side prediction + reconciliation
 Fast multiplayer games keep an **authoritative server** that simulates the game at a fixed **tick rate** (e.g. 30–128 Hz) and is the only source of truth, which prevents most cheating. Clients send **inputs** (not positions) over **UDP**, apply them immediately with **client-side prediction**, and later **reconcile** with the server's authoritative state. Other players are shown with **interpolation**, and the server uses **lag compensation** for hit detection.
+
+#### Intuition
+A referee who alone decides what really happened. Players do not wait for the whistle to move. They act straight away and get nudged back if the referee disagrees.
+
+#### Must know
+- The **server is authoritative**: it runs the simulation and is the only source of truth.
+- Clients send **inputs, not positions**, which blocks most cheating.
+- **UDP** is used because an old position is worthless once a newer one exists.
+- **Client-side prediction**: apply your own input at once, then **reconcile** with the server's state.
+- Other players are drawn slightly in the past and smoothed (interpolation).
+
+#### Numbers to quote
+- Typical tick rates are 30–128 updates per second.
+
+#### Common mistakes
+- Trusting positions sent by the client.
+- TCP for fast state updates, where one lost packet stalls everything behind it.
+- Sending the full world state to every player on every tick.
 
 #### How it works
 ```mermaid
@@ -478,8 +645,31 @@ The client applies its own inputs immediately and keeps a buffer of inputs with 
 #### Interview angle
 > "The server is authoritative at a fixed tick. Clients send inputs over UDP, predict and reconcile their own movement, interpolate others, and the server rewinds for lag-compensated hits."
 
+#### Sources
+- [Fast-paced multiplayer: client-server game architecture](https://www.gabrielgambetta.com/client-server-game-architecture.html) — Gabriel Gambetta
+- [What every programmer needs to know about game networking](https://gafferongames.com/post/what_every_programmer_needs_to_know_about_game_networking/) — Glenn Fiedler
+- [Source multiplayer networking](https://developer.valvesoftware.com/wiki/Source_Multiplayer_Networking) — Valve developer wiki
+
 ### Real-time location tracking — GPS → WebSocket → geospatial index (Redis GEO or Quadtree) → nearby query
 Ride-hailing and delivery apps track hundreds of thousands of moving devices: drivers send GPS updates every few seconds over a persistent connection, the backend keeps **only the latest position** in an in-memory **geospatial index** (Redis GEO, geohash/H3 cells, or an in-memory quadtree), and serves **nearby queries** ("drivers within 2 km") and live location to riders. History goes to a log for analytics.
+
+#### Intuition
+A control-room map covered in moving pins. Only the newest position of each pin matters. Old positions are swept into a logbook, and "who is near this point?" is answered by looking at the map, not the logbook.
+
+#### Must know
+- Devices send GPS updates every few seconds over a persistent connection.
+- Keep **only the latest position** in an in-memory geospatial index.
+- Send location **history** to a log (Kafka) for analytics.
+- A nearby query finds candidates by radius, then **ranks them by real travel time**.
+- Shard the index by city or cell, and expire drivers who stop reporting.
+
+#### Numbers to quote
+- 500,000 drivers × one update every 4 seconds = 125,000 writes per second.
+
+#### Common mistakes
+- Writing every GPS update to a relational database.
+- Matching by straight-line distance across a river or a one-way road.
+- Stale drivers left in the index after they go offline.
 
 #### How it works
 ```mermaid
@@ -534,8 +724,30 @@ PostGIS can run the spatial queries, but 100k+ updates per second of constantly 
 #### Interview angle
 > "Live positions live only in a city-sharded Redis GEO or H3 index with last-seen TTLs, history streams to Kafka, and nearby search fetches candidates by radius then ranks them by real ETA."
 
+#### Sources
+- [GEOSEARCH](https://redis.io/docs/latest/commands/geosearch/) — Redis command reference
+- [H3: Uber's hexagonal hierarchical spatial index](https://www.uber.com/blog/h3/) — Uber engineering
+
 ### Live streaming — RTMP ingest → transcode (FFmpeg) → HLS segmentation → CDN origin → edge → viewer
 A live-streaming pipeline takes one broadcaster's feed and delivers it to many viewers: the encoder pushes **RTMP/SRT** to an **ingest** server, **transcoders** (FFmpeg/GPU) produce several renditions, a **packager** cuts them into short **HLS/DASH segments** with playlists, an **origin** serves them, and a **CDN** caches segments at the edge for millions of viewers. Latency is usually 5–30 s (standard HLS) or 2–5 s (LL-HLS/LL-DASH). Interactive sub-second use cases use **WebRTC**.
+
+#### Intuition
+A live match sent out as a string of short video files, a few seconds each. Because they are ordinary files, CDN servers around the world can copy and hand them out, so the broadcaster does not serve each viewer directly.
+
+#### Must know
+- Pipeline: **ingest → transcode → package → origin → CDN → viewer**.
+- The broadcaster pushes one stream. Transcoders produce several quality levels.
+- The packager cuts video into **short HTTP segments** with a playlist (HLS or DASH).
+- Segments are plain files, so the **CDN does the fan-out** to millions.
+- Shorter segments lower the delay but leave less buffer. WebRTC is for sub-second needs.
+
+#### Numbers to quote
+- Standard HLS runs 5–30 seconds behind live. Low-latency HLS runs 2–5 seconds behind.
+
+#### Common mistakes
+- Pushing video over a WebSocket to every viewer.
+- A single ingest path with no backup feed.
+- No origin shield, so every CDN edge hits the origin at the start of a big event.
 
 #### How it works
 ```mermaid
@@ -588,8 +800,27 @@ Pushing video bytes over millions of individual connections means your servers h
 #### Interview angle
 > "Ingest over SRT with redundancy, transcode an ABR ladder, package short CMAF segments, and let an origin shield plus multi-CDN do the fan-out. LL-HLS gets us to a few seconds of latency."
 
+#### Sources
+- [HTTP Live Streaming (RFC 8216)](https://www.rfc-editor.org/rfc/rfc8216) — IETF
+- [HTTP Live Streaming](https://developer.apple.com/streaming/) — Apple Developer
+
 ### Adaptive bitrate streaming — HLS/DASH: multiple quality levels; client switches based on bandwidth
 Adaptive bitrate (ABR) streaming encodes the same video at several **quality levels** (a "bitrate ladder", e.g. 240p to 4K), each cut into aligned short segments, described by a manifest (**HLS** `.m3u8` or **DASH** `.mpd`). The **player** measures throughput and buffer level and picks the rendition for each next segment, switching up or down seamlessly to avoid stalls.
+
+#### Intuition
+A video kept in several sizes, like clothes in S, M, L and XL. Every few seconds the player checks the network and picks the size that will arrive in time, so the picture gets blurrier but does not stop.
+
+#### Must know
+- The same video is encoded at **several quality levels** (a bitrate ladder).
+- Each level is cut into short segments that line up across levels.
+- A **manifest** lists the levels. The **player chooses** the level for each next segment.
+- The choice uses measured bandwidth and how much video is buffered.
+- Segments must start on **aligned keyframes**, so switches are seamless.
+
+#### Common mistakes
+- Starting at the highest quality, which stalls at once on a slow network.
+- Switching too eagerly, so quality flickers up and down.
+- One ladder for all content, when cartoons need far fewer bits than sport.
 
 #### How it works
 ```mermaid
@@ -650,8 +881,28 @@ A segment can only be decoded independently if it starts with a keyframe. If all
 #### Interview angle
 > "Video is encoded into a per-title ABR ladder with aligned keyframes and CMAF segments. The player starts low and switches using buffer plus throughput, which minimises rebuffering without wasting bandwidth."
 
+#### Sources
+- [HTTP Live Streaming (RFC 8216)](https://www.rfc-editor.org/rfc/rfc8216) — IETF
+- [Per-title encode optimization](https://netflixtechblog.com/per-title-encode-optimization-7e99442b62a2) — Netflix tech blog
+- [DASH Industry Forum](https://dashif.org/) — DASH-IF
+
 ### Real-time counters at scale — Redis INCR + async batch flush to DB every N seconds; eventual consistency
 Counting views, likes or clicks at high rates directly in a relational database turns every event into a row lock on the same hot row. Instead, increment in memory (**Redis `INCR`/`HINCRBY`**, or local in-process counters), and **flush aggregated deltas** to the durable database every few seconds. Readers see near-real-time values from Redis; the database is **eventually consistent**.
+
+#### Intuition
+A doorman with a hand clicker. He clicks for every visitor, and only writes the total into the ledger every few seconds. Writing in the ledger for each person would cause a queue at the door.
+
+#### Must know
+- A database `UPDATE` per event makes every writer fight over **one hot row**.
+- Increment **in memory** (Redis `INCR`), which is fast and atomic.
+- **Flush the accumulated delta** to the database every few seconds.
+- Readers see near-real-time counts from Redis. The database lags slightly.
+- For money-grade counts, use a durable log (Kafka) and not volatile counters.
+
+#### Common mistakes
+- `views = views + 1` in SQL for every view of a viral item.
+- A flush that reads and then resets in two steps, which loses or double counts increments.
+- Using lossy counters for billing or ad impressions.
 
 #### How it works
 ```mermaid
@@ -703,3 +954,8 @@ Make read-and-reset atomic: use `GETDEL`, or a Lua script that reads the delta a
 
 #### Interview angle
 > "Hot counters increment in Redis after local one-second aggregation and flush atomically to the database every few seconds. Billing-grade counts go through Kafka with exactly-once aggregation instead."
+
+#### Sources
+- [INCR](https://redis.io/docs/latest/commands/incr/) — Redis command reference
+- [HINCRBY](https://redis.io/docs/latest/commands/hincrby/) — Redis command reference
+
