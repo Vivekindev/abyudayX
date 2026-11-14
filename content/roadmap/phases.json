@@ -727,7 +727,7 @@
      "Lambda — serverless functions, event-driven, 15-min max, 10GB max memory, pay per GB-second",
      "ECS — Docker container orchestration, Fargate (serverless) vs EC2 launch type",
      "EKS — managed Kubernetes, control plane managed by AWS",
-     "S3 — object storage: bucket + key model, 5TB max object, strong consistency since 2021",
+     "S3 — object storage: bucket + key model, 50TB max object, strong consistency since 2021",
      "S3 features — versioning, lifecycle policies, presigned URLs (time-limited access), multipart upload, replication, S3 Select",
      "EBS — block storage attached to EC2, like a hard drive; one AZ, snapshot to S3",
      "EFS — managed NFS, shared file system across multiple EC2 instances in same region",

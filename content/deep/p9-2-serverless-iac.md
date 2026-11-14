@@ -3,6 +3,24 @@
 ### Lambda cold starts — JVM/Python faster than Java; reduce with provisioned concurrency, SnapStart
 A **cold start** happens when Lambda must create a new execution environment: download your code, start the runtime, and run your initialisation code before handling the request. It adds latency, typically ~100–500 ms for Node/Python/Go and **1–6 s for Java/.NET** without optimisation. Warm environments are reused for subsequent requests.
 
+#### Intuition
+Starting a car on a cold morning. The first trip needs the engine to warm up. Trips straight after it start instantly, because the engine is still warm.
+
+#### Must know
+- A **cold start** is the extra delay when Lambda must create a new environment: load the code, start the runtime, run your init code.
+- After that the environment is **reused warm** for later requests.
+- Java and .NET are the slowest to start. Node, Python and Go are much faster.
+- **Provisioned concurrency** keeps environments pre-warmed, for an hourly cost.
+- **SnapStart** restores from a snapshot taken after init, which cuts start time sharply.
+
+#### Numbers to quote
+- Cold start is roughly 100–500 ms for Node, Python and Go, and 1–6 seconds for Java or .NET with no optimisation.
+
+#### Common mistakes
+- A heavy framework and a large package on a latency-critical function.
+- Generating unique ids or random seeds during init with SnapStart, so every copy shares them.
+- Paying for provisioned concurrency all day when traffic is only busy for a few hours.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -61,8 +79,31 @@ Anything initialised before the snapshot is cloned into every restored environme
 #### Interview angle
 > "For Java Lambdas I enable SnapStart with re-seeding hooks and add scheduled provisioned concurrency on latency-critical paths. If traffic is steady and latency-critical, I'd move to containers instead."
 
+#### Sources
+- [Understanding the Lambda execution environment lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html) — AWS Lambda developer guide
+- [Improving startup performance with Lambda SnapStart](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html) — AWS Lambda developer guide
+
 ### Lambda concurrency — reserved concurrency (cap), provisioned concurrency (pre-warmed)
 Lambda concurrency is the number of **requests being processed at the same moment** (≈ requests/s × duration). It's bounded by the **account regional limit** (default 1,000, raisable) shared by all functions. **Reserved concurrency** guarantees and caps a function's share. **Provisioned concurrency** keeps a number of environments **pre-initialised** to avoid cold starts.
+
+#### Intuition
+A shared office with a fixed number of desks. Reserving desks for one team guarantees them a place and also stops them taking more. Pre-booking desks with the computers already switched on is a different thing.
+
+#### Must know
+- **Concurrency** = requests being handled at the same moment ≈ requests per second × duration.
+- All functions in a region share one **account limit**.
+- **Reserved concurrency**: a guaranteed share for a function, and also its hard cap.
+- **Provisioned concurrency**: environments kept warm to avoid cold starts.
+- Over the limit, requests are **throttled**.
+
+#### Numbers to quote
+- The default account limit is 1,000 concurrent executions per region, and can be raised.
+- 500 requests/s × 0.3 s = 150 concurrent executions.
+
+#### Common mistakes
+- Mixing up reserved (a cap) and provisioned (pre-warmed).
+- One noisy function using the whole account pool and throttling a critical one.
+- Forgetting that a slow dependency doubles duration and so doubles concurrency.
 
 #### How it works
 ```mermaid
@@ -109,8 +150,31 @@ It caps how many instances a function can run, which limits the load it can put 
 #### Interview angle
 > "Concurrency is RPS times duration. Critical Lambdas get reserved concurrency so batch functions can't starve them, downstream-heavy functions are capped, and provisioned concurrency is scheduled for latency-sensitive paths."
 
+#### Sources
+- [Understanding Lambda function scaling](https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html) — AWS Lambda developer guide
+- [Configuring reserved concurrency for a function](https://docs.aws.amazon.com/lambda/latest/dg/configuration-concurrency.html) — AWS Lambda developer guide
+- [Configuring provisioned concurrency for a function](https://docs.aws.amazon.com/lambda/latest/dg/provisioned-concurrency.html) — AWS Lambda developer guide
+
 ### Lambda + SQS — reserved concurrency = backpressure; SQS retains messages, Lambda scales
 Combining SQS with Lambda gives a robust, serverless **buffered processing** pipeline: SQS absorbs bursts and retains messages, Lambda's event source mapping polls and invokes functions in batches, and **concurrency limits act as backpressure** (messages simply wait in the queue). Failures retry automatically, and poison messages go to a DLQ.
+
+#### Intuition
+A waiting room in front of a clinic with a fixed number of doctors. A sudden crowd simply waits in the room. The doctors keep a steady pace, and nobody is turned away.
+
+#### Must know
+- **SQS buffers** the burst. Lambda polls the queue and processes messages in batches.
+- A **concurrency cap acts as backpressure**: extra messages just wait in the queue.
+- Set **maximum concurrency** on the event source mapping to protect the downstream system.
+- Return **partial batch failures** so only the failed messages are retried.
+- Delivery is at-least-once, so the handler must be idempotent. Add a DLQ.
+
+#### Numbers to quote
+- Visibility timeout at least 6 × the function timeout.
+
+#### Common mistakes
+- A visibility timeout shorter than processing time, which causes duplicates.
+- One bad message failing the whole batch again and again.
+- No DLQ, so a poison message is retried until it expires.
 
 #### How it works
 ```mermaid
@@ -162,8 +226,30 @@ If a message becomes visible again while the original invocation is still runnin
 #### Interview angle
 > "Bursty async work goes through SQS into Lambda: maximum concurrency matched to the downstream's capacity, visibility timeout at six times the function timeout, partial batch failures, a DLQ and idempotent handlers."
 
+#### Sources
+- [Using Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html) — AWS Lambda developer guide
+- [Handling errors for an SQS event source in Lambda](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html) — AWS Lambda developer guide
+
 ### Step Functions — stateful serverless workflows: sequential, parallel, wait, retry, catch
 AWS Step Functions orchestrates multi-step workflows as **state machines** (Amazon States Language): task steps (Lambda, ECS, 200+ AWS SDK integrations), **choice**, **parallel**, **map** (fan-out over items), **wait** (up to a year), and built-in **retry and catch** with backoff. State and execution history are durable and visible, which makes it ideal for sagas and long-running processes.
+
+#### Intuition
+A flowchart that runs itself. Each box is a step, the arrows say what comes next, and the chart remembers where it is, even if a step takes three days or fails and must be retried.
+
+#### Must know
+- It orchestrates multi-step workflows as a **state machine** with durable state.
+- Built-in **retry with backoff and catch**, plus choice, parallel, map and wait states.
+- Every execution's history is visible, which makes it a natural fit for **sagas**.
+- **Standard** workflows: long-running, exactly-once steps. **Express**: short, high-volume, at-least-once.
+- A task can pause for a callback, such as a human approval.
+
+#### Numbers to quote
+- Standard runs up to 1 year. Express runs up to 5 minutes. State payload limit 256 KB.
+
+#### Common mistakes
+- A Standard workflow for very high-volume, chatty flows, which is billed per transition.
+- Passing large payloads between states. Pass an S3 reference.
+- Tasks that are not idempotent, although they are retried.
 
 #### How it works
 ```mermaid
@@ -216,8 +302,30 @@ Standard for long-running, auditable business processes needing exactly-once ste
 #### Interview angle
 > "Long-running sagas like loan disbursement run on Step Functions Standard: retries, catches into compensations, task-token waits for human approval and full execution history. High-volume short flows use Express."
 
+#### Sources
+- [What is Step Functions?](https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html) — AWS Step Functions developer guide
+- [Choosing workflow type in Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html) — AWS Step Functions developer guide
+
 ### EventBridge — serverless event bus: route events from AWS services and SaaS to Lambda/SQS
 Amazon EventBridge is a serverless **event bus** that routes events from your apps, **AWS services** (S3, EC2, CodePipeline…) and **SaaS partners** (Stripe, Zendesk, Datadog…) to targets (Lambda, SQS, Step Functions, API destinations, other buses) using **content-based rules**. It also offers schema registry, **archive and replay**, cross-account buses, Pipes (point-to-point with filtering and enrichment) and Scheduler.
+
+#### Intuition
+A mail sorting office with rules. Every letter arrives at one place, the office reads what is written on it, and copies go to whichever departments have asked for that kind of letter.
+
+#### Must know
+- A serverless **event bus**. Events come from your apps, AWS services and SaaS partners.
+- **Rules match on event content** and route to targets: Lambda, SQS, Step Functions, HTTP endpoints.
+- **Archive and replay** lets a new consumer catch up on past events.
+- It gives **no ordering guarantee** and lower throughput than Kafka or Kinesis.
+- Put a DLQ on each target.
+
+#### Numbers to quote
+- Maximum event size 1 MB (raised from 256 KB in January 2026).
+
+#### Common mistakes
+- A rule pattern that silently matches nothing, with no alarm on failed invocations.
+- Consumers that depend on event order.
+- Using it as a high-throughput stream.
 
 #### How it works
 ```mermaid
@@ -237,7 +345,7 @@ Rule patterns support prefix, numeric ranges, exists, anything-but and so on. Ta
 An e-commerce company uses a custom bus for domain events: `OrderPlaced` routes to fulfilment (SQS), high-value Indian orders route to a fraud-review Step Function, and all events are archived for 90 days. When a new loyalty service launched, they replayed the last 30 days of `OrderPlaced` from the archive to backfill points. Stripe payment events arrive via the partner integration with no webhook endpoint to maintain.
 
 #### Trade-offs
-Low-ops routing, rich filtering, SaaS integrations and replay, but higher latency (tens to hundreds of ms) and lower per-bus throughput than Kafka or Kinesis, no ordering guarantees, and 256 KB events.
+Low-ops routing, rich filtering, SaaS integrations and replay, but higher latency (tens to hundreds of ms) and lower per-bus throughput than Kafka or Kinesis, no ordering guarantees, and events up to 1 MB (256 KB before 2026).
 
 #### Problems & fixes
 | Symptom | Cause | Fix |
@@ -265,8 +373,31 @@ If domain events were archived, the new consumer's rule can receive replayed his
 #### Interview angle
 > "For AWS-centric event routing, EventBridge gives content-based rules, SaaS sources, DLQs and archive-and-replay to backfill new services. High-throughput ordered streams go on Kafka."
 
+#### Sources
+- [What is Amazon EventBridge?](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-what-is.html) — Amazon EventBridge user guide
+- [Archiving and replaying events](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-archive.html) — Amazon EventBridge user guide
+- [Increased 1 MB payload size support in Amazon EventBridge](https://aws.amazon.com/about-aws/whats-new/2026/01/amazon-eventbridge-increases-event-payload-size-256-kb-1-mb) — AWS What's New
+
 ### Terraform — declarative IaC: resources, providers, state file (lock with S3 + DynamoDB)
 Terraform (and its open fork OpenTofu) is a **declarative infrastructure-as-code** tool: you describe desired resources in HCL, **providers** translate them into API calls (AWS, GCP, Kubernetes, Datadog…), and a **state file** records what exists so Terraform can compute diffs. Remote state with **locking** makes team use safe.
+
+#### Intuition
+An architect's drawing plus a site inventory. You draw what should exist. Terraform compares the drawing with its inventory of what is already built and does only the work needed to close the gap.
+
+#### Must know
+- You **declare the desired infrastructure** in code. Terraform works out the changes.
+- **Providers** translate resources into API calls for AWS, GCP, Kubernetes and others.
+- The **state file** records what exists. Without it Terraform cannot compute a diff.
+- Keep state **remote, locked and encrypted**. It can contain secrets.
+- Split state per environment and component to limit the blast radius.
+
+#### Numbers to quote
+- Since Terraform 1.10 the S3 backend can lock natively (`use_lockfile`). DynamoDB locking is deprecated.
+
+#### Common mistakes
+- Local or unlocked state, so two applies corrupt each other.
+- One giant state for everything.
+- Changing resources in the console, which creates drift.
 
 #### How it works
 ```mermaid
@@ -284,7 +415,7 @@ terraform {
     bucket         = "acme-tfstate-prod"
     key            = "network/vpc.tfstate"
     region         = "ap-south-1"
-    dynamodb_table = "tf-locks"          # state locking (newer versions also support use_lockfile)
+    dynamodb_table = "tf-locks"          # legacy locking, deprecated since Terraform 1.11: prefer use_lockfile = true (S3 native)
     encrypt        = true
   }
 }
@@ -332,8 +463,27 @@ Use a `moved` block (`moved { from = aws_s3_bucket.old to = aws_s3_bucket.new }`
 #### Interview angle
 > "Infrastructure is Terraform: versioned modules, split remote state with locking and encryption, plans posted on PRs, applies from CI via OIDC roles, policy checks and nightly drift detection."
 
+#### Sources
+- [State](https://developer.hashicorp.com/terraform/language/state) — Terraform docs
+- [Backend type: s3](https://developer.hashicorp.com/terraform/language/backend/s3) — Terraform docs
+
 ### Terraform plan/apply workflow — preview changes before applying; destroy with care
 Terraform's core workflow is **`init` → `plan` → `apply`**: `plan` computes and shows exactly what will be created, updated in place, **replaced** or destroyed, and `apply` executes that plan. Reviewing plans (especially replacements and destroys) is the main safety mechanism. `destroy` removes everything a configuration manages.
+
+#### Intuition
+A builder's quote before the work starts. It lists exactly what will be built, altered or knocked down. You read it, sign it, and the builder does precisely what was on the quote.
+
+#### Must know
+- The workflow is **init → plan → apply**.
+- **`plan` shows what will be created, changed, replaced or destroyed.** Reading it is the main safety check.
+- `-/+` means **destroy and recreate**. On a database that means data loss.
+- Save the plan to a file and **apply that exact plan** in CI.
+- Guard stateful resources with `prevent_destroy` and deletion protection.
+
+#### Common mistakes
+- Approving a plan without reading the replacements and destroys.
+- Re-planning at apply time, so something different from the reviewed plan is applied.
+- Huge plans from a single giant state that nobody can review.
 
 #### How it works
 ```mermaid
@@ -389,8 +539,27 @@ Between review and apply, state or code could change (another merge, drift), pro
 #### Interview angle
 > "Every change gets a plan posted on the PR, a human reviews any replace or destroy, and CI applies exactly that saved plan, with prevent_destroy and deletion protection on stateful resources."
 
+#### Sources
+- [Command: plan](https://developer.hashicorp.com/terraform/cli/commands/plan) — Terraform docs
+- [The core Terraform workflow](https://developer.hashicorp.com/terraform/intro/core-workflow) — Terraform docs
+
 ### CloudFormation — AWS-native IaC: stacks, change sets, drift detection
 AWS CloudFormation is AWS's native IaC service: you declare resources in YAML/JSON templates (or generate them with **CDK**), deploy them as **stacks**, preview changes with **change sets**, and detect manual changes with **drift detection**. AWS manages the state and rollback for you.
+
+#### Intuition
+Terraform's idea, run by AWS itself. You hand over the drawing, and AWS keeps the inventory, does the building, and puts things back the way they were if a step fails.
+
+#### Must know
+- AWS's own infrastructure-as-code service. Templates are deployed as **stacks**.
+- **AWS stores the state** and **rolls back automatically** on failure.
+- A **change set** previews what an update will do.
+- **Drift detection** finds manual changes. **StackSets** deploy to many accounts and regions.
+- **CDK** generates templates from real programming languages.
+
+#### Common mistakes
+- No `DeletionPolicy` on a database, so a replacement deletes the data.
+- Editing stack resources by hand, then getting stuck in a failed rollback.
+- Choosing it for a multi-cloud setup, where Terraform fits better.
 
 #### How it works
 ```mermaid
@@ -441,8 +610,27 @@ Set `DeletionPolicy: Snapshot` (or Retain) and `UpdateReplacePolicy: Snapshot` o
 #### Interview angle
 > "In AWS-only shops I'd use CDK synthesised to CloudFormation: change sets reviewed in pipelines, Snapshot deletion and replace policies on data, StackSets for account baselines and drift detection to catch console edits."
 
+#### Sources
+- [What is CloudFormation?](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html) — AWS CloudFormation user guide
+- [Update CloudFormation stacks using change sets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html) — AWS CloudFormation user guide
+
 ### Ansible — configuration management: agentless, idempotent YAML playbooks
 Ansible automates **configuration management and orchestration** over SSH (or WinRM) with **no agents**: YAML **playbooks** describe desired state using idempotent **modules** (install packages, template configs, manage services, users and files). Running a playbook twice produces the same result. Roles and inventories organise it at scale.
+
+#### Intuition
+A checklist a caretaker walks round with: "is nginx installed? is this config file correct?" Anything already right is left alone. Walking round twice changes nothing the second time.
+
+#### Must know
+- It **configures what runs on machines**: packages, config files, services, users.
+- **Agentless**: it connects over SSH. Nothing is installed on the hosts.
+- Playbooks are YAML, built from **idempotent** modules: running twice gives the same result.
+- **Terraform provisions the infrastructure. Ansible configures it.**
+- Today it is often used to bake machine images, not to change live servers.
+
+#### Common mistakes
+- Raw `shell` or `command` tasks that are not idempotent.
+- Secrets in plain YAML with no Ansible Vault.
+- Changing live servers by hand between runs, which causes drift.
 
 #### How it works
 ```mermaid
@@ -505,8 +693,27 @@ Running a task repeatedly yields the same end state, and it only reports "change
 #### Interview angle
 > "Terraform provisions and Ansible configures. For new workloads, Ansible runs inside Packer to bake immutable AMIs rather than mutating live servers, with Vault-encrypted secrets and idempotent modules."
 
+#### Sources
+- [Introduction to Ansible](https://docs.ansible.com/ansible/latest/getting_started/introduction.html) — Ansible docs
+- [Ansible playbooks](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_intro.html) — Ansible docs
+
 ### Container registry — ECR (AWS), Docker Hub, GCR, Harbor (self-hosted)
 A container registry **stores and distributes container images** (and other OCI artifacts like Helm charts and SBOMs). Production registries add **access control**, **vulnerability scanning**, **immutability**, **replication**, **lifecycle policies** and **signature verification**. Options: Amazon ECR, Google Artifact Registry, Azure ACR, GitHub Container Registry, Docker Hub, and self-hosted Harbor.
+
+#### Intuition
+A warehouse for sealed, labelled boxes. Builders drop boxes off, clusters collect them, and the warehouse checks who may do either and whether a box has been tampered with.
+
+#### Must know
+- A registry **stores and distributes container images**.
+- Tag images by **commit SHA** and deploy by **digest**, which identifies the exact content.
+- Make tags **immutable**, so a tag can never point to different code later.
+- **Scan on push** and **sign images**. Let clusters admit only signed images.
+- Add lifecycle rules, and mirror public base images.
+
+#### Common mistakes
+- Deploying `latest` or any other mutable tag.
+- Anonymous pulls from Docker Hub in CI, which hit rate limits.
+- No lifecycle policy, so old images pile up and cost money.
 
 #### How it works
 ```mermaid
@@ -553,8 +760,28 @@ Minimal pinned base images (pulled via a trusted mirror), dependency and image s
 #### Interview angle
 > "Images go to ECR with immutable SHA tags, are scanned on push, signed with cosign and pulled over VPC endpoints. Clusters admit only signed images, deployed by digest."
 
+#### Sources
+- [What is Amazon Elastic Container Registry?](https://docs.aws.amazon.com/AmazonECR/latest/userguide/what-is-ecr.html) — Amazon ECR user guide
+- [Signing containers](https://docs.sigstore.dev/cosign/signing/signing_with_containers/) — Sigstore docs
+- [Harbor documentation](https://goharbor.io/docs/) — Harbor
+
 ### GitOps with ArgoCD — desired state in Git, ArgoCD reconciles cluster continuously
 Argo CD is the most widely used GitOps controller for Kubernetes: it watches Git repositories (plain manifests, Helm, Kustomize), compares them with live cluster state, shows diffs and health, and **syncs** automatically or on approval, with **self-heal** to revert drift. (Phase 8 covers GitOps principles.)
+
+#### Intuition
+A gardener with a photo of how the garden should look. They walk round all day comparing garden and photo, and put back anything that has moved. To change the garden, you change the photo.
+
+#### Must know
+- Argo CD **watches a Git repository** and compares it with the live cluster.
+- It **syncs** the cluster to match Git, automatically or on approval.
+- **Self-heal** reverts manual changes. **Prune** removes resources deleted from Git.
+- An **Application** maps a repository path to a cluster and namespace.
+- Rollback is reverting the commit.
+
+#### Common mistakes
+- Setting `replicas` in Git while an autoscaler also changes it, so the app flaps out of sync.
+- Running Argo CD with one all-powerful project and no per-team limits.
+- Plain-text secrets in the repository.
 
 #### How it works
 ```mermaid
@@ -614,8 +841,30 @@ The Deployment manifest in Git sets `replicas`, while the HPA changes the live r
 #### Interview angle
 > "Argo CD ApplicationSets deploy every service from Git with auto-sync, prune and self-heal, AppProjects scoping each team, and sync waves running migrations before the rollout."
 
+#### Sources
+- [Core concepts](https://argo-cd.readthedocs.io/en/stable/core_concepts/) — Argo CD docs
+- [Automated sync policy](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/) — Argo CD docs
+
 ### CI/CD stages — build → unit test → integration test → security scan → artifact publish → deploy to staging → smoke test → promote to production
 A mature CI/CD pipeline moves every change through a predictable sequence of **quality and security gates** to production, building the artifact once and promoting it. Each stage should fail fast and give clear feedback, and later stages add confidence with more realistic environments. (Phase 8 covers pipeline principles.)
+
+#### Intuition
+Airport security in stages. The quick, cheap checks come first and turn most problems away early. The slower, thorough checks come later, for the few that got through.
+
+#### Must know
+- Order the stages **fast and cheap first**: build, unit tests, then integration, security, staging, production.
+- **Fail fast**: a failure stops the pipeline at that stage.
+- **Build the artifact once** and promote that same artifact through every environment.
+- Production rollout is progressive (canary) with **automatic rollback**.
+- Match the gates to the risk: strict for payments, lighter for internal tools.
+
+#### Numbers to quote
+- Keep pull-request feedback under about 10 minutes.
+
+#### Common mistakes
+- Slow end-to-end tests blocking every pull request.
+- Security findings so noisy that everyone ignores the gate.
+- Staging that differs from production in configuration or data shape.
 
 #### How it works
 ```mermaid
@@ -673,3 +922,9 @@ Block on fast, high-signal checks: compile, unit tests, critical-severity securi
 
 #### Interview angle
 > "Every change flows build, unit, integration and contract, security scans, a signed image with an SBOM, staging plus smoke tests, then a canaried production rollout with automatic rollback, with gates matched to risk."
+
+#### Sources
+- [Deployment pipeline](https://martinfowler.com/bliki/DeploymentPipeline.html) — Martin Fowler
+- [Continuous delivery](https://dora.dev/capabilities/continuous-delivery/) — DORA
+- [Supply-chain levels for software artifacts](https://slsa.dev/) — SLSA
+

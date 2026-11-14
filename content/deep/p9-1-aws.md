@@ -3,6 +3,24 @@
 ### EC2 — VMs, instance types (compute/memory/storage-optimized), placement groups, AMI
 Amazon EC2 provides **virtual machines** (instances) in many **types and sizes**, launched from **AMIs** (machine images) into VPC subnets. You choose the instance family for the workload, the purchase model for cost, and placement for performance or resilience.
 
+#### Intuition
+Renting a computer by the hour. You pick the size and shape (more CPU, more memory or faster disk), choose a ready-made disk image to boot from, and hand it back when you are done.
+
+#### Must know
+- EC2 is **virtual machines on demand**, launched from an **AMI** (a machine image).
+- Pick the **instance family for the bottleneck**: C for CPU, R for memory, I for fast local disk, G/P for GPUs, M/T for general use.
+- Graviton (ARM) instances give better price-performance for most Linux workloads.
+- Mix purchase models: Savings Plans for the steady baseline, Spot for interruptible work, On-Demand for the rest.
+- Run fleets in an **Auto Scaling Group across several AZs**.
+
+#### Numbers to quote
+- Savings Plans save up to about 70%. Spot saves up to about 90% but can be reclaimed at 2 minutes' notice.
+
+#### Common mistakes
+- Burstable T instances for steady CPU load, which run out of credits and slow down.
+- Everything On-Demand and over-sized.
+- Patching servers by hand, when the fix is a new AMI and a replacement.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -58,8 +76,31 @@ Right-size instances from utilisation data, move to Graviton, cover the steady b
 #### Interview angle
 > "EC2 fleets run from immutable AMIs in multi-AZ Auto Scaling Groups on Graviton, with the baseline on Savings Plans, burst capacity on diversified Spot, and placement groups only where latency or rack awareness matters."
 
+#### Sources
+- [Amazon EC2 instance types](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html) — Amazon EC2 user guide
+- [Placement groups](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/placement-groups.html) — Amazon EC2 user guide
+
 ### Lambda — serverless functions, event-driven, 15-min max, 10GB max memory, pay per GB-second
 AWS Lambda runs your code **in response to events** (HTTP via API Gateway or function URLs, S3, SQS, Kinesis, EventBridge, DynamoDB Streams, schedules) without managing servers. It scales per request, runs up to **15 minutes** per invocation with up to **10 GB memory** (CPU scales with memory), and bills per request plus GB-second of execution.
+
+#### Intuition
+A taxi against owning a car. You pay only for the trips you take, a taxi appears when you call, and you never think about parking or servicing. For a daily long commute, owning becomes cheaper.
+
+#### Must know
+- You upload a function. AWS runs it **in response to an event** and scales it per request.
+- **No servers to manage, and no cost when idle.**
+- Three invocation styles: synchronous (API), asynchronous (S3, SNS, EventBridge, with retries), and polling (SQS, Kinesis).
+- Functions are stateless, so handlers must be idempotent and state lives elsewhere.
+- Steady high traffic is usually cheaper on containers.
+
+#### Numbers to quote
+- Maximum run time 15 minutes. Maximum memory 10 GB. Billed per request and per GB-second.
+- Asynchronous invocations are retried twice before going to a DLQ or failure destination.
+
+#### Common mistakes
+- No DLQ or failure destination on asynchronous invocations, so failed events vanish.
+- High concurrency opening thousands of database connections. Use RDS Proxy.
+- Using it for long-running or latency-critical paths that cold starts will hurt.
 
 #### How it works
 ```mermaid
@@ -86,7 +127,7 @@ No servers, automatic scaling and fine-grained billing, but cold starts, a 15-mi
 #### Problems & fixes
 | Symptom | Cause | Fix |
 |---|---|---|
-| Latency spikes | cold starts | provisioned concurrency, SnapStart (Java), smaller packages |
+| Latency spikes | cold starts | provisioned concurrency, SnapStart (Java, Python, .NET), smaller packages |
 | DB connection exhaustion | high concurrency | RDS Proxy, reserved concurrency |
 | Lost async events | no DLQ/destinations | on-failure destinations, DLQ, alarms |
 | Whole SQS batch retried for one bad message | no partial batch response | ReportBatchItemFailures |
@@ -110,8 +151,27 @@ Synchronous: the caller gets the error and decides on retries. Asynchronous: Lam
 #### Interview angle
 > "Spiky event-driven work like PDF rendering runs on Lambda with reserved concurrency to protect downstreams, DLQs or on-failure destinations, and idempotent handlers. Steady high-QPS APIs go on containers."
 
+#### Sources
+- [What is AWS Lambda?](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html) — AWS Lambda developer guide
+- [Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html) — AWS Lambda developer guide
+
 ### ECS — Docker container orchestration, Fargate (serverless) vs EC2 launch type
 Amazon ECS is AWS's native container orchestrator: you define **task definitions** (containers, CPU and memory, IAM role, ports) and run them as **services** (long-running, load-balanced, autoscaled) or **tasks** (batch). Tasks run on **Fargate** (serverless, no instances to manage) or the **EC2 launch type** (your instances, more control and possibly cheaper).
+
+#### Intuition
+A staffing agency for containers. You say "keep six of these running" and the agency does it. With Fargate the agency also supplies the desks. With the EC2 launch type you bring your own desks.
+
+#### Must know
+- AWS's own container orchestrator, simpler than Kubernetes.
+- A **task definition** describes the containers. A **service** keeps N copies running behind a load balancer.
+- **Fargate**: no servers to manage, pay per task. **EC2 launch type**: your instances, more control, cheaper at high steady use.
+- Each task gets its **own IAM role**, and secrets are injected at start.
+- It is AWS-only, with a smaller ecosystem than Kubernetes.
+
+#### Common mistakes
+- One shared instance role for all tasks, not a role per task.
+- Private subnets with no NAT or VPC endpoints, so image pulls fail.
+- No deregistration delay or graceful shutdown, so deploys drop requests.
 
 #### How it works
 ```mermaid
@@ -163,8 +223,27 @@ Fargate when you want zero host management, per-task isolation and simple scalin
 #### Interview angle
 > "For an AWS-only team I'd run services on ECS Fargate: task IAM roles, injected secrets, ALB target groups and CodeDeploy blue-green, moving to EKS only if we need the Kubernetes ecosystem."
 
+#### Sources
+- [What is Amazon Elastic Container Service?](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html) — Amazon ECS developer guide
+- [AWS Fargate for Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html) — Amazon ECS developer guide
+
 ### EKS — managed Kubernetes, control plane managed by AWS
 Amazon EKS runs the **Kubernetes control plane** (API servers, etcd) for you across multiple AZs, while worker capacity comes from **managed node groups**, **Karpenter**-provisioned nodes or **Fargate profiles**. You get upstream Kubernetes with AWS integrations: IAM via **IRSA / Pod Identity**, VPC CNI networking, the ALB controller and EBS/EFS CSI drivers.
+
+#### Intuition
+Kubernetes where AWS runs the control tower and you run the planes. The hardest part to operate is handled for you, but the fleet, its upgrades and its add-ons are still yours.
+
+#### Must know
+- AWS runs the **Kubernetes control plane** (API servers and etcd) across several AZs.
+- You supply worker capacity: managed node groups, Karpenter-provisioned nodes or Fargate.
+- Pods get AWS permissions through **IRSA or EKS Pod Identity**, never through the node's role.
+- With the VPC CNI, **each pod takes a VPC IP address**, so plan subnet sizes.
+- Choose it over ECS when you need the Kubernetes ecosystem or portability.
+
+#### Common mistakes
+- Subnets too small, so pods cannot get IP addresses.
+- Falling several Kubernetes versions behind, which makes upgrades painful.
+- Assuming "managed" means no operations work.
 
 #### How it works
 ```mermaid
@@ -210,8 +289,32 @@ An open-source node provisioner that watches unschedulable pods and launches rig
 #### Interview angle
 > "On EKS I'd use Karpenter for fast mixed Spot and On-Demand nodes, Pod Identity for per-workload IAM, the ALB controller for ingress, Argo CD for deploys, and a regular upgrade cadence."
 
-### S3 — object storage: bucket + key model, 5TB max object, strong consistency since 2021
-Amazon S3 stores **objects** (bytes plus metadata) in **buckets** under **keys**, with 11 nines of durability (data stored redundantly across ≥ 3 AZs) and effectively unlimited capacity. Objects can be up to **5 TB** (multipart uploads above 100 MB recommended), and since December 2020 S3 provides **strong read-after-write consistency** for all operations.
+#### Sources
+- [What is Amazon EKS?](https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html) — Amazon EKS user guide
+- [EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html) — Amazon EKS user guide
+- [Karpenter documentation](https://karpenter.sh/docs/) — Karpenter
+
+### S3 — object storage: bucket + key model, 50TB max object, strong consistency since 2021
+Amazon S3 stores **objects** (bytes plus metadata) in **buckets** under **keys**, with 11 nines of durability (data stored redundantly across ≥ 3 AZs) and effectively unlimited capacity. Objects can be up to **50 TB** (raised from 5 TB in December 2025; multipart uploads above 100 MB recommended), and since December 2020 S3 provides **strong read-after-write consistency** for all operations.
+
+#### Intuition
+A limitless coat-check. You hand over an item with a label, and get it back later by quoting the label. You cannot alter half a coat in place. You swap the whole item.
+
+#### Must know
+- Objects (bytes plus metadata) live in **buckets** under **keys**. There are no real folders, only key prefixes.
+- Capacity is effectively unlimited and durability is very high, with data stored across at least 3 AZs.
+- **Strong read-after-write consistency** for all operations.
+- It is not a file system: no in-place edits or appends.
+- Keep buckets private: Block Public Access on, and serve through CloudFront.
+
+#### Numbers to quote
+- Durability 99.999999999% (11 nines). Maximum object size 50 TB (raised from 5 TB in December 2025).
+- About 3,500 writes and 5,500 reads per second per prefix.
+
+#### Common mistakes
+- A public bucket or loose ACLs, the classic data leak.
+- Storing files in the database when only the key and metadata belong there.
+- Still quoting the old 5 TB limit, or saying S3 is eventually consistent.
 
 #### How it works
 ```mermaid
@@ -244,7 +347,7 @@ Durable, cheap, infinitely scalable and integrated everywhere, but it's not a fi
 | Accidental deletes | no protection | versioning, MFA delete, Object Lock |
 
 #### Cheat sheet
-- Buckets + keys, 5 TB objects, 11 nines durability, strong consistency.
+- Buckets + keys, 50 TB objects, 11 nines durability, strong consistency.
 - Block Public Access, SSE-KMS, CloudFront OAC, VPC endpoints.
 - Lifecycle tiers, versioning, prefix-aware high request rates.
 
@@ -262,8 +365,31 @@ Previously, overwrites and deletes were eventually consistent (a read right afte
 #### Interview angle
 > "Files go to S3 with Block Public Access, SSE-KMS and CloudFront OAC in front. Only keys and metadata live in the database, and lifecycle rules plus versioning control cost and accidental deletes."
 
+#### Sources
+- [What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html) — Amazon S3 user guide
+- [Amazon S3 increases the maximum object size to 50 TB](https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-s3-maximum-object-size-50-tb/) — AWS What's New
+- [Best practices design patterns: optimizing Amazon S3 performance](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html) — Amazon S3 user guide
+
 ### S3 features — versioning, lifecycle policies, presigned URLs (time-limited access), multipart upload, replication, S3 Select
 Beyond basic object storage, S3 provides features you use constantly in system design: **versioning** (keep every version), **lifecycle policies** (transition and expire automatically), **presigned URLs** (temporary access without credentials), **multipart upload** (large parallel resumable uploads), **replication** (cross-region or same-region) and querying in place (**S3 Select**, Athena).
+
+#### Intuition
+The coat-check's extra services: it keeps old versions of an item, moves rarely used items to a cheaper back room, issues a one-time ticket so a friend can collect for you, and accepts a huge item in pieces.
+
+#### Must know
+- **Versioning** keeps every version, so overwrites and deletes can be undone.
+- **Lifecycle rules** move objects to cheaper classes or expire them automatically.
+- A **presigned URL** is a time-limited link that lets a client upload or download directly, with no credentials.
+- **Multipart upload** sends a large file as parallel, resumable parts.
+- **Replication** copies objects to another bucket or region, asynchronously.
+
+#### Numbers to quote
+- Multipart parts are 5 MB to 5 GB each, up to 10,000 parts. A single PUT is limited to 5 GB.
+
+#### Common mistakes
+- Routing large uploads through your own servers when a presigned URL would do.
+- Presigned URLs with long expiry times. They are bearer links.
+- No lifecycle rule for old versions and abandoned multipart uploads, so the bill grows silently.
 
 #### How it works
 ```mermaid
@@ -290,7 +416,7 @@ sequenceDiagram
 | Replication (CRR/SRR) | DR copies, compliance, latency (with RTC for 15-min SLA) |
 | Object Lock | WORM retention for compliance (financial records) |
 | Event notifications | trigger Lambda/SQS/EventBridge on object changes |
-| Athena / S3 Select | query CSV/JSON/Parquet in place |
+| Athena / S3 Select | query CSV/JSON/Parquet in place (S3 Select is closed to new customers since July 2024, so use Athena) |
 
 #### Example
 A fintech stores statements and audit evidence in S3 with versioning plus Object Lock in compliance mode (7-year retention, which even root can't delete), lifecycle moves objects to Glacier Deep Archive after 1 year, and cross-region replication to a DR region. Customers download statements via 5-minute presigned GET URLs generated after authorisation checks.
@@ -325,8 +451,31 @@ Enable versioning plus S3 Object Lock in compliance mode with a 7-year retention
 #### Interview angle
 > "Uploads go direct to S3 via presigned multipart URLs. Lifecycle rules tier data and clean up old versions and incomplete uploads, and compliance data gets versioning, Object Lock and cross-region replication."
 
+#### Sources
+- [Download and upload objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html) — Amazon S3 user guide
+- [Uploading and copying objects using multipart upload](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html) — Amazon S3 user guide
+- [Managing the lifecycle of objects](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html) — Amazon S3 user guide
+
 ### EBS — block storage attached to EC2, like a hard drive; one AZ, snapshot to S3
 Amazon EBS provides **network-attached block volumes** for EC2: persistent disks that survive instance stops, with selectable performance (gp3, io2, st1, sc1). A volume lives in **one AZ** and attaches to instances there. **Snapshots** (incremental, stored in S3) provide backups and allow copying volumes across AZs and regions.
+
+#### Intuition
+An external hard drive plugged into one computer. It keeps its data when the computer restarts, but it sits in one building. If that building is closed, you need a backup copy somewhere else.
+
+#### Must know
+- A **network-attached disk** for an EC2 instance. Data survives instance stops.
+- A volume lives in **one AZ** and attaches only to instances in that AZ.
+- **Snapshots** are incremental backups, and the way to copy a volume to another AZ or region.
+- **gp3** is the default. Use **io2** for databases that need very high, steady IOPS.
+- **Instance store** is faster local disk but is lost when the instance stops.
+
+#### Numbers to quote
+- gp3 baseline: 3,000 IOPS and 125 MiB/s. Maximum since 2025: 80,000 IOPS, 2,000 MiB/s, 64 TiB.
+
+#### Common mistakes
+- Believing an EBS volume protects against an AZ outage.
+- Durable data on instance store.
+- Hitting the instance's own EBS throughput limit and blaming the volume.
 
 #### How it works
 ```mermaid
@@ -373,14 +522,33 @@ An EBS volume is replicated only within its AZ and can attach only to instances 
 
 <details><summary>gp3 vs io2: when do you pay for io2?</summary>
 
-io2 (Block Express) when you need very high sustained IOPS (tens to hundreds of thousands), consistent sub-millisecond latency, and higher durability (99.999%) for critical databases. gp3 covers most workloads cheaply with tunable IOPS up to 16k and 1,000 MB/s per volume.
+io2 (Block Express) when you need very high sustained IOPS (tens to hundreds of thousands), consistent sub-millisecond latency, and higher durability (99.999%) for critical databases. gp3 covers most workloads cheaply with tunable IOPS up to 80k and 2,000 MiB/s per volume (raised from 16k and 1,000 in 2025).
 </details>
 
 #### Interview angle
 > "EBS volumes are single-AZ, so durability across zones comes from application replication or managed Multi-AZ databases. I default to gp3, use io2 only for IOPS-hungry databases, and automate encrypted snapshots."
 
+#### Sources
+- [Amazon EBS volume types](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volume-types.html) — Amazon EBS user guide
+- [Amazon EBS snapshots](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-snapshots.html) — Amazon EBS user guide
+
 ### EFS — managed NFS, shared file system across multiple EC2 instances in same region
 Amazon EFS is a fully managed, elastic **NFS file system** that many instances, containers (ECS, EKS) and Lambda functions can mount **simultaneously** across AZs in a region. It grows and shrinks automatically, and you pay for storage used (with IA tiers) and optionally provisioned throughput.
+
+#### Intuition
+An office shared drive. Everyone opens the same folders at the same time from their own desk. It is convenient, but slower than a disk plugged straight into your own machine.
+
+#### Must know
+- A managed **shared file system (NFS)** that many instances, containers and Lambdas can mount at once.
+- It spans AZs within a region, and grows and shrinks automatically.
+- Use it when software **needs a shared POSIX file system**: legacy apps, shared uploads, ML datasets.
+- It is slower than EBS and dearer per GB than S3.
+- For new applications storing files, S3 is the default choice.
+
+#### Common mistakes
+- Running a database on EFS.
+- Workloads with huge numbers of small files, where metadata latency dominates.
+- Choosing EFS for new code that could simply use S3.
 
 #### How it works
 ```mermaid
@@ -429,8 +597,30 @@ Databases do many small random synchronous I/Os and rely on low-latency fsync an
 #### Interview angle
 > "I use EFS only when software needs a shared POSIX filesystem, like legacy uploads directories or ML datasets. New code stores objects in S3, and databases live on EBS or RDS."
 
+#### Sources
+- [What is Amazon Elastic File System?](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html) — Amazon EFS user guide
+- [Amazon EFS performance specifications](https://docs.aws.amazon.com/efs/latest/ug/performance.html) — Amazon EFS user guide
+
 ### RDS — managed relational DB: PostgreSQL, MySQL, Oracle, SQL Server; Multi-AZ for HA
 Amazon RDS runs relational databases (PostgreSQL, MySQL, MariaDB, Oracle, SQL Server) as a managed service: provisioning, patching, automated backups and point-in-time recovery, monitoring, read replicas, and **Multi-AZ** high availability with automatic failover.
+
+#### Intuition
+Hiring a database administrator who never sleeps. Backups, patching and failover are done for you. You still design the schema and write the queries.
+
+#### Must know
+- A managed relational database: backups, point-in-time recovery, patching and monitoring are handled.
+- **Multi-AZ**: a synchronous standby in another AZ, with automatic failover. It is for availability.
+- **Read replicas**: asynchronous, readable copies. They are for read scaling and can lag.
+- **RDS Proxy** pools connections and speeds up failover.
+- **Writes scale vertically only.** There is no built-in sharding.
+
+#### Numbers to quote
+- Multi-AZ failover takes about 60–120 seconds. Point-in-time recovery covers up to 35 days.
+
+#### Common mistakes
+- Mixing up Multi-AZ (availability) and read replicas (read scaling).
+- No retry logic, so every failover becomes a visible outage.
+- Thousands of direct connections from Lambdas or many pods with no pooling.
 
 #### How it works
 ```mermaid
@@ -481,8 +671,31 @@ Use RDS Proxy (which keeps client connections and reconnects to the new primary 
 #### Interview angle
 > "Relational data runs on RDS or Aurora Multi-AZ with PITR, read replicas for reporting, RDS Proxy for pooling and fast failover, and Blue/Green deployments for major upgrades."
 
+#### Sources
+- [Configuring and managing a Multi-AZ deployment](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html) — Amazon RDS user guide
+- [Working with DB instance read replicas](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.html) — Amazon RDS user guide
+
 ### Aurora — MySQL/Postgres-compatible, 6-way storage replication across 3 AZs, auto-scaling storage
-Amazon Aurora is AWS's cloud-native relational database, compatible with MySQL and PostgreSQL, with a **distributed storage layer**: 6 copies across 3 AZs, quorum writes, automatic growth up to 128 TB. It offers fast failover (~30 s), up to 15 low-lag read replicas, Global Database for cross-region DR, and Serverless v2 autoscaling. (Phase 3 covers the storage internals.)
+Amazon Aurora is AWS's cloud-native relational database, compatible with MySQL and PostgreSQL, with a **distributed storage layer**: 6 copies across 3 AZs, quorum writes, automatic growth up to 256 TiB. It offers fast failover (~30 s), up to 15 low-lag read replicas, Global Database for cross-region DR, and Serverless v2 autoscaling. (Phase 3 covers the storage internals.)
+
+#### Intuition
+A normal database engine sitting on a storage system that keeps six copies of everything in three buildings. The engine can be swapped quickly because the data never lived inside it.
+
+#### Must know
+- MySQL- and PostgreSQL-compatible, with **compute separated from a shared storage layer**.
+- Storage keeps **6 copies across 3 AZs** and grows automatically.
+- Readers share the same storage, so replica lag is very small and failover is fast.
+- Global Database replicates to other regions for disaster recovery.
+- There is **still a single writer**.
+
+#### Numbers to quote
+- Write quorum 4 of 6, read quorum 3 of 6. Up to 15 readers. Failover in about 30 seconds.
+- Storage grows up to 256 TiB.
+
+#### Common mistakes
+- Treating it as a horizontally scalable write database.
+- Sending all traffic to the cluster endpoint and never using the reader endpoint.
+- Ignoring I/O charges on an I/O-heavy workload.
 
 #### How it works
 ```mermaid
@@ -526,8 +739,30 @@ Storage-level replication to up to 5 secondary regions with typical lag under 1 
 #### Interview angle
 > "Aurora gives us quorum storage across three AZs, readers with tiny lag and roughly 30-second failover, plus Global Database for regional DR. I'd still plan around its single writer."
 
+#### Sources
+- [Amazon Aurora storage](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html) — Amazon Aurora user guide
+- [Using Amazon Aurora Global Database](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database.html) — Amazon Aurora user guide
+
 ### DynamoDB — fully managed NoSQL, single-digit ms latency, automatic sharding
 DynamoDB is AWS's serverless **key-value and document** database: single-digit-millisecond latency at any scale, automatic partitioning, multi-AZ replication, on-demand or provisioned capacity, plus Streams, TTL, transactions and Global Tables. Data modelling is access-pattern-first. (Phase 3 covers keys, GSIs and hot partitions in depth.)
+
+#### Intuition
+A giant filing cabinet where every folder has an exact label. Finding a folder by its label is instant however big the cabinet grows. Asking "which folders mention X?" means opening every drawer.
+
+#### Must know
+- A serverless **key-value and document** store with predictable low latency at any scale.
+- It partitions and replicates automatically. There are no servers or shards to manage.
+- **Design the table from your access patterns.** Lookups go by partition key and sort key.
+- Extras: secondary indexes, Streams (change feed), TTL, transactions, Global Tables.
+- Poor fit for ad-hoc queries, joins and reporting.
+
+#### Numbers to quote
+- Single-digit millisecond reads and writes. Maximum item size 400 KB.
+
+#### Common mistakes
+- A low-cardinality partition key, which creates a hot partition and throttling.
+- Using `Scan` as a normal query.
+- Choosing it before the access patterns are known.
 
 #### How it works
 ```mermaid
@@ -572,8 +807,27 @@ Store an epoch-seconds `expiresAt` attribute and enable TTL on it. DynamoDB dele
 #### Interview angle
 > "High-scale key-value paths like sessions and carts go to DynamoDB, modelled from access patterns, with TTL for expiry, Streams for projections and on-demand capacity for spikes."
 
+#### Sources
+- [What is Amazon DynamoDB?](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) — Amazon DynamoDB developer guide
+- [Best practices for designing and architecting with DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/best-practices.html) — Amazon DynamoDB developer guide
+
 ### ElastiCache — managed Redis or Memcached in VPC
 Amazon ElastiCache runs **Redis/Valkey** or **Memcached** as a managed in-memory service inside your VPC: provisioning, patching, failover (Multi-AZ with automatic failover for Redis/Valkey), backups, cluster mode sharding, and monitoring. ElastiCache Serverless removes capacity planning entirely.
+
+#### Intuition
+Redis with a caretaker. Someone else replaces failed nodes, applies patches and takes backups, while you just read and write keys.
+
+#### Must know
+- Managed **Redis/Valkey or Memcached** inside your VPC.
+- Multi-AZ replicas with automatic failover. Cluster mode shards data across nodes.
+- **It is a cache**: replication is asynchronous, so a failover can lose recent writes.
+- Clients must be cluster-aware and refresh topology after a failover.
+- For Redis as a durable primary store, use **MemoryDB**.
+
+#### Common mistakes
+- Treating it as the system of record.
+- Clients pinned to node addresses, which break on failover.
+- No TLS or authentication because "it is inside the VPC".
 
 #### How it works
 ```mermaid
@@ -621,8 +875,27 @@ Use the cluster or primary endpoint (not node IPs), with a client that detects f
 #### Interview angle
 > "Caching and fast shared state run on ElastiCache Valkey in cluster mode across AZs, with TLS, AUTH and topology-aware clients. If Redis must be a durable primary store, MemoryDB."
 
+#### Sources
+- [What is Amazon ElastiCache?](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html) — Amazon ElastiCache user guide
+- [What is Amazon MemoryDB?](https://docs.aws.amazon.com/memorydb/latest/devguide/what-is-memorydb.html) — Amazon MemoryDB developer guide
+
 ### SQS / SNS / Kinesis / MSK — managed messaging; MSK = managed Kafka
 AWS offers several managed messaging services: **SQS** (queues), **SNS** (pub/sub push fan-out), **Kinesis Data Streams** (sharded streaming log), **MSK** (managed Apache Kafka) and **EventBridge** (event bus with rules). Picking correctly is mostly about **delivery model, ordering, replay and throughput**. (Phase 7 covers SQS, SNS and Kinesis in depth.)
+
+#### Intuition
+Four delivery services. SQS is a to-do tray. SNS is a loudspeaker. Kinesis and MSK are recorded conveyor belts you can rewind. EventBridge is a sorting office that routes by what is written on the parcel.
+
+#### Must know
+- **SQS**: a queue for background jobs. No replay.
+- **SNS**: push fan-out to many subscribers. Usually SNS → one SQS queue per consumer.
+- **Kinesis**: an AWS-native ordered, replayable stream, sized in shards.
+- **MSK**: managed Apache Kafka, for the Kafka ecosystem and very high throughput.
+- **EventBridge**: content-based routing, AWS and SaaS event sources, archive and replay.
+
+#### Common mistakes
+- Picking SQS or SNS and later needing replay.
+- Running Kafka yourself on EC2 when MSK would do.
+- Choosing by familiarity. Choose by replay, ordering, throughput and consumer count.
 
 #### How it works
 ```mermaid
@@ -674,8 +947,27 @@ When you need content-based routing rules on event fields, many AWS service and 
 #### Interview angle
 > "On AWS: MSK as the replayable event backbone, SQS for jobs, SNS to SQS for fan-out, and EventBridge for routing AWS and SaaS events, each picked by replay, ordering and throughput needs."
 
+#### Sources
+- [What is Amazon MSK?](https://docs.aws.amazon.com/msk/latest/developerguide/what-is-msk.html) — Amazon MSK developer guide
+- [What is Amazon EventBridge?](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-what-is.html) — Amazon EventBridge user guide
+
 ### VPC — isolated virtual network; public subnets (internet-facing), private subnets (internal)
 A VPC is your **private, isolated network** in AWS: you choose the IP range (CIDR), split it into **subnets** per AZ, and control routing (route tables, internet and NAT gateways), filtering (security groups, NACLs) and private connectivity (VPC endpoints, peering, Transit Gateway, PrivateLink). (Phase 1 covers subnetting and NAT.)
+
+#### Intuition
+Your own fenced office campus inside a big business park. You decide the internal street layout, which buildings face the public road, and which gates lead outside.
+
+#### Must know
+- A **private, isolated network** in AWS with an IP range you choose.
+- Split it into **subnets per AZ**: public (load balancers, NAT), private app, private data.
+- A **public subnet** has a route to an internet gateway. A private one reaches out through a **NAT gateway**.
+- **VPC endpoints** reach AWS services such as S3 without going over the internet.
+- Plan non-overlapping IP ranges early. They are hard to change.
+
+#### Common mistakes
+- Overlapping CIDR ranges, which block peering later.
+- One NAT gateway for all AZs, a single point of failure.
+- Sending S3 and ECR traffic through NAT and paying per GB for it.
 
 #### How it works
 ```mermaid
@@ -733,8 +1025,27 @@ AWS Transit Gateway as a hub (with route tables for segmentation between environ
 #### Interview angle
 > "Each environment's VPC spans three AZs with public, app and data subnets, a NAT per AZ, endpoints for AWS services and flow logs, connected through Transit Gateway with non-overlapping CIDRs."
 
+#### Sources
+- [What is Amazon VPC?](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html) — Amazon VPC user guide
+- [NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html) — Amazon VPC user guide
+
 ### Security Groups — stateful firewall at instance level; NACLs — stateless at subnet level
 **Security groups** are stateful virtual firewalls attached to ENIs (instances, tasks, pods, load balancers, databases): you allow inbound and outbound rules, and return traffic is automatically allowed. **Network ACLs** are stateless filters at the subnet level with ordered allow and deny rules, where return traffic must be explicitly allowed.
+
+#### Intuition
+A security group is a doorman at each flat who remembers who you let out, so they may come back in. A NACL is a guard at the estate gate with a numbered rule list who remembers nobody.
+
+#### Must know
+- **Security group**: attached to a resource, **stateful**, allow rules only. Replies are allowed automatically.
+- **NACL**: attached to a subnet, **stateless**, ordered allow and deny rules. Replies need their own rule.
+- Rules can **reference another security group** in place of IP addresses.
+- Chain them: load balancer → app → database, each allowing only the tier before it.
+- Security groups do the real work. NACLs are coarse guardrails.
+
+#### Common mistakes
+- A database security group open to `0.0.0.0/0` or the whole VPC range.
+- A NACL that forgets the ephemeral ports for return traffic.
+- IP-based rules that break every time instances scale.
 
 #### How it works
 ```mermaid
@@ -784,8 +1095,30 @@ NACLs are stateless: they evaluate inbound and outbound packets independently. I
 #### Interview angle
 > "Security groups do the micro-segmentation, chained ALB to app to DB by SG reference, while NACLs are only coarse subnet guardrails. All rules live in Terraform."
 
+#### Sources
+- [Control traffic to your AWS resources using security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) — Amazon VPC user guide
+- [Control subnet traffic with network access control lists](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html) — Amazon VPC user guide
+
 ### Route53 — DNS with health checks, routing policies: simple, weighted, latency, failover, geolocation
 Amazon Route 53 is AWS's highly available DNS service: domain registration, hosted zones (public and private), **health checks** and **routing policies** that make DNS a traffic-management tool: weighted canaries, latency-based multi-region routing, failover, geolocation and geoproximity, and multivalue answers. (Phase 1 covers DNS fundamentals.)
+
+#### Intuition
+A phone directory that checks whether a branch is open before giving out its number, and can hand different callers different branches: the nearest, the fastest or a set share of each.
+
+#### Must know
+- AWS's managed DNS, with **health checks** and **routing policies**.
+- **Weighted**: split traffic by percentage (migrations, canaries).
+- **Latency**: send each user to the fastest region. **Failover**: active-passive DR.
+- **Geolocation**: route by country, for data residency or localisation.
+- Failover speed is **limited by DNS caching (TTL)**.
+
+#### Numbers to quote
+- Keep TTLs at 30–60 seconds on records that must fail over.
+
+#### Common mistakes
+- Long TTLs on records meant to fail over quickly.
+- Shallow health checks that pass while the service is broken.
+- Confusing latency routing (performance) with geolocation routing (rules by country).
 
 #### How it works
 ```mermaid
@@ -842,8 +1175,27 @@ Latency-based routes each user to the region with the lowest measured network la
 #### Interview angle
 > "Route 53 does latency routing with deep health checks for multi-region, weighted records for migrations, geolocation for residency and private zones internally. Anything needing second-level failover sits behind Global Accelerator."
 
+#### Sources
+- [Choosing a routing policy](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html) — Amazon Route 53 developer guide
+- [Creating Amazon Route 53 health checks](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover.html) — Amazon Route 53 developer guide
+
 ### CloudFront — CDN, Lambda@Edge for edge compute, TLS termination, WAF integration
 Amazon CloudFront is AWS's global CDN: 600+ edge locations cache content close to users, terminate TLS, absorb DDoS (Shield Standard included) and integrate with **AWS WAF**. Edge compute runs as **CloudFront Functions** (lightweight JS, sub-millisecond) or **Lambda@Edge** (heavier logic). It fronts S3 buckets (via Origin Access Control), ALBs, API Gateway or any HTTP origin. (Phase 1 covers CDN fundamentals.)
+
+#### Intuition
+Local corner shops stocked from one central warehouse. Most customers are served from the shop round the corner, and only unusual orders travel back to the warehouse.
+
+#### Must know
+- AWS's CDN: edge locations cache content near users and terminate TLS.
+- It sits in front of S3, load balancers or any HTTP origin, with **WAF and DDoS protection** at the edge.
+- Configure **behaviours per path**: long caching for `/static/*`, little or none for `/api/*`.
+- Keep S3 private and let only CloudFront read it (Origin Access Control).
+- Edge code: **CloudFront Functions** for light work, **Lambda@Edge** for heavier logic.
+
+#### Common mistakes
+- Forwarding every header, cookie and query string, which destroys the cache hit ratio.
+- A public S3 bucket behind the CDN.
+- Unversioned asset filenames, so users get stale files.
 
 #### How it works
 ```mermaid
@@ -890,8 +1242,27 @@ CloudFront Functions are tiny JavaScript handlers running at every edge location
 #### Interview angle
 > "CloudFront fronts everything: S3 via OAC for static and media with signed cookies, the API with edge TLS, WAF and Shield, CloudFront Functions for headers and redirects, and Origin Shield to protect origins."
 
+#### Sources
+- [What is Amazon CloudFront?](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html) — Amazon CloudFront developer guide
+- [Differences between CloudFront Functions and Lambda@Edge](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-functions-choosing.html) — Amazon CloudFront developer guide
+
 ### IAM — identity and access management: users, groups, roles, policies, least privilege
 AWS IAM controls **who** (principals: users, roles, services, federated identities) can do **what** (actions) on **which resources**, under **which conditions**, through JSON **policies**. Modern best practice: no long-lived access keys, humans sign in via SSO (IAM Identity Center), and workloads use **roles** with temporary credentials, scoped by **least privilege**.
+
+#### Intuition
+Building access cards. Each card says which doors it opens and when. Staff get a card for their own floor, contractors get a card that expires tonight, and nobody gets a master key.
+
+#### Must know
+- IAM decides **who can do what on which resource**, through JSON policies.
+- Default is deny. An **explicit deny always wins**.
+- **Workloads use roles** with temporary credentials. Humans sign in through SSO.
+- **No long-lived access keys** in code, config or images.
+- Grant the minimum needed (least privilege), scoped to specific resources.
+
+#### Common mistakes
+- `*` actions on `*` resources for convenience.
+- Access keys committed to a repository.
+- One shared role for many services.
 
 #### How it works
 ```mermaid
@@ -939,8 +1310,30 @@ SCPs are AWS Organizations guardrails applied to accounts or OUs that define the
 #### Interview angle
 > "Humans use SSO with temporary roles and workloads use their own roles, with no static keys. Policies are least-privilege with conditions, SCPs are org-wide guardrails, and Access Analyzer keeps permissions pruned."
 
+#### Sources
+- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) — AWS IAM user guide
+- [Policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html) — AWS IAM user guide
+
 ### KMS — key management service: envelope encryption, key rotation, CloudTrail audit
 AWS KMS manages cryptographic keys: you create **KMS keys** (backed by HSMs), control who can use them via **key policies** and IAM, and every use is **logged in CloudTrail**. Services encrypt data with **envelope encryption**: a per-object **data key** encrypts the data, and the KMS key encrypts the data key, so bulk data never goes to KMS.
+
+#### Intuition
+A bank vault that holds one master key and never lets it leave. You lock each document with its own small key, then ask the vault to lock that small key. To read a document, the vault must agree to unlock its small key.
+
+#### Must know
+- KMS holds encryption keys in hardware modules. **The key never leaves KMS.**
+- **Envelope encryption**: a per-object **data key** encrypts the data, and the KMS key encrypts the data key.
+- Access is controlled by key policies and IAM, and **every use is logged** in CloudTrail.
+- Keys can rotate automatically. Old versions stay available for decryption.
+- Deleting a key makes its data unreadable, which enables crypto-shredding.
+
+#### Numbers to quote
+- Direct KMS encryption is limited to 4 KB of data, which is why envelope encryption exists.
+
+#### Common mistakes
+- Calling KMS for every small item at high rate, with no data-key caching.
+- One key for everything, so anyone with access to one dataset can decrypt all.
+- A key policy that locks out its own administrators.
 
 #### How it works
 ```mermaid
@@ -990,8 +1383,27 @@ Crypto-shredding: encrypt each user's (or tenant's) personal data with a dedicat
 #### Interview angle
 > "Sensitive data uses envelope encryption with dedicated KMS keys per data class or tenant, restrictive key policies, encryption context, data-key caching and CloudTrail audit, and per-tenant keys enable crypto-shredding."
 
+#### Sources
+- [AWS Key Management Service overview](https://docs.aws.amazon.com/kms/latest/developerguide/overview.html) — AWS KMS developer guide
+- [AWS KMS cryptography essentials](https://docs.aws.amazon.com/kms/latest/developerguide/kms-cryptography.html) — AWS KMS developer guide
+
 ### CloudWatch — metrics, logs, alarms, dashboards; X-Ray for distributed tracing
 Amazon CloudWatch is AWS's native observability suite: **metrics** (built-in for AWS services plus custom metrics), **logs** (log groups, Logs Insights queries), **alarms** (thresholds, anomaly detection, composite alarms → SNS, autoscaling, actions), **dashboards** and **synthetics**. **X-Ray** (and the CloudWatch Application Signals / OpenTelemetry integration) adds distributed tracing.
+
+#### Intuition
+A car dashboard and its logbook. The dials show speed and temperature now, a warning light comes on at a limit, and the logbook records what happened so you can read back after a breakdown.
+
+#### Must know
+- AWS's built-in observability: **metrics, logs, alarms and dashboards**.
+- AWS services publish metrics automatically. You add custom metrics and structured logs.
+- **Alarms** trigger notifications or autoscaling.
+- **X-Ray** and OpenTelemetry add distributed traces.
+- Cost grows fast with verbose logs and high-cardinality metrics.
+
+#### Common mistakes
+- Log groups left on the default of never expiring.
+- Many separate threshold alarms that cause alert fatigue.
+- Logs with no trace id, so they cannot be tied to a request.
 
 #### How it works
 ```mermaid
@@ -1037,3 +1449,8 @@ Log at appropriate levels (no debug in prod by default), use structured logs and
 
 #### Interview angle
 > "Services emit structured logs with trace ids, EMF metrics and OpenTelemetry traces into CloudWatch and X-Ray, with retention policies, SLO burn-rate and composite alarms, and a close eye on cardinality cost."
+
+#### Sources
+- [What is Amazon CloudWatch?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html) — Amazon CloudWatch user guide
+- [Embedding metrics within logs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html) — Amazon CloudWatch user guide
+

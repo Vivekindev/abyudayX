@@ -580,7 +580,7 @@ flowchart LR
 Key concepts:
 - **Concurrency** = requests/s × duration (Little's law). Account and **reserved concurrency** limits cap it.
 - **Scaling rate**: each function can add up to 1,000 concurrent executions every 10 seconds (newer AWS behaviour), so bursts are fast but not infinite.
-- **Cold starts**: new environments add latency (~100 ms – several seconds depending on runtime and package size). Mitigate with **provisioned concurrency**, SnapStart (Java), small packages.
+- **Cold starts**: new environments add latency (~100 ms – several seconds depending on runtime and package size). Mitigate with **provisioned concurrency**, SnapStart (Java, Python, .NET), small packages.
 - Event-source scaling: SQS pollers scale with queue depth, Kinesis/Kafka scale per shard or partition.
 
 #### Example

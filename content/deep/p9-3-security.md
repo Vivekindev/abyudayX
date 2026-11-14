@@ -3,6 +3,21 @@
 ### Authentication vs authorization — who are you (authn) vs what can you do (authz)
 **Authentication (authn)** verifies **identity**: who is making this request (password + MFA, SSO, certificates, API keys). **Authorization (authz)** decides **what that identity may do**: which actions on which resources (roles, scopes, ownership, policies). They're separate concerns, and most security bugs are authorization bugs.
 
+#### Intuition
+At an office, the ID check at the front door proves who you are. The access card decides which rooms you may enter. Getting through the front door does not open the server room.
+
+#### Must know
+- **Authentication** = who you are. **Authorisation** = what you are allowed to do.
+- Missing or invalid identity → **401**. Known identity without permission → **403**.
+- Authorisation must run on **every access to a resource**, not only at login.
+- Check **ownership**: does this order belong to this user or tenant?
+- Models: roles (RBAC), attributes (ABAC), relationships (ReBAC).
+
+#### Common mistakes
+- Checking that the user is logged in but not that the record is theirs (IDOR).
+- Trusting a role or user id sent by the client.
+- Authorisation rules scattered and inconsistent across services.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -53,8 +68,27 @@ Never trust ids from the client alone: scope every query by the authenticated pr
 #### Interview angle
 > "Authentication establishes identity, authorization runs on every resource access: scopes at the gateway, plus ownership or tenant checks inside services at the data layer, with tests that try cross-user access."
 
+#### Sources
+- [Authorization cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) — OWASP
+- [Insecure direct object reference prevention cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Insecure_Direct_Object_Reference_Prevention_Cheat_Sheet.html) — OWASP
+
 ### OAuth 2.0 authorization code flow + PKCE — for SPA/mobile: code_verifier + code_challenge prevent interception
 The authorization code flow with **PKCE** is the secure way for public clients (SPAs, mobile and desktop apps, which can't keep a client secret) to obtain user tokens. The app proves possession of a random `code_verifier` when redeeming the code, so a stolen authorization code is useless. (Phase 8 covers the flow step by step.)
+
+#### Intuition
+You leave a sealed envelope with a secret word at the counter before you start. Later, the parcel is released only to the person who can say that word. Someone who grabs your collection slip still cannot collect.
+
+#### Must know
+- The login flow for apps that **cannot keep a secret**: single-page and mobile apps.
+- The app creates a random `code_verifier` and sends only its hash, the `code_challenge`.
+- To swap the code for tokens, the app must present the original verifier.
+- **A stolen authorisation code is useless without the verifier.**
+- Also required: the `state` parameter, exact redirect URIs, and the system browser on mobile.
+
+#### Common mistakes
+- The implicit flow, which puts tokens in the URL.
+- The `plain` challenge method. Use S256.
+- Login inside an embedded WebView, where the app can read the password.
 
 #### How it works
 ```mermaid
@@ -106,8 +140,27 @@ An embedded WebView is controlled by the app, which could read typed credentials
 #### Interview angle
 > "Mobile and SPA login use authorization code with PKCE (S256), state and exact app-link redirects through the system browser. Tokens never travel in URLs."
 
+#### Sources
+- [Proof Key for Code Exchange by OAuth public clients (RFC 7636)](https://www.rfc-editor.org/rfc/rfc7636) — IETF
+- [OAuth 2.0 for native apps (RFC 8252)](https://www.rfc-editor.org/rfc/rfc8252) — IETF
+
 ### OAuth 2.0 client credentials flow — service-to-service, no user context
 The client credentials flow lets a **service authenticate as itself** to obtain an access token for calling APIs, for backend jobs, partner integrations and internal service-to-service calls where no user is involved. Security depends on protecting the client's credentials and keeping token scopes narrow. (Phase 8 covers the mechanics.)
+
+#### Intuition
+A company badge for a machine. A nightly job shows its own badge at the gate and gets a short visitor pass for the specific rooms it needs. No person is involved.
+
+#### Must know
+- A **service authenticates as itself** and receives a short-lived access token.
+- Used for backend jobs, partner integrations and internal service calls.
+- Prefer a **signed key assertion or mTLS** over a shared client secret.
+- Keep scopes and audience narrow, and **cache the token** until near expiry.
+- Sender-constrained tokens stop a stolen token working elsewhere.
+
+#### Common mistakes
+- A static API key or client secret sitting in a config file.
+- One client with wide scopes shared by many jobs.
+- Fetching a new token on every request.
 
 #### How it works
 ```mermaid
@@ -151,8 +204,27 @@ Mesh mTLS gives every workload a cryptographic identity automatically and encryp
 #### Interview angle
 > "Machine-to-machine access uses client credentials with private_key_jwt or mTLS, short audience-scoped tokens that are cached and ideally certificate-bound, never static shared keys."
 
+#### Sources
+- [The OAuth 2.0 authorization framework: client credentials grant (RFC 6749)](https://www.rfc-editor.org/rfc/rfc6749#section-4.4) — IETF
+- [OAuth 2.0 mutual-TLS client authentication and certificate-bound access tokens (RFC 8705)](https://www.rfc-editor.org/rfc/rfc8705) — IETF
+
 ### JWT validation — verify signature (RS256 public key), check exp, iss, aud; never skip validation
 Every service receiving a JWT must **fully validate** it before trusting any claim: signature (with an expected algorithm and a key from the trusted issuer's JWKS), expiry and not-before (with small leeway), issuer, audience, token type, and required scopes. Skipping any step lets attackers forge or replay tokens. (Phase 8 covers the full validation pipeline.)
+
+#### Intuition
+A bouncer checking a wristband properly: is it genuine, is it for tonight, is it from this venue's box office, and is it for this club? Reading the wristband without checking it is not checking.
+
+#### Must know
+- **Every service** receiving a JWT must validate it fully before trusting any claim.
+- Verify the **signature** with the issuer's public key and a pinned algorithm.
+- Check **expiry, issuer and audience**, then the required scope.
+- **Decoding is not validating.** Base64-decoding shows claims but proves nothing.
+- Fetch keys from the issuer's JWKS by key id, so key rotation needs no redeploy.
+
+#### Common mistakes
+- "The gateway already checked it", so an internal service trusts any token.
+- Accepting `alg: none`, or the algorithm the token itself names.
+- Skipping the audience check, so a token for another API is accepted.
 
 #### How it works
 ```mermaid
@@ -203,8 +275,27 @@ The issuer publishes both old and new public keys in its JWKS with distinct `kid
 #### Interview angle
 > "Every service fully validates JWTs with a standard library: pinned algorithm, JWKS by kid, exp, iss, aud and scopes. Nothing trusts that the gateway already checked."
 
+#### Sources
+- [JSON Web Token best current practices (RFC 8725)](https://www.rfc-editor.org/rfc/rfc8725) — IETF
+- [Introduction to JSON Web Tokens](https://www.jwt.io/introduction) — jwt.io
+
 ### Refresh token rotation — issue new refresh token on every use; revoke old one (prevents token theft)
 Refresh tokens let clients get new short-lived access tokens without re-login, so they're powerful and long-lived, a prime theft target. **Rotation** issues a **new refresh token on every use** and invalidates the old one. **Reuse detection** treats any attempt to use an already-used refresh token as theft and **revokes the whole token family**.
+
+#### Intuition
+A single-use ticket that is swapped for a fresh one at each visit. If two people ever turn up with the same ticket, one of them is a thief, so every ticket in that chain is cancelled.
+
+#### Must know
+- A refresh token is long-lived and can mint new access tokens, so it is a prime target.
+- **Rotation**: each use returns a new refresh token and invalidates the old one.
+- **Reuse detection**: an already-used token appearing again means theft. Revoke the whole family.
+- Add an absolute lifetime and revoke on logout and password change.
+- Store it in secure platform storage or server-side.
+
+#### Common mistakes
+- A refresh token that never rotates and lives for months.
+- Parallel refresh calls from several tabs that trigger false reuse detection.
+- Tokens that survive a password change.
 
 #### How it works
 ```mermaid
@@ -256,8 +347,27 @@ Make the client refresh single-flight (one refresh at a time, shared result acro
 #### Interview angle
 > "Refresh tokens rotate on every use, with family revocation on reuse, device binding, absolute lifetimes and revocation on password change, so a stolen refresh token dies within minutes."
 
+#### Sources
+- [Refresh token rotation](https://auth0.com/docs/secure/tokens/refresh-tokens/refresh-token-rotation) — Auth0 docs
+- [Best current practice for OAuth 2.0 security (RFC 9700)](https://www.rfc-editor.org/rfc/rfc9700) — IETF
+
 ### Token storage — httpOnly+Secure cookies (XSS-resistant) vs localStorage (XSS risk)
 Where a web app keeps tokens decides what an attacker gets from common bugs. **localStorage and sessionStorage** are readable by any JavaScript on the page, so **one XSS steals the token**. **HttpOnly, Secure, SameSite cookies** can't be read by JavaScript, which resists XSS token theft, but they're sent automatically, so you need **CSRF** protection.
+
+#### Intuition
+localStorage is a key left on the desk: any script that gets into the room can pick it up. An HttpOnly cookie is a key in a locked drawer that only the browser itself can use.
+
+#### Must know
+- **localStorage is readable by any JavaScript on the page.** One XSS bug steals the token.
+- An **HttpOnly, Secure, SameSite cookie** cannot be read by JavaScript.
+- Cookies are sent automatically, so they need **CSRF protection**.
+- Best for single-page apps: a **BFF** keeps tokens server-side, and the browser holds only a session cookie.
+- Mobile apps use Keychain or Keystore.
+
+#### Common mistakes
+- JWTs in localStorage "because it is simple".
+- Believing HttpOnly makes XSS harmless. The attacker can still act inside the page.
+- Cookie-based auth with no SameSite setting or CSRF token.
 
 #### How it works
 ```mermaid
@@ -312,8 +422,28 @@ No. XSS can still perform actions as the user from within the page (make authent
 #### Interview angle
 > "Browsers never hold bearer tokens: a BFF keeps them server-side and the browser gets a __Host-, HttpOnly, Secure, SameSite cookie, with CSRF tokens and a strict CSP. Mobile apps use Keychain or Keystore."
 
+#### Sources
+- [Session management cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) — OWASP
+- [Using HTTP cookies](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Cookies) — MDN
+- [OAuth 2.0 for browser-based applications](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-browser-based-apps) — IETF draft
+
 ### API keys — rotate regularly, hash before storage (like passwords), scope by service
 API keys are long random secrets that identify and authenticate a client application (common for developer and partner APIs). Treat them like passwords: **show once, store only a hash**, **scope** them (permissions, environments, IP restrictions), support **rotation** with overlapping validity, and detect leaks.
+
+#### Intuition
+A hotel key card for a contractor. It is issued once, the hotel keeps no copy of it, it opens only certain doors, and it can be cancelled and replaced without changing every lock.
+
+#### Must know
+- A long random secret that identifies a **client application**, not a user.
+- **Show it once and store only a hash**, as you would a password.
+- **Scope** each key: permissions, test or live environment, allowed IPs.
+- Allow several active keys per client, so rotation needs no downtime.
+- A recognisable prefix (`sk_live_`) lets secret scanners find leaked keys.
+
+#### Common mistakes
+- Keys stored in plaintext in the database.
+- One all-powerful key per customer, with no scopes.
+- A single key that cannot be rotated without an outage.
 
 #### How it works
 ```mermaid
@@ -365,8 +495,28 @@ Allow multiple active keys per client: create a new key, let the client deploy i
 #### Interview angle
 > "API keys are prefixed random secrets, shown once and stored hashed, scoped per environment and permission, rotatable with overlap, and covered by secret scanning so leaked keys get revoked automatically."
 
+#### Sources
+- [REST security cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html) — OWASP
+- [API keys](https://docs.stripe.com/keys) — Stripe docs
+- [About secret scanning](https://docs.github.com/en/code-security/concepts/secret-security/secret-scanning) — GitHub docs
+
 ### mTLS — both client and server present X.509 certificates; used for service-to-service auth in production
 Mutual TLS extends TLS so the **client also presents a certificate**, and both sides verify each other against trusted CAs. It gives strong, cryptographic identity for services and partners plus encryption in transit, and it's the foundation of zero-trust service meshes and many banking integrations. (Phase 1 covers the handshake.)
+
+#### Intuition
+Two officials who each show an ID card before speaking. In normal TLS only the shop shows its licence. Here the customer must show one too.
+
+#### Must know
+- In ordinary TLS only the server proves its identity. In **mutual TLS the client presents a certificate too**.
+- It gives both sides a **cryptographic identity** and encrypts the traffic.
+- It is the basis of service-mesh security and many bank integrations.
+- Certificates must be **issued and rotated automatically**, with short lifetimes.
+- Identity is not permission. Add authorisation policies per caller.
+
+#### Common mistakes
+- Certificates managed by hand, which expire and cause an outage.
+- Leaving the mesh in permissive mode, so plaintext is still accepted.
+- mTLS with no authorisation, so any authenticated service can call anything.
 
 #### How it works
 ```mermaid
@@ -412,8 +562,27 @@ Enable the mesh in permissive mode (accepting both plaintext and mTLS), roll sid
 #### Interview angle
 > "Service-to-service traffic is strict mTLS through the mesh, with short-lived auto-rotated SPIFFE identities and authorization policies per caller. Bank links use mTLS with managed private-CA certificates."
 
+#### Sources
+- [Security](https://istio.io/latest/docs/concepts/security/) — Istio docs
+- [SPIFFE overview](https://spiffe.io/docs/latest/spiffe-about/overview/) — SPIFFE docs
+
 ### Encryption at rest — AES-256, transparent encryption (TDE), or field-level encryption
 Encryption at rest protects stored data (disks, databases, backups, object storage) from exposure if the media or storage layer is accessed improperly. Layers range from **disk or volume encryption** (transparent) to **database TDE** to **application or field-level encryption** (protects data even from DB admins and SQL injection dumps).
+
+#### Intuition
+Three locks. A locked building protects against someone stealing the filing cabinet. A locked cabinet protects against someone inside the building. A locked box inside the cabinet protects one document even from people who hold the cabinet key.
+
+#### Must know
+- It protects **stored data**: disks, databases, backups, object storage.
+- **Disk or volume encryption** protects against stolen media and leaked snapshots only.
+- **Field-level encryption** keeps a sensitive column encrypted even from someone who can query the database.
+- Keys live in a KMS or HSM, **apart from the data**.
+- Encrypted fields cannot be searched normally. Use an HMAC blind index for exact lookups.
+
+#### Common mistakes
+- "The disk is encrypted, so we are safe from SQL injection."
+- Keys stored beside the data they protect.
+- Encrypting a field and then finding it must be searchable.
 
 #### How it works
 ```mermaid
@@ -463,8 +632,27 @@ Store a blind index alongside the ciphertext: an HMAC of the normalised value wi
 #### Interview angle
 > "All storage is KMS-encrypted as a baseline. PAN and Aadhaar get field-level envelope encryption with keys only the KYC service can use, and HMAC blind indexes allow exact lookups."
 
+#### Sources
+- [Cryptographic storage cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) — OWASP
+- [Using server-side encryption with AWS KMS keys (SSE-KMS)](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingKMSEncryption.html) — Amazon S3 user guide
+
 ### Encryption in transit — TLS 1.2/1.3 everywhere; enforce in security groups / policies
 Encryption in transit protects data moving over networks from eavesdropping and tampering: **TLS 1.2+ (prefer 1.3) for every hop**, including internal service-to-service and database connections, not just the public edge. "Internal networks are safe" is no longer an acceptable assumption (zero trust, compliance).
+
+#### Intuition
+Sending letters in sealed envelopes and not on postcards, even for mail between rooms of your own building. You cannot be sure who is standing in the corridor.
+
+#### Must know
+- **TLS on every hop**: the public edge, service-to-service, database, cache and broker connections.
+- "The internal network is safe" is no longer an accepted assumption.
+- **Enforce on the server side** so plaintext connections are refused.
+- **Clients must verify the certificate**, or a man-in-the-middle can still intercept.
+- Use TLS 1.2 or higher, and prefer 1.3.
+
+#### Common mistakes
+- TLS at the load balancer and plaintext behind it.
+- Postgres `sslmode=require`, which encrypts but does not verify the server. Use `verify-full`.
+- Old protocol versions left enabled.
 
 #### How it works
 ```mermaid
@@ -513,8 +701,27 @@ Add a bucket policy statement denying all actions when `aws:SecureTransport` is 
 #### Interview angle
 > "Every hop is TLS 1.2 or higher: edge, mesh mTLS, and DB, cache and Kafka connections. Servers enforce it (force_ssl, SecureTransport policies) and clients verify certificates with verify-full."
 
+#### Sources
+- [Transport layer security cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html) — OWASP
+- [SSL support](https://www.postgresql.org/docs/current/libpq-ssl.html) — PostgreSQL docs
+
 ### Secret management — HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager; never hardcode secrets
 Secrets (database passwords, API keys, signing keys, certificates) must never live in code, images or plain config. A **secret manager** stores them encrypted, controls access by identity, audits every read, supports **rotation**, and can issue **dynamic short-lived credentials**.
+
+#### Intuition
+A hotel safe at reception in place of a key under the doormat. Staff show their identity to get a key, every handout is written down, and the locks are changed on a schedule.
+
+#### Must know
+- Secrets never live in code, images, Git or plain config.
+- A **secret manager** stores them encrypted, grants access by workload identity, and **audits every read**.
+- It supports **rotation**, so a leaked secret has a short life.
+- **Dynamic secrets**: a unique short-lived credential per workload, revoked automatically.
+- Scan commits for secrets in CI.
+
+#### Common mistakes
+- A password baked into a Docker image layer or committed to Git.
+- An app that caches the old password forever and breaks at rotation.
+- One policy that lets every service read every secret.
 
 #### How it works
 ```mermaid
@@ -564,8 +771,31 @@ Credentials generated on demand per client with a short TTL (e.g. Vault creating
 #### Interview angle
 > "No secret lives in code, images or Git: workloads use their identity to read from Secrets Manager or Vault, ideally dynamic short-lived DB credentials, with audited access, automatic rotation and secret scanning in CI."
 
+#### Sources
+- [Secrets management cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html) — OWASP
+- [Database secrets engine](https://developer.hashicorp.com/vault/docs/secrets/databases) — HashiCorp Vault docs
+- [Rotate AWS Secrets Manager secrets](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotating-secrets.html) — AWS Secrets Manager user guide
+
 ### OWASP Top 10 — SQL injection, XSS, SSRF, broken access control, insecure deserialization — know each
-The OWASP Top 10 is the industry's reference list of the most critical web application security risks. The 2021 list: **Broken Access Control**, Cryptographic Failures, **Injection** (incl. XSS), Insecure Design, Security Misconfiguration, Vulnerable and Outdated Components, Identification and Authentication Failures, Software and Data Integrity Failures (incl. **insecure deserialisation**), Security Logging and Monitoring Failures, and **SSRF**.
+The OWASP Top 10 is the industry's reference list of the most critical web application security risks. The 2021 list: **Broken Access Control**, Cryptographic Failures, **Injection** (incl. XSS), Insecure Design, Security Misconfiguration, Vulnerable and Outdated Components, Identification and Authentication Failures, Software and Data Integrity Failures (incl. **insecure deserialisation**), Security Logging and Monitoring Failures, and **SSRF**. The **2025 edition** (final in January 2026) keeps Broken Access Control at #1 and folds SSRF into it, moves Security Misconfiguration up to #2, and adds two categories: **Software Supply Chain Failures** (#3) and **Mishandling of Exceptional Conditions** (#10). The risks and fixes below are unchanged, only the numbering differs.
+
+#### Intuition
+The road-safety list of the most common causes of crashes. It does not cover everything, but if you handle these ten you avoid most accidents.
+
+#### Must know
+- The standard list of the **most critical web application security risks**.
+- **Broken access control is #1**: users reaching data or actions that are not theirs.
+- **Injection**: use parameterised queries. **XSS**: encode output and set a CSP.
+- **SSRF**: restrict where your server may fetch from. **Deserialisation**: never deserialise untrusted data with native formats.
+- For each risk, know one example and one fix.
+
+#### Numbers to quote
+- The current edition is 2025. It adds Software Supply Chain Failures and Mishandling of Exceptional Conditions, and folds SSRF into Broken Access Control.
+
+#### Common mistakes
+- Treating the list as a complete security standard. It is an awareness baseline.
+- Naming the risks without a concrete fix for each.
+- Relying on a WAF in place of fixing the code.
 
 #### How it works
 ```mermaid
@@ -623,8 +853,28 @@ Deserialising untrusted data with formats that can instantiate arbitrary classes
 #### Interview angle
 > "I treat the OWASP Top 10 as a baseline: authorization on every resource, parameterised queries, output encoding with CSP, SSRF egress controls, no native deserialisation of untrusted data, and SCA in CI for vulnerable dependencies."
 
+#### Sources
+- [OWASP Top 10:2025](https://owasp.org/Top10/2025/) — OWASP
+- [OWASP Top Ten project](https://owasp.org/projects/top-ten) — OWASP
+- [Application Security Verification Standard](https://asvs.owasp.org/) — OWASP
+
 ### SSRF — Server-Side Request Forgery: prevent by validating/blocking internal IP ranges in outbound requests
 Server-Side Request Forgery happens when an attacker makes **your server send requests to destinations they choose**: internal services, admin interfaces, or the **cloud metadata endpoint** (`169.254.169.254`) that hands out credentials. Any feature that fetches a user-supplied URL (webhooks, URL previews, image imports, PDF renderers) is a potential SSRF vector.
+
+#### Intuition
+Asking a trusted office courier to "collect a parcel from this address", where the address is the company's own safe room. The courier is allowed in, so the attacker never has to be.
+
+#### Must know
+- The attacker makes **your server send a request to a destination they choose**.
+- Targets: internal services and the **cloud metadata endpoint** (`169.254.169.254`), which hands out credentials.
+- Any feature that fetches a user-supplied URL is at risk: webhooks, link previews, image imports.
+- Block private, loopback and link-local addresses, **checked after DNS resolution and on every redirect**.
+- Add network egress controls and enforce IMDSv2.
+
+#### Common mistakes
+- Validating the hostname once, then following a redirect to an internal address.
+- A deny-list of strings that misses decimal or IPv6 forms of an address.
+- Returning the raw fetched response to the user.
 
 #### How it works
 ```mermaid
@@ -681,8 +931,28 @@ IMDSv2 requires a session token obtained via a PUT request with a special header
 #### Interview angle
 > "Any user-supplied URL is fetched by an isolated worker behind an egress proxy that blocks private and metadata ranges after DNS resolution and on every redirect, with IMDSv2 enforced so instance credentials stay out of reach."
 
+#### Sources
+- [Server-side request forgery prevention cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html) — OWASP
+- [Server-side request forgery (SSRF)](https://portswigger.net/web-security/ssrf) — PortSwigger Web Security Academy
+- [Use the Instance Metadata Service to access instance metadata](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html) — Amazon EC2 user guide
+
 ### SQL injection — always parameterized queries, never string concatenation for SQL
 SQL injection happens when user input is **concatenated into SQL text**, so attacker-controlled characters change the query's structure: bypassing logins, dumping tables, modifying data, sometimes executing commands. The fix is simple and absolute: **parameterised queries** (prepared statements) everywhere, with allow-lists for identifiers that can't be parameters.
+
+#### Intuition
+A form with a box for your name, where someone writes "Ravi, and also give me every file". If the clerk reads the whole box as instructions, it works. A proper form treats whatever is in the box as a name and nothing else.
+
+#### Must know
+- It happens when **user input is concatenated into SQL text** and changes the query's structure.
+- The fix is **parameterised queries (prepared statements) everywhere**.
+- Bound values are always treated as data, never as SQL.
+- Column names and sort directions cannot be bound, so map them through an **allow-list**.
+- Give the application's database user the least privilege it needs.
+
+#### Common mistakes
+- String-built queries inside an ORM (raw JPQL, HQL or native SQL).
+- Relying on escaping or a WAF in place of parameters.
+- `ORDER BY` built directly from a request parameter.
 
 #### How it works
 ```mermaid
@@ -743,8 +1013,27 @@ Identifiers can't be bound as parameters, so map user input to an allow-list of 
 #### Interview angle
 > "Every query binds parameters, dynamic identifiers like sort columns come from allow-lists, DB users are least-privilege, and Semgrep fails builds on concatenated SQL."
 
+#### Sources
+- [SQL injection prevention cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html) — OWASP
+- [SQL injection](https://portswigger.net/web-security/sql-injection) — PortSwigger Web Security Academy
+
 ### DDoS mitigation — rate limiting (WAF), CDN absorption, IP reputation lists, Anycast
 Distributed denial-of-service attacks overwhelm a service with traffic: **volumetric** (floods saturating bandwidth), **protocol** (SYN floods, state exhaustion) or **application-layer** (L7 floods of expensive requests). Mitigation is layered: absorb at the **edge** (anycast CDN and scrubbing), filter with **WAF and rate limits**, and protect origins and expensive endpoints.
+
+#### Intuition
+A crowd sent to block a shop's entrance. One door cannot cope, so you spread the crowd over hundreds of entrances far from the shop, check who is a real customer at each, and keep the back door hidden.
+
+#### Must know
+- Attack types: **volumetric** floods, **protocol** attacks such as SYN floods, and **application-layer** floods of expensive requests.
+- **Absorb at the edge**: an anycast CDN spreads traffic over many locations.
+- **Filter with a WAF**: rate limits, bot detection, IP reputation.
+- **Lock the origin** so it accepts traffic only from the CDN.
+- Protect expensive endpoints with strict limits and load shedding.
+
+#### Common mistakes
+- An origin that is still reachable directly, bypassing the CDN and WAF.
+- Cache keys that include random query strings, so every request is a miss.
+- Autoscaling without a cap, which turns an attack into a large bill.
 
 #### How it works
 ```mermaid
@@ -797,8 +1086,27 @@ If attackers discover the origin's IP or hostname, they can bypass the CDN and W
 #### Interview angle
 > "DDoS defence is layered: an anycast CDN with Shield absorbs floods, WAF rate rules and bot management filter L7 traffic, origins accept only CDN traffic, and expensive endpoints get strict limits and load shedding."
 
+#### Sources
+- [AWS best practices for DDoS resiliency](https://docs.aws.amazon.com/whitepapers/latest/aws-best-practices-ddos-resiliency/) — AWS whitepaper
+- [Denial of service cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Denial_of_Service_Cheat_Sheet.html) — OWASP
+
 ### Zero-trust architecture — never trust, always verify; microsegmentation, device health checks
 Zero trust replaces "trusted internal network" thinking with **continuous verification of every request**: identity (user and workload), device posture and context are checked for each access, access is **least-privilege** and **segmented**, and breaches are assumed so the blast radius stays small. Being inside the network grants nothing.
+
+#### Intuition
+The old model is a castle: get over the wall and you can walk anywhere. Zero trust is a building where every single door checks your badge again, whoever you are and wherever you came from.
+
+#### Must know
+- **Being inside the network grants nothing.** Every request is verified.
+- Verify identity (user and workload), device health and context.
+- Access is **least privilege and per application**, not per network.
+- **Assume breach**: segment the network so one compromise stays small.
+- Building blocks: SSO with MFA, identity-aware proxy, mTLS between services, network policies.
+
+#### Common mistakes
+- Calling a VPN zero trust. A VPN checks once, then opens the whole network.
+- A flat internal network where any service can call any other.
+- Permanent admin access where just-in-time access would do.
 
 #### How it works
 ```mermaid
@@ -846,8 +1154,27 @@ A VPN authenticates once and then places the user on the internal network, where
 #### Interview angle
 > "I design for zero trust: employees reach each internal app through an identity-aware proxy with MFA and device posture, services authenticate with mesh mTLS plus per-call authorization, and admin access is just-in-time."
 
+#### Sources
+- [Zero trust architecture (NIST SP 800-207)](https://csrc.nist.gov/pubs/sp/800/207/final) — NIST
+- [BeyondCorp: a new approach to enterprise security](https://research.google/pubs/beyondcorp-a-new-approach-to-enterprise-security/) — Google Research
+
 ### Principle of least privilege — every service/user gets minimum permissions needed
 Least privilege means every identity (human, service, CI pipeline, third party) gets **only the permissions required for its task, for only as long as needed**. When an identity is compromised, the damage is limited to that narrow scope. It applies to cloud IAM, databases, Kubernetes RBAC, network access and application roles.
+
+#### Intuition
+A hotel cleaner gets a card for the floors on today's rota, valid for the shift. If that card is stolen, the thief cannot open the manager's office, and tomorrow the card is dead.
+
+#### Must know
+- Every identity gets **only the permissions its task needs, for only as long as needed**.
+- It **limits the damage** when an identity is compromised.
+- One identity **per service and per environment**. No shared credentials.
+- Humans get elevated access **just in time**: approved, time-boxed and logged.
+- It applies everywhere: cloud IAM, database roles, Kubernetes RBAC, CI pipelines.
+
+#### Common mistakes
+- Wildcard policies added during development and never tightened.
+- An admin key stored as a CI secret.
+- Permissions that pile up and are never reviewed.
 
 #### How it works
 ```mermaid
@@ -898,8 +1225,27 @@ Just-in-time access: engineers request time-boxed elevated roles (e.g. 1 hour) t
 #### Interview angle
 > "Every identity gets the narrowest permissions for the shortest time: per-service IAM and DB roles scoped to their own resources, OIDC roles for CI, just-in-time admin access, and regular pruning of unused permissions."
 
+#### Sources
+- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) — AWS IAM user guide
+- [Least privilege](https://csrc.nist.gov/glossary/term/least_privilege) — NIST glossary
+
 ### Audit logging — immutable log: who accessed what, when, from where; ship to SIEM
 Audit logs record **security-relevant actions**: who (identity), did what (action), to which resource, when, from where (IP, device), with what result, in a **tamper-evident, centrally retained** store. They support incident investigation, compliance (PCI DSS, SOC 2, RBI guidelines) and detection when shipped to a **SIEM**.
+
+#### Intuition
+A building's visitor book written in ink and kept in a locked cabinet in another building. It records who came, when, and which room they entered, and nobody who signed it can tear a page out.
+
+#### Must know
+- It records **who did what, to which resource, when, from where, and the result**.
+- It must be **append-only and tamper-evident**, kept apart from the systems it describes.
+- Log privileged actions and **reads of sensitive data**, not only changes.
+- Ship it to a **SIEM** with alert rules. Stored but unread logs detect nothing.
+- Mask personal data inside the log itself.
+
+#### Common mistakes
+- Audit logs in the same account as the workload, where an attacker can delete them.
+- No record of who viewed sensitive data.
+- Best-effort logging that drops events under load.
 
 #### How it works
 ```mermaid
@@ -948,8 +1294,28 @@ Authentication events (logins, MFA, failures), permission and role changes, view
 #### Interview angle
 > "Privileged actions and sensitive reads emit structured audit events into a separate log-archive account with Object Lock and a SIEM, with correlation rules like 'bank details changed, then payout within an hour'."
 
+#### Sources
+- [Logging cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) — OWASP
+- [Locking objects with Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html) — Amazon S3 user guide
+- [What is AWS CloudTrail?](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) — AWS CloudTrail user guide
+
 ### GDPR / PII handling — data minimization, right to erasure, encryption, data subject rights
 Privacy regulations (GDPR, India's DPDP Act 2023, CCPA) require handling **personal data** lawfully: collect only what's needed (**minimisation**), for stated **purposes** with a legal basis or **consent**, keep it secure (encryption, access control), retain it only as long as necessary, and honour **data subject rights**: access, correction, **erasure**, portability, objection.
+
+#### Intuition
+Borrowing someone's belongings. Take only what you need, use it only for what you said, keep it safe, give it back or destroy it when asked, and be able to say exactly where it is.
+
+#### Must know
+- **Minimise**: collect only the personal data you need, for a stated purpose.
+- Keep it secure, and delete it when the retention period ends.
+- Honour user rights: access, correction, **erasure**, export.
+- Erasure must reach **every system**, so you need a data map and an erasure event all services consume.
+- **Crypto-shredding** handles backups and immutable logs: delete the user's key.
+
+#### Common mistakes
+- Not knowing which systems hold a user's data.
+- Personal data in logs, analytics tables and event streams.
+- Forgetting that legal retention rules (such as financial records) override erasure for those fields.
 
 #### How it works
 ```mermaid
@@ -1004,8 +1370,27 @@ Collect only necessary fields. Keep identity data (name, contact, documents) in 
 #### Interview angle
 > "Personal data lives in one identity service and everything else uses opaque ids. A privacy orchestrator fans erasure events out to every service, crypto-shredding covers logs and backups, and legal-retention exceptions are explicit."
 
+#### Sources
+- [Art. 5 GDPR: principles relating to processing of personal data](https://gdpr-info.eu/art-5-gdpr/) — GDPR text
+- [Art. 17 GDPR: right to erasure](https://gdpr-info.eu/art-17-gdpr/) — GDPR text
+
 ### Data masking and tokenization — protect PII in non-production environments
 **Masking** replaces sensitive values with realistic but fake or partially hidden values (e.g. `XXXX-XXXX-XXXX-1234`, fake names), often irreversibly, for non-production copies, analytics and UIs. **Tokenization** replaces a sensitive value with a **random token** and keeps the real value in a secure **token vault**, so systems handle tokens while only the vault can detokenize. It's essential for **PCI scope reduction**.
+
+#### Intuition
+Masking is blacking out part of a document before showing it. Tokenisation is swapping a valuable for a cloakroom ticket: the ticket is worthless to a thief, and only the cloakroom can turn it back into the real thing.
+
+#### Must know
+- **Masking** replaces a value with a fake or partial one, usually irreversibly. Used for staging data and screens.
+- **Tokenisation** replaces a value with a random token. The real value stays in a secure **vault**.
+- Systems that hold only tokens fall **out of PCI scope**.
+- Mask deterministically (same input, same fake), so joins still work.
+- Dynamic masking shows partial data by role, with audited reveals.
+
+#### Common mistakes
+- Copying raw production data into staging.
+- Inconsistent masking that breaks joins between tables.
+- A single-instance token vault that takes payments down with it.
 
 #### How it works
 ```mermaid
@@ -1061,3 +1446,9 @@ Run a masking pipeline when refreshing staging from production: replace names, e
 
 #### Interview angle
 > "Card and KYC numbers are tokenized at capture so most systems leave PCI scope. Support sees role-based masked values with audited reveals, and staging is refreshed through a deterministic masking pipeline, so engineers never see real PII."
+
+#### Sources
+- [Tokenization (data security)](https://en.wikipedia.org/wiki/Tokenization_%28data_security%29) — Wikipedia
+- [Data masking](https://en.wikipedia.org/wiki/Data_masking) — Wikipedia
+- [Integration security guide](https://docs.stripe.com/security/guide) — Stripe docs
+
