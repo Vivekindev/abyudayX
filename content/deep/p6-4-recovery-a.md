@@ -3,6 +3,24 @@
 ### Quorum reads/writes — N replicas, write to W, read from R; W+R>N ensures overlap and consistency
 With N replicas, a write succeeds after **W** acknowledgements and a read consults **R** replicas. If **W + R > N**, every read set overlaps every write set in at least one replica, so a read can find the latest acknowledged write (by comparing versions). Tuning W and R trades consistency, latency and availability.
 
+#### Intuition
+You tell a secret to two of three friends. Later you ask any two of the three. At least one of the two you ask must be one you told, so you always hear the latest version.
+
+#### Must know
+- **N** replicas. A write succeeds after **W** acknowledgements. A read asks **R** replicas.
+- **W + R > N** means every read set overlaps every write set in at least one replica.
+- The read compares versions and returns the newest, so it needs version metadata.
+- Tuning W and R trades consistency, latency and availability.
+- It is **not linearizability**: concurrent writes and sloppy quorums can still cause anomalies.
+
+#### Numbers to quote
+- N = 3, W = 2, R = 2 tolerates 1 failure. N = 5, W = 3, R = 3 tolerates 2.
+
+#### Common mistakes
+- W = 1, R = 1 and expecting fresh reads.
+- W = N, which makes a single down replica block every write.
+- Claiming overlap alone guarantees linearizable behaviour.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -60,8 +78,27 @@ The read collects values from R replicas that may hold different versions. To re
 #### Interview angle
 > "With three replicas I use W=2, R=2: overlapping quorums give read-your-latest, one replica can be down for either operation, and read repair plus anti-entropy keep replicas converging."
 
+#### Sources
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+- [Quorum (distributed computing)](https://en.wikipedia.org/wiki/Quorum_%28distributed_computing%29) — Wikipedia
+
 ### Common quorum config — N=3, W=2, R=2: tolerates 1 failure, consistent reads
 The most common quorum configuration is **3 replicas, writes acknowledged by 2, reads from 2**. It's the sweet spot: tolerates one replica failure for both reads and writes, guarantees read/write overlap (2 + 2 > 3), and keeps latency near the second-fastest replica rather than the slowest.
+
+#### Intuition
+Three keyholders for a safe, with any two needed to open it. One can be on holiday and the safe still opens, and no two pairs can ever disagree about what is inside.
+
+#### Must know
+- **Three replicas, writes acknowledged by two, reads from two.**
+- One replica can be down for both reads and writes.
+- 2 + 2 > 3, so reads overlap writes.
+- Latency follows the second-fastest replica, not the slowest.
+- The same shape appears everywhere: Cassandra `LOCAL_QUORUM`, Kafka RF 3 with `min.insync.replicas=2`, a 3-node etcd cluster, a MongoDB majority.
+
+#### Common mistakes
+- Putting two of the three replicas in the same AZ.
+- Forgetting that maintenance on one node leaves no room for an unplanned failure.
+- Kafka `min.insync.replicas=3` with RF 3, which blocks producers when one broker is down.
 
 #### How it works
 ```mermaid
@@ -115,8 +152,27 @@ With N=2 and W=2, any single replica failure blocks all writes, so there's no wr
 #### Interview angle
 > "My default is three replicas across three AZs with majority writes and reads, in Cassandra, Kafka, etcd or MongoDB alike, which survives one failure with consistent reads. Five replicas only for data that must survive two."
 
+#### Sources
+- [Replication](https://kafka.apache.org/documentation/#replication) — Apache Kafka docs
+- [Dynamo architecture in Cassandra: tunable consistency](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+
 ### Gossip protocol — epidemic broadcast: each node periodically exchanges state with random peers, O(log N) convergence
 Gossip (epidemic) protocols spread information the way rumours spread: periodically, each node picks a few **random peers** and exchanges state. New information reaches all N nodes in about **O(log N) rounds**, with no central coordinator and graceful tolerance of failures. It's used for membership, failure detection, metadata and anti-entropy. (Cassandra's implementation is covered in Phase 3.)
+
+#### Intuition
+A rumour in a school. Each pupil who knows tells a couple of others at random every break. Nobody organises it, and within a few breaks the whole school has heard.
+
+#### Must know
+- Each node regularly exchanges state with a few **random peers**.
+- News reaches all N nodes in about **O(log N) rounds**.
+- No central coordinator, and it tolerates failed nodes and lost messages.
+- Used for cluster membership, failure detection and metadata.
+- Views are **eventually consistent**: nodes can briefly disagree.
+
+#### Common mistakes
+- Using gossip where an exact, agreed answer is needed. That is a job for consensus.
+- Shipping the full state in every message, which floods a large cluster.
+- Declaring a node dead after one missed ping, with no indirect probe.
 
 #### How it works
 ```mermaid
@@ -164,8 +220,30 @@ If a direct ping to a member fails, the prober asks k other random members to pi
 #### Interview angle
 > "For membership and failure detection in large clusters I'd use gossip, specifically SWIM-style indirect probes and piggybacked updates as in Consul. Per-node cost stays constant and changes spread in O(log N) rounds."
 
+#### Sources
+- [Gossip protocol](https://en.wikipedia.org/wiki/Gossip_protocol) — Wikipedia
+- [Gossip protocol in Consul](https://developer.hashicorp.com/consul/docs/concept/gossip) — HashiCorp Consul docs
+
 ### Phi accrual failure detector — adaptive: outputs suspicion value φ, not binary up/down judgment
 A phi accrual failure detector replaces "no heartbeat for X seconds means dead" with a continuous **suspicion level φ**, computed from the statistical distribution of past heartbeat arrival intervals. The application picks a threshold. It adapts automatically to network jitter and load, which reduces false positives. Cassandra and Akka use it.
+
+#### Intuition
+A friend who normally replies within a minute has been silent for ten: you start to worry. A friend who often takes an hour has been silent for ten minutes: you think nothing of it. The same silence means different things depending on their habits.
+
+#### Must know
+- It outputs a **suspicion level φ**, not a yes or no.
+- φ is computed from the history of heartbeat arrival times, so it **adapts to the network's jitter**.
+- The application sets the threshold at which a node counts as down.
+- It gives fewer false alarms than a fixed timeout.
+- No detector can tell a dead node from a very slow one, so correctness must rest on quorums and fencing.
+
+#### Numbers to quote
+- Cassandra's default `phi_convict_threshold` is 8.
+
+#### Common mistakes
+- A fixed heartbeat timeout tuned for a quiet day.
+- Treating the detector's verdict as fact and acting destructively on it.
+- A threshold so low that GC pauses make nodes flap.
 
 #### How it works
 ```mermaid
@@ -213,8 +291,27 @@ No. In an asynchronous system you can't distinguish a crashed node from a very s
 #### Interview angle
 > "Failure detection is a probability, not a fact. Phi accrual adapts to jitter, and I keep correctness safe with quorums and fencing regardless of what the detector says."
 
+#### Sources
+- [Failure detector](https://en.wikipedia.org/wiki/Failure_detector) — Wikipedia
+- [Dynamo architecture in Cassandra: failure detection](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+
 ### Read repair — detect stale replica during read, return latest to client, async update stale replica
 Read repair fixes stale replicas **opportunistically on the read path**: when a read consults multiple replicas and their versions differ, the coordinator returns the newest value and **writes it back** to the replicas that were behind. Frequently read data converges quickly without background jobs. (Phase 3 covers Cassandra's specifics.)
+
+#### Intuition
+You ask two colleagues the same question, get two different answers, and take the more recent one. While you are there, you tell the colleague who was out of date.
+
+#### Must know
+- When a read sees replicas with different versions, it returns the newest and **writes it back to the stale ones**.
+- Frequently read data converges quickly, with no background job.
+- It fixes **only data that is read**, and only when several replicas are consulted.
+- Blocking repair fixes before replying. Asynchronous repair replies first.
+- Cold data still needs anti-entropy repair.
+
+#### Common mistakes
+- Relying on read repair as the only convergence mechanism.
+- Expecting it to work on single-replica reads.
+- Forgetting that the repair adds latency to the read that triggers it.
 
 #### How it works
 ```mermaid
@@ -266,8 +363,27 @@ Blocking repair (write back before responding) guarantees that once a quorum rea
 #### Interview angle
 > "Read repair converges hot keys as a side effect of quorum reads. Anti-entropy and hinted handoff cover cold data and recovering nodes."
 
+#### Sources
+- [Read repair](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/read_repair.html) — Apache Cassandra docs
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+
 ### Anti-entropy repair — Merkle tree comparison between nodes, repair differences in background
 Anti-entropy is a background process that makes replicas identical by comparing their data and transferring differences. To avoid shipping everything, replicas build **Merkle trees** (hash trees over key ranges) and exchange hashes top-down, transferring only ranges whose hashes differ. (Phase 3 covers Cassandra repair operations.)
+
+#### Intuition
+Two accountants reconciling ledgers. They compare the grand total first. If it differs, they compare chapter totals, then page totals, and only re-read the few pages that do not match.
+
+#### Must know
+- A background process that makes replicas identical.
+- Each replica builds a **Merkle tree**: hashes of key ranges, with each parent hashing its children.
+- Compare from the root down, and transfer only the ranges whose hashes differ.
+- It is the only mechanism that covers **data nobody reads**.
+- It is heavy on CPU and I/O, so schedule and throttle it.
+
+#### Common mistakes
+- Never running it.
+- One enormous repair at peak time.
+- Thinking Merkle trees are only a blockchain idea. Git and file sync use them too.
 
 #### How it works
 ```mermaid
@@ -315,8 +431,27 @@ Git (content-addressed commits and trees), file sync tools and backup deduplicat
 #### Interview angle
 > "Background anti-entropy compares Merkle trees per range and streams only what differs, which is what guarantees eventual consistency for data that's never read."
 
+#### Sources
+- [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree) — Wikipedia
+- [Repair](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/repair.html) — Apache Cassandra docs
+
 ### Hinted handoff — store writes for unavailable nodes locally, replay when node recovers
 Hinted handoff keeps writes flowing when a replica is temporarily down: another node (the coordinator) accepts the write **on behalf of** the missing replica, stores it as a **hint**, and **replays** it when the replica comes back. That shortens recovery for brief outages. (Phase 3 covers Cassandra's specifics.)
+
+#### Intuition
+A colleague is away, so you keep the notes meant for them in an envelope with their name on it and hand it over when they are back.
+
+#### Must know
+- When a replica is down, another node **stores the write as a hint** and replays it later.
+- Writes keep flowing through short outages, and the returning node catches up fast.
+- Hints are kept for a **limited window**. After a longer outage the node needs a full repair.
+- A **sloppy quorum** counts writes on substitute nodes toward W: more available, weaker guarantee.
+- It is best-effort. It does not replace anti-entropy.
+
+#### Common mistakes
+- Treating a hint as a successful write to the real replica.
+- Bringing a node back after a long outage with no repair.
+- Mixing up strict and sloppy quorums.
 
 #### How it works
 ```mermaid
@@ -369,8 +504,27 @@ Hints are kept only for a limited window and only on the coordinators that handl
 #### Interview angle
 > "Hinted handoff covers replicas that are down for minutes during restarts. Anything longer than the hint window requires a repair before the node serves reads again."
 
+#### Sources
+- [Hints](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/hints.html) — Apache Cassandra docs
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+
 ### CRDTs — Conflict-free Replicated Data Types: G-counter, PN-counter, LWW-Register, OR-Set, 2P-Set
 CRDTs are data structures designed so that replicas can **update independently and merge automatically** into the same state, regardless of the order or number of times updates are received. They provide strong eventual consistency without coordination, ideal for multi-region, offline-first and collaborative systems.
+
+#### Intuition
+Vote tallies kept at each polling station. Every station counts its own votes, and the national total is the sum of the latest figure from each station. Merging the same report twice, or in a different order, never changes the result.
+
+#### Must know
+- Data types that replicas can **update independently and always merge to the same state**.
+- The merge is commutative, associative and idempotent, so order and repeats do not matter.
+- **G-Counter**: increment only. **PN-Counter**: increment and decrement.
+- **OR-Set**: add and remove repeatedly, and an add beats a concurrent remove.
+- They cannot enforce invariants such as stock ≥ 0 or uniqueness.
+
+#### Common mistakes
+- Using a 2P-Set for a cart, where a removed item can never be re-added.
+- Proposing CRDTs for balances or inventory.
+- Ignoring the metadata and tombstones they accumulate.
 
 #### How it works
 ```mermaid
@@ -424,8 +578,27 @@ An OR-Set: users repeatedly add and remove the same item, and a 2P-Set forbids r
 #### Interview angle
 > "For multi-region counters, presence and carts I use CRDTs (PN-counters, OR-Sets), so every region accepts writes locally and converges deterministically. Invariants like stock or balance still need coordination."
 
+#### Sources
+- [Conflict-free replicated data type](https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type) — Wikipedia
+- [About CRDTs](https://crdt.tech/) — crdt.tech
+
 ### At-most-once delivery — fire and forget, may lose messages (UDP, basic HTTP without retry)
 At-most-once delivery sends a message **zero or one times**: there are no retries, so failures cause **loss** but never duplicates. It's the cheapest delivery guarantee, appropriate when losing occasional messages is acceptable and duplicates would be harmful or pointless.
+
+#### Intuition
+Shouting a message across a noisy room once. Maybe they heard, maybe not. You will not repeat it, so they never hear it twice.
+
+#### Must know
+- The message is delivered **zero or one times**. No retries.
+- **Loss is possible, duplicates are not.**
+- Suitable for metrics, telemetry and presence pings, where the next sample replaces a lost one.
+- It also happens by accident: a consumer that **acknowledges before processing** loses the message if it crashes.
+- Never use it for orders, payments or anything a user relies on.
+
+#### Common mistakes
+- Kafka auto-commit with slow processing, which is at-most-once in disguise.
+- Choosing it for business events because it is simple.
+- Adding retries to a metrics pipeline, which adds load exactly during incidents.
 
 #### How it works
 ```mermaid
@@ -477,8 +650,27 @@ When data is high-volume, individually low-value and quickly superseded (metrics
 #### Interview angle
 > "At-most-once is only for telemetry-style data where the next sample supersedes the last. Business events are at-least-once with idempotent consumers, and offsets are committed only after processing."
 
+#### Sources
+- [Message delivery semantics](https://kafka.apache.org/documentation/#semantics) — Apache Kafka docs
+- [Reliability guide](https://www.rabbitmq.com/docs/reliability) — RabbitMQ docs
+
 ### At-least-once delivery — retry until ack; messages may be duplicated, require idempotent consumers
 At-least-once delivery **retries until the message is acknowledged**, so nothing is lost, but the same message may be delivered (and processed) **more than once** (after timeouts, crashes before ack, rebalances). It's the default guarantee of most queues (SQS, Kafka consumers committing after processing, RabbitMQ with acks, webhooks), and it demands **idempotent consumers**.
+
+#### Intuition
+A courier who keeps coming back until someone signs for the parcel. You will certainly get it, but if your signature gets lost in the paperwork, a second parcel turns up.
+
+#### Must know
+- Retry until acknowledged: **nothing is lost, but duplicates happen**.
+- The default for most queues: SQS, RabbitMQ with acks, Kafka when you commit after processing.
+- Consumers **must be idempotent**.
+- Idempotency methods: a dedupe table keyed by message id, upserts, conditional state changes, version checks.
+- Send messages that always fail to a **dead-letter queue**.
+
+#### Common mistakes
+- A consumer with side effects and no dedupe, which sends two emails or charges twice.
+- A visibility timeout shorter than the processing time, which redelivers work still in progress.
+- Recording the dedupe id outside the transaction that performs the side effect.
 
 #### How it works
 ```mermaid
@@ -532,3 +724,8 @@ Losing business events (orders, payments, state changes) silently corrupts syste
 
 #### Interview angle
 > "Business events are at-least-once: commit or ack after processing, consumers are idempotent through a dedupe table in the same transaction as the side effect, and poison messages go to a DLQ."
+
+#### Sources
+- [Message delivery semantics](https://kafka.apache.org/documentation/#semantics) — Apache Kafka docs
+- [Amazon SQS at-least-once delivery](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html) — Amazon SQS developer guide
+

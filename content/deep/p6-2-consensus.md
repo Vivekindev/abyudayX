@@ -3,6 +3,25 @@
 ### Raft — leader election (randomized timeout, first to get majority votes), log replication, safety
 Raft is a consensus algorithm designed to be **understandable**. A cluster of (usually 3 or 5) nodes agrees on a **replicated log** of commands, so each node's state machine ends up identical. It splits the problem into **leader election**, **log replication** and **safety**. etcd, Consul, CockroachDB, TiKV, Kafka KRaft and RabbitMQ quorum queues use it.
 
+#### Intuition
+A committee keeping one shared minute book. They elect a chairperson, only the chairperson writes in the book, and an entry counts once more than half the members have copied it into their own. If the chairperson disappears, they elect another.
+
+#### Must know
+- A consensus algorithm: a small cluster agrees on one **replicated log**, so every node ends up in the same state.
+- Three parts: **leader election, log replication, safety**.
+- Only the **leader** accepts writes. An entry is **committed once a majority has stored it**.
+- **Terms** number each leadership period. There is at most one leader per term.
+- Used by etcd, Consul, CockroachDB, TiKV and Kafka KRaft.
+
+#### Numbers to quote
+- 3 nodes tolerate 1 failure, 5 tolerate 2. Clusters are usually 3 or 5.
+- A new leader is typically elected in well under a second.
+
+#### Common mistakes
+- An even number of nodes. It adds cost, not fault tolerance.
+- One huge Raft group. Large systems run many small groups, one per data range.
+- Saying the leader replies as soon as it writes locally. It replies after the majority has the entry.
+
 #### How it works
 ```mermaid
 stateDiagram-v2
@@ -65,8 +84,30 @@ Every write waits for a majority, so more nodes mean more replication traffic an
 #### Interview angle
 > "For metadata or coordination I rely on Raft through etcd or Consul: a 3- or 5-node cluster across AZs, writes committed on a majority, and automatic leader election in under a second."
 
+#### Sources
+- [The Raft consensus algorithm](https://raft.github.io/) — raft.github.io
+- [In search of an understandable consensus algorithm](https://raft.github.io/raft.pdf) — Ongaro and Ousterhout
+
 ### Raft leader election — each node has random election timeout; first to expire sends RequestVote
 Raft elects leaders using **heartbeats and randomised timeouts**. Followers expect periodic heartbeats from the leader. If none arrive within their election timeout (randomised, e.g. 150–300 ms), a follower becomes a candidate and asks for votes. Randomisation makes it unlikely that two nodes start elections at once.
+
+#### Intuition
+A class waiting for a teacher who has not turned up. Each pupil silently counts to a different random number. Whoever finishes first stands up and says "I'll lead". If most of the class agree, it is settled before anyone else has finished counting.
+
+#### Must know
+- Followers expect regular **heartbeats** from the leader.
+- With no heartbeat within its **randomised election timeout**, a follower becomes a candidate, raises the term and asks for votes.
+- Each node gives **one vote per term**, and only to a candidate whose log is **at least as up to date** as its own.
+- A majority of votes makes a leader. Randomised timeouts make split votes rare.
+- The log rule guarantees the new leader has every committed entry.
+
+#### Numbers to quote
+- The Raft paper suggests election timeouts of 150–300 ms.
+
+#### Common mistakes
+- Forgetting the "log at least as up to date" condition, which is what makes elections safe.
+- Timeouts shorter than GC or disk pauses, which cause constant re-elections.
+- Assuming the node that times out first always wins. It still needs a majority.
 
 #### How it works
 ```mermaid
@@ -124,8 +165,27 @@ A candidate needs votes from a majority, and voters refuse candidates whose log 
 #### Interview angle
 > "Raft elections use randomised timeouts and log-freshness voting rules, so the new leader always holds every committed entry. PreVote and CheckQuorum keep flaky nodes from causing needless elections."
 
+#### Sources
+- [In search of an understandable consensus algorithm](https://raft.github.io/raft.pdf) — Ongaro and Ousterhout
+- [The Raft consensus algorithm](https://raft.github.io/) — raft.github.io
+
 ### Raft log replication — leader appends entry, replicates to majority, only then commits
 In Raft, the leader is the only node that accepts writes. It appends each command to its log, replicates it to followers with `AppendEntries`, and **commits** the entry once a **majority** has stored it. Only committed entries are applied to the state machine and acknowledged to clients.
+
+#### Intuition
+The chairperson writes a new line in the minute book and reads it out. Once more than half the members have written the same line in the same position, it is official, and only then is the person who asked told "done".
+
+#### Must know
+- The leader appends the command to its log and sends it to followers with `AppendEntries`.
+- The entry is **committed when a majority has stored it**. Only then is it applied and the client answered.
+- Each message carries the previous entry's index and term, so a follower can detect that its log differs.
+- A follower with a conflicting log has its **uncommitted tail overwritten** by the leader's.
+- Snapshots compact the log and bring slow followers up to date.
+
+#### Common mistakes
+- Acknowledging the client before the majority has the entry.
+- Thinking committed entries can be overwritten. Only uncommitted ones can.
+- No snapshots, so the log grows without bound.
 
 #### How it works
 ```mermaid
@@ -181,8 +241,27 @@ The new leader's AppendEntries consistency check fails at the divergence point. 
 #### Interview angle
 > "In Raft only the leader writes, an entry commits once a majority has persisted it, and only then does the client get an ack. Followers that diverge get repaired from the leader's log or a snapshot."
 
+#### Sources
+- [In search of an understandable consensus algorithm](https://raft.github.io/raft.pdf) — Ongaro and Ousterhout
+- [The Raft consensus algorithm](https://raft.github.io/) — raft.github.io
+
 ### Raft safety property — at most one leader per term, committed entries are never lost
 Raft's safety guarantees are what make it trustworthy: **election safety** (at most one leader per term), **leader append-only** (leaders never overwrite their own log), **log matching**, **leader completeness** (committed entries are present in all future leaders' logs) and **state machine safety** (no two nodes apply different commands at the same index).
+
+#### Intuition
+Two rules that keep the minute book trustworthy: there is never more than one chairperson for a given meeting number, and a line that became official can never be erased or changed afterwards.
+
+#### Must know
+- **Election safety**: at most one leader per term.
+- **Leader completeness**: a committed entry is present in every future leader's log.
+- **State machine safety**: no two nodes apply different commands at the same position.
+- A deposed leader can **briefly believe it still leads**, so its local reads may be stale.
+- Linearizable reads need a leadership check (ReadIndex) or a lease. External writes need the term as a fencing token.
+
+#### Common mistakes
+- Saying two leaders can never coexist. They can for a moment, in different terms, but the old one cannot commit anything.
+- Serving reads from a leader's local state with no leadership check.
+- A node that lost its disk rejoining as if nothing happened. It must rejoin as a new member.
 
 #### How it works
 ```mermaid
@@ -228,8 +307,27 @@ If a node voted in term 9, crashed and forgot, it could vote again for a differe
 #### Interview angle
 > "Raft guarantees one leader per term and that committed entries are never lost. For linearizable reads I still need ReadIndex or leases, and the term doubles as a fencing token for external writes."
 
+#### Sources
+- [In search of an understandable consensus algorithm](https://raft.github.io/raft.pdf) — Ongaro and Ousterhout
+- [KV API guarantees](https://etcd.io/docs/v3.5/learning/api_guarantees/) — etcd docs
+
 ### Paxos — prepare/promise phase → accept/accepted phase (conceptual, harder to implement than Raft)
 Paxos (Lamport) is the original practical consensus algorithm for getting a set of unreliable nodes to agree on **one value**, despite crashes and message loss. Proposers run two phases with a majority of acceptors: **prepare/promise** (claim a proposal number) and **accept/accepted** (get a value chosen). It's proven correct, famously subtle, and the basis of Chubby, Spanner and many others.
+
+#### Intuition
+An auction where a bidder first asks the room "will you promise to ignore any bid lower than number 42?" and, with a majority of promises, makes the actual offer. If someone in the room has already accepted an earlier offer, the bidder must repeat that offer and not their own.
+
+#### Must know
+- The original consensus algorithm: a set of unreliable nodes agrees on **one value**.
+- **Phase 1**: prepare(n) → a majority promises to ignore lower numbers and reports any value already accepted.
+- **Phase 2**: accept(n, value) → the value is chosen once a majority accepts.
+- The proposer must **re-propose the highest value already accepted**, which protects a value that was already chosen.
+- It is proven correct and famously hard to implement. In practice, use a Raft-based system.
+
+#### Common mistakes
+- Forgetting that a proposer may not be free to propose its own value.
+- Two proposers pre-empting each other forever, with no stable leader.
+- Offering to implement Paxos yourself in a design.
 
 #### How it works
 ```mermaid
@@ -289,8 +387,27 @@ They offer equivalent fault tolerance (majority quorums), but Raft specifies a c
 #### Interview angle
 > "Paxos agrees on a value with prepare/promise then accept/accepted on a majority, and must re-propose any value already accepted. In practice I'd use a Raft-based system like etcd rather than implement Paxos."
 
+#### Sources
+- [Paxos made simple](https://lamport.azurewebsites.net/pubs/paxos-simple.pdf) — Leslie Lamport
+- [Paxos](https://en.wikipedia.org/wiki/Paxos_%28computer_science%29) — Wikipedia
+
 ### Multi-Paxos — designate stable leader to avoid repeated prepare phase
 Basic Paxos decides **one** value with two round trips. Real systems need a **sequence** of values (a replicated log). Multi-Paxos elects a **stable leader** that runs Phase 1 (prepare) **once** for all future log slots, then only Phase 2 (accept) per entry, so each command takes one round trip to a majority, like Raft.
+
+#### Intuition
+If the same chairperson runs every item on the agenda, they do not need to be re-elected before each item. They are confirmed once and then simply put each item to the vote.
+
+#### Must know
+- Basic Paxos decides one value in two round trips. Real systems need a **sequence** of values.
+- Multi-Paxos elects a **stable leader** that does the prepare phase **once**.
+- After that, each entry needs only the accept phase: **one round trip to a majority**.
+- Raft is essentially a carefully specified Multi-Paxos with a strong leader.
+- Large systems run one group per data range to scale. Spanner does this.
+
+#### Common mistakes
+- Describing two round trips per write as the normal case.
+- One consensus group for the whole dataset, limited by a single leader.
+- Trusting leader leases without considering clock drift.
 
 #### How it works
 ```mermaid
@@ -339,8 +456,27 @@ A single group's throughput is limited by its leader and its majority round trip
 #### Interview angle
 > "Multi-Paxos keeps a stable leader so each write is a single majority round trip, and big systems like Spanner run one group per data range to scale."
 
+#### Sources
+- [Paxos: Multi-Paxos](https://en.wikipedia.org/wiki/Paxos_%28computer_science%29) — Wikipedia
+- [Spanner: Google's globally distributed database](https://research.google/pubs/spanner-googles-globally-distributed-database-2/) — Google Research
+
 ### Zookeeper Atomic Broadcast (ZAB) — Zookeeper's proprietary consensus protocol
 ZAB is ZooKeeper's consensus and broadcast protocol. A leader assigns each state change a unique, increasing **zxid** (epoch + counter) and broadcasts it to followers. A change is committed once a **quorum** acknowledges it, and all servers apply changes in **zxid order**. It's designed for primary-backup state replication with crash recovery.
+
+#### Intuition
+A head teacher announces each new rule with a serial number. Once most teachers have acknowledged it, the rule takes effect, and every class applies the rules strictly in number order.
+
+#### Must know
+- ZooKeeper's consensus protocol: one leader broadcasts changes, and a change commits once a **quorum** acknowledges it.
+- Every change gets a **zxid** (an epoch plus a counter), and all servers apply changes in zxid order.
+- A new leader starts a new **epoch**, which makes the old leader's proposals invalid.
+- Writes are linearizable. Reads may lag unless you call `sync()`.
+- It behaves much like Raft. New designs usually pick a Raft-based store.
+
+#### Common mistakes
+- Treating ZAB as a different kind of guarantee from Raft. It is the same idea with different framing.
+- Using ZooKeeper as a data store. It is for small coordination data.
+- Saying current Kafka depends on ZooKeeper. Kafka 4.0 removed it in favour of KRaft.
 
 #### How it works
 ```mermaid
@@ -367,7 +503,7 @@ Phases: **leader election** (pick the node with the highest zxid), **discovery/s
 Guarantees exposed by ZooKeeper: linearizable writes, FIFO client order, sequential consistency for reads (local reads may lag, use `sync()`), and atomic updates.
 
 #### Example
-Older Kafka clusters stored controller election, broker membership and topic metadata in ZooKeeper (a 3- or 5-node ensemble). Kafka 3.x replaced it with KRaft (Raft inside Kafka) to remove the external dependency and scale metadata. Hadoop HDFS NameNode HA and HBase still use ZooKeeper for leader election.
+Older Kafka clusters stored controller election, broker membership and topic metadata in ZooKeeper (a 3- or 5-node ensemble). Kafka replaced it with KRaft (Raft inside Kafka, production-ready since 3.3, with ZooKeeper removed entirely in 4.0) to drop the external dependency and scale metadata. Hadoop HDFS NameNode HA and HBase still use ZooKeeper for leader election.
 
 #### Trade-offs
 Proven and battle-tested, with strong ordering, but ZooKeeper ensembles are small (write throughput limited), need careful ops (JVM GC, disk latency, session timeouts), and are increasingly replaced by Raft-based alternatives (etcd, KRaft).
@@ -398,8 +534,30 @@ To remove an external system with its own operations, security and scaling limit
 #### Interview angle
 > "ZooKeeper's ZAB orders updates by zxid with quorum commits and epochs to fence old leaders. Today I'd generally pick etcd or KRaft-style Raft for new coordination needs."
 
+#### Sources
+- [ZooKeeper internals: atomic broadcast](https://zookeeper.apache.org/doc/current/zookeeperInternals.html) — Apache ZooKeeper docs
+- [KRaft](https://kafka.apache.org/documentation/#kraft) — Apache Kafka docs
+
 ### etcd — Raft-based distributed KV store, used by Kubernetes for all cluster state
 etcd is a strongly consistent, distributed **key-value store** built on Raft. It offers linearizable reads and writes, **watches** (streams of changes), **leases** (TTL-bound keys), transactions (compare-and-swap) and MVCC revisions. It's the backbone of Kubernetes and a go-to choice for configuration, service discovery, leader election and locks.
+
+#### Intuition
+The office's one official noticeboard, kept by a small committee that agrees on every change. Anything pinned there is the truth, anyone can subscribe to be told when a notice changes, and a notice can be set to fall off unless its owner keeps renewing it.
+
+#### Must know
+- A strongly consistent **key-value store built on Raft**. Kubernetes keeps all cluster state in it.
+- **Watches**: a stream of changes to a key or prefix.
+- **Leases**: keys that disappear unless their owner keeps renewing them, which is how liveness is detected.
+- **Transactions**: atomic compare-and-set, the basis for locks and leader election.
+- For **small, critical data** only: configuration, membership, locks.
+
+#### Numbers to quote
+- Default storage quota: 2 GB. Default maximum request size: 1.5 MB.
+
+#### Common mistakes
+- Using etcd as a general-purpose database.
+- Running it on slow or shared disks. Every write waits for fsync on a majority.
+- No compaction, so it fills its quota and stops accepting writes.
 
 #### How it works
 ```mermaid
@@ -451,8 +609,27 @@ It's optimised for small amounts of highly consistent coordination data: every w
 #### Interview angle
 > "For coordination I'd use etcd: leases for liveness, watches for config and discovery, transactions and revisions for leader election with fencing. It only holds small critical data on fast disks."
 
+#### Sources
+- [etcd versus other key-value stores](https://etcd.io/docs/v3.5/learning/why/) — etcd docs
+- [System limits](https://etcd.io/docs/v3.5/dev-guide/limit/) — etcd docs
+
 ### Zookeeper — Apache, used for leader election (ephemeral znodes), distributed locks, config
 Apache ZooKeeper is a coordination service exposing a small, hierarchical **file-system-like namespace of znodes**, with strong ordering guarantees (ZAB). Primitives such as **ephemeral znodes** (deleted when the client session ends), **sequential znodes** (auto-incremented names) and **watches** (one-time change notifications) let you build leader election, locks, membership and configuration.
+
+#### Intuition
+A shared folder with special files. Some files vanish the moment their owner disconnects. Some get an automatic number when created. And you can ask to be told when a file changes. From those three tricks you can build locks, leader election and a membership list.
+
+#### Must know
+- A coordination service with a small tree of **znodes**.
+- **Ephemeral** znode: deleted when the client's session ends. That is how a dead node is detected.
+- **Sequential** znode: gets an increasing number in its name. Used for ordering and fair locks.
+- **Watch**: a one-time notification that a znode changed.
+- Use a library of tested recipes (Apache Curator), not the raw API.
+
+#### Common mistakes
+- Forgetting that watches fire once and must be registered again.
+- A session timeout shorter than a GC pause, which makes a live node look dead.
+- Assuming losing the ephemeral znode stops the old leader from acting. It may still be running.
 
 #### How it works
 ```mermaid
@@ -511,8 +688,27 @@ Correct recipes (locks, leader election, caches) are subtle: handling connection
 #### Interview angle
 > "With ZooKeeper I'd use Curator recipes: ephemeral sequential znodes for elections and locks, watching only the predecessor, with fencing so an expired leader can't keep acting."
 
+#### Sources
+- [ZooKeeper overview](https://zookeeper.apache.org/doc/current/zookeeperOver.html) — Apache ZooKeeper docs
+- [ZooKeeper recipes and solutions](https://zookeeper.apache.org/doc/current/recipes.html) — Apache ZooKeeper docs
+
 ### Leader election with Zookeeper — create sequential ephemeral znode, watch predecessor
 The classic ZooKeeper election recipe: each candidate creates an **ephemeral sequential** znode under an election path. The candidate with the **lowest sequence number is leader**. Every other candidate **watches only the znode just before its own**, so when a node dies only its successor wakes up. There's no herd effect, and leadership passes in order.
+
+#### Intuition
+A queue with numbered tickets. The lowest number is served, which here means it is the leader. Each person only watches the person directly ahead. When someone leaves, only the one behind them steps forward, and nobody else moves.
+
+#### Must know
+- Each candidate creates an **ephemeral sequential** znode under one path.
+- The **lowest sequence number is the leader**.
+- Every other candidate **watches only the znode just before its own**.
+- When a node dies, only its successor wakes up, so there is no herd.
+- The old leader may be paused and not dead, so its actions still need a **fencing token**.
+
+#### Common mistakes
+- Everyone watching the leader's znode, so all nodes stampede when it dies.
+- Not re-checking on a watch event. Your predecessor may have died without being the leader.
+- Treating the recipe alone as proof that only one leader acts.
 
 #### How it works
 ```mermaid
@@ -570,8 +766,27 @@ No. ZooKeeper guarantees at most one node holds the lowest znode, but an old lea
 #### Interview angle
 > "Leader election uses ephemeral sequential znodes where each node watches its predecessor, so there's no herd. Anything the leader does carries its epoch as a fencing token, because ZooKeeper alone can't stop a paused ex-leader."
 
+#### Sources
+- [ZooKeeper recipes: leader election](https://zookeeper.apache.org/doc/current/recipes.html) — Apache ZooKeeper docs
+- [Apache Curator](https://curator.apache.org/) — Apache Curator
+
 ### Epoch numbers / terms — monotonically increasing, stale leaders reject writes with old epoch
 An epoch (also called a term, generation or ballot) is a **monotonically increasing number** that identifies a leadership period. Every message and write carries it, and recipients reject anything with an **older epoch** than they've seen. That turns "who's the real leader?" into a simple numeric comparison and neutralises zombie leaders.
+
+#### Intuition
+A new edition number on each reprint of a rulebook. If two people disagree, the higher edition wins without argument, and anyone still quoting the old edition is told it is out of date.
+
+#### Must know
+- An epoch (or term, generation, ballot) is an **ever-increasing number for each leadership period**.
+- Every message and write carries it.
+- A receiver **rejects anything with an epoch lower than the highest it has seen**.
+- This makes a "zombie" leader harmless: its old epoch is refused everywhere.
+- It must be stored durably, so it never goes backwards after a restart.
+
+#### Common mistakes
+- Bumping the epoch on failover but not checking it in the storage layer.
+- Using a wall-clock timestamp in place of a counter.
+- Keeping the epoch only in memory.
 
 #### How it works
 ```mermaid
@@ -619,8 +834,27 @@ Each transactional producer has a `transactional.id`. When a new instance initia
 #### Interview angle
 > "Every leadership change bumps an epoch, every write carries it, and storage rejects lower epochs. That's what makes a paused ex-leader harmless."
 
+#### Sources
+- [Generation clock](https://martinfowler.com/articles/patterns-of-distributed-systems/generation-clock.html) — Unmesh Joshi, martinfowler.com
+- [In search of an understandable consensus algorithm](https://raft.github.io/raft.pdf) — Ongaro and Ousterhout
+
 ### Fencing tokens — monotonically increasing token for storage writes, prevents stale leader writes
 A fencing token is a **monotonically increasing number** handed out with each lock or lease grant. The lock holder includes it in every request to the protected resource, and the resource **rejects requests with a token lower than the highest it has accepted**. It makes distributed locks safe even when a holder pauses past its lease.
+
+#### Intuition
+Numbered wristbands at an event. Each new shift gets a higher number. The door staff remember the highest number they have let in, and turn away anyone with a lower one, even if that person insists their shift has not ended.
+
+#### Must know
+- Each lock or lease grant comes with a **number that only goes up**.
+- The holder sends it with every request to the protected resource.
+- The resource **rejects any request with a token lower than the highest it has accepted**.
+- This is what makes a lease-based lock safe when the holder pauses past its expiry.
+- Tokens come from an etcd revision, a ZooKeeper zxid or a database sequence.
+
+#### Common mistakes
+- Relying on a lock's TTL alone. The holder cannot know its lease expired during a pause.
+- Checking the token in the client and not in the storage write.
+- A plain Redis lock for a correctness-critical job. It gives no such token.
 
 #### How it works
 ```mermaid
@@ -680,8 +914,27 @@ Store the highest accepted token per protected resource (a `fence` column) and m
 #### Interview angle
 > "Locks come from etcd with the key revision as a fencing token, and every protected write is conditional on that token, so a paused ex-holder's writes are rejected instead of double-processing."
 
+#### Sources
+- [How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html) — Martin Kleppmann
+- [KV API guarantees](https://etcd.io/docs/v3.5/learning/api_guarantees/) — etcd docs
+
 ### Split-brain — two nodes both think they are leader; prevent with fencing tokens + quorum
 Split brain happens when a partition (or a false failure detection) leads **two nodes to act as leader at the same time**, both accepting writes. The data diverges and is often impossible to merge automatically. The standard defences are **majority quorums** (only one side can have a majority) plus **fencing** (stale leaders can't write).
+
+#### Intuition
+A ship where the captain is cut off below deck and the first officer, believing the captain lost, takes command on the bridge. Now two people are giving orders to the same crew.
+
+#### Must know
+- Two nodes **both act as leader** and accept writes. The data diverges and often cannot be merged.
+- Usually caused by a partition, or a pause mistaken for a failure.
+- Defence 1: **majority quorum**. Only one side of a split can hold a majority.
+- Defence 2: **fencing**. Storage rejects the stale leader, or the old leader is powered off (STONITH).
+- Two sites need a third voter or witness to break the tie.
+
+#### Common mistakes
+- Automatic failover between exactly two nodes with no tie-breaker.
+- Promoting a standby without first fencing the old primary.
+- A leader that keeps serving after it has lost contact with the majority.
 
 #### How it works
 ```mermaid
@@ -734,3 +987,8 @@ When the nodes lose contact, each can't distinguish "the other crashed" from "th
 
 #### Interview angle
 > "I prevent split brain with quorum-based leadership, an odd number of voters or a third-site witness, and fencing: storage rejects stale epochs and the old primary is killed or isolated before promotion."
+
+#### Sources
+- [Split-brain](https://en.wikipedia.org/wiki/Split-brain_%28computing%29) — Wikipedia
+- [Leader and followers](https://martinfowler.com/articles/patterns-of-distributed-systems/leader-follower.html) — Unmesh Joshi, martinfowler.com
+

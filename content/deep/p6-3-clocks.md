@@ -3,6 +3,25 @@
 ### Physical clocks — NTP synchronization, drift up to 100ms between nodes
 Every machine has a hardware clock (a quartz oscillator) that **drifts** (typically 10–100 ppm, i.e. up to ~8 s per day uncorrected). **NTP** (or Chrony, PTP, cloud time services) periodically corrects clocks against reference servers. Synchronised clocks are still only accurate to within milliseconds, and can **jump** backwards or forwards when corrected.
 
+#### Intuition
+Every wristwatch in an office shows a slightly different time, and each one runs a little fast or slow. Setting them all by the radio every morning helps, but by afternoon they have drifted apart again, and a correction can make a watch jump.
+
+#### Must know
+- Each machine's hardware clock **drifts**, and NTP corrects it periodically.
+- Even when synchronised, clocks agree only to within **milliseconds**, and a correction can make time **jump** backwards or forwards.
+- Use wall-clock time for display, TTLs and coarse windows.
+- **Never order events across machines by wall clock** when correctness depends on it.
+- Monitor clock offset, and allow a little leeway when validating token times.
+
+#### Numbers to quote
+- Typical sync accuracy: about 1 ms inside a datacenter, 10–100 ms over the internet.
+- An uncorrected quartz clock can drift by seconds per day.
+
+#### Common mistakes
+- Sorting logs from several services by timestamp to work out what happened first.
+- Assuming NTP makes clocks identical.
+- No leeway in JWT expiry checks, so small skew rejects valid tokens.
+
 #### How it works
 ```mermaid
 flowchart TD
@@ -50,8 +69,27 @@ The issuing server's clock is ahead of the validating server's, so `iat`/`nbf` a
 #### Interview angle
 > "Wall clocks drift and jump, so I use them for display, TTLs and coarse windows only. Ordering comes from a sequencer or logical clocks, and durations from a monotonic clock."
 
+#### Sources
+- [Precision clock and time synchronization on your EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/set-time.html) — Amazon EC2 user guide
+- [Network Time Protocol](https://en.wikipedia.org/wiki/Network_Time_Protocol) — Wikipedia
+
 ### Clock skew — two machines have different wall clock times, cannot use for ordering events
 Clock skew is the **difference between two machines' clocks at the same instant**. Even with NTP it's never zero, and it varies over time. Any logic that compares timestamps from different machines (last-write-wins, lease expiry, event ordering, TTL checks) silently breaks when skew exceeds the margin it assumes.
+
+#### Intuition
+Two referees timing a race with watches that differ by a tenth of a second. Each records a finish time honestly, and the official result still names the wrong winner.
+
+#### Must know
+- Skew is the **difference between two machines' clocks at the same instant**. It is never zero.
+- It silently breaks anything that compares timestamps from different machines.
+- **Last-write-wins loses data**: a later write from a machine with a slow clock looks older and is discarded.
+- **Leases** break too: the holder and the server disagree about whether the lease has expired.
+- Fix with version numbers, a single sequencer, hybrid logical clocks or fencing tokens.
+
+#### Common mistakes
+- Client-supplied timestamps deciding the winner between two writes.
+- A lease with no safety margin for skew.
+- Treating skew as a rare fault. It is the normal condition.
 
 #### How it works
 ```mermaid
@@ -104,8 +142,27 @@ Spanner bounds uncertainty with TrueTime (GPS and atomic clocks, ε of a few ms)
 #### Interview angle
 > "I never let correctness depend on comparing two machines' clocks. Contended updates use version numbers or a single sequencer, and leases come with fencing tokens."
 
+#### Sources
+- [Clock drift](https://en.wikipedia.org/wiki/Clock_drift) — Wikipedia
+- [Living without atomic clocks](https://www.cockroachlabs.com/blog/living-without-atomic-clocks/) — Cockroach Labs
+
 ### Lamport timestamps — logical clocks: increment on send, max(local,received)+1 on receive, establish happens-before
 Lamport timestamps are **logical clocks**: integer counters that capture causal ordering without physical time. Each process increments its counter on every event, attaches it to messages, and on receiving sets `counter = max(local, received) + 1`. If event a happened-before b, then L(a) < L(b).
+
+#### Intuition
+Numbering letters in a correspondence. Each reply is numbered one higher than the highest number you have seen so far. A reply always has a bigger number than the letter it answers, with no clock involved.
+
+#### Must know
+- A **logical clock**: a counter per process, not a time of day.
+- Increment on every local event. Attach the counter to each message.
+- On receive: **counter = max(local, received) + 1**.
+- If a happened before b, then L(a) < L(b). The reverse is **not** guaranteed.
+- Adding the node id as a tie-breaker gives a total order, but it **cannot detect concurrent events**.
+
+#### Common mistakes
+- Concluding that a caused b because L(a) < L(b).
+- Using it to detect conflicts. That needs vector clocks.
+- Forgetting the tie-breaker when two nodes produce the same number.
 
 #### How it works
 ```mermaid
@@ -158,8 +215,27 @@ They're immune to clock skew and jumps: any write issued after observing another
 #### Interview angle
 > "Lamport clocks give a cheap, skew-proof total order that respects causality. When I need to detect concurrent conflicting writes, I use vector clocks instead."
 
+#### Sources
+- [Time, clocks, and the ordering of events in a distributed system](https://lamport.azurewebsites.net/pubs/time-clocks.pdf) — Leslie Lamport
+- [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) — Wikipedia
+
 ### Vector clocks — per-node counters: detect causality and concurrency, identify conflicting writes
 A vector clock is a **vector of counters, one per node**. Each node increments its own entry on local events, and merges (element-wise max) on receiving. Comparing two vectors tells you whether one event **happened before** the other or whether they're **concurrent**, so you can detect conflicting updates precisely.
+
+#### Intuition
+Each editor of a shared document keeps a scorecard: "I have seen 3 edits from Asha and 2 from Ravi". Compare two scorecards and you can tell whether one editor has seen everything the other has, or whether each has changes the other lacks.
+
+#### Must know
+- A **vector of counters, one per node**. A node increments its own entry and merges by taking the maximum of each entry.
+- V1 ≤ V2 on every entry means V1 **happened before** V2.
+- If neither is ≤ the other, the events are **concurrent**: a real conflict.
+- This lets a system keep both versions or merge them and not silently drop one.
+- The cost is size: the vector grows with the number of writers.
+
+#### Common mistakes
+- Thinking vector clocks resolve conflicts. They only detect them.
+- One entry per client, which makes the vectors enormous.
+- Writing without passing back the version context you read.
 
 #### How it works
 ```mermaid
@@ -210,8 +286,27 @@ Their size grows with the number of distinct writers (bad if every client is a w
 #### Interview angle
 > "When concurrent updates must not be lost, like carts in an AP store, vector clocks tell me when two versions are concurrent, and I merge them or use CRDTs instead of last-write-wins."
 
+#### Sources
+- [Vector clock](https://en.wikipedia.org/wiki/Vector_clock) — Wikipedia
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+
 ### Version vectors — detect divergence during replica synchronization
 Version vectors are vector clocks applied to **replicas of a data item** rather than to individual events: each replica keeps a counter per replica describing which updates it has seen. During sync, comparing version vectors tells you whether one replica is **strictly newer** (copy it over), **older** (skip it) or **diverged** (concurrent changes to reconcile).
+
+#### Intuition
+Two copies of a file, each with a note saying "contains 5 changes from the laptop and 3 from the phone". When the devices sync, comparing the notes shows whether one copy is simply newer or whether both were edited separately.
+
+#### Must know
+- The vector-clock idea applied to **copies of one data item**: a counter per replica that wrote it.
+- If one vector **dominates**, that copy is newer. Overwrite the other.
+- If **neither dominates**, the copies diverged. That is a conflict.
+- They stay small because the entries are replicas, not clients.
+- They detect divergence only. The merge policy is still your decision.
+
+#### Common mistakes
+- Comparing modification timestamps to decide which copy wins.
+- Using "vector clock" and "version vector" interchangeably when asked the difference.
+- Never removing entries for replicas that no longer exist.
 
 #### How it works
 ```mermaid
@@ -256,8 +351,30 @@ They have one entry per replica that accepted writes for that item (a handful of
 #### Interview angle
 > "Replica sync compares version vectors: a dominating version is copied over and a concurrent one is flagged as a conflict to merge, instead of being silently overwritten by timestamp."
 
+#### Sources
+- [Version vector](https://martinfowler.com/articles/patterns-of-distributed-systems/version-vector.html) — Unmesh Joshi, martinfowler.com
+- [Version vector](https://en.wikipedia.org/wiki/Version_vector) — Wikipedia
+
 ### Hybrid Logical Clocks (HLC) — combine physical + logical: max(physical, last_hlc) + 1
 Hybrid Logical Clocks combine a **physical timestamp** (close to wall time, so it's human-meaningful and good for time-based snapshots) with a **logical counter** that guarantees causality even when physical clocks are skewed. HLC values never go backwards, respect happened-before, and stay within the clock-skew bound of real time.
+
+#### Intuition
+A wall clock with an extra tick counter beside it. Normally you read the clock. If a message arrives stamped later than your clock shows, you adopt that later time and use the counter to stay ahead of it, so your timestamps never go backwards.
+
+#### Must know
+- A timestamp of **(physical time, logical counter)**.
+- It **never goes backwards** and it **respects causality**, even with skewed clocks.
+- It stays **close to wall time**, so "read as of 10 seconds ago" still works.
+- Used by CockroachDB, YugabyteDB and MongoDB.
+- It assumes clock skew is bounded, and it orders events but does not detect concurrency.
+
+#### Numbers to quote
+- CockroachDB's default maximum clock offset is 500 ms. A node beyond it shuts itself down.
+
+#### Common mistakes
+- Saying HLC removes the need for clock synchronisation.
+- Expecting it to detect conflicts the way vector clocks do.
+- One node's clock jumping far ahead and dragging the whole cluster's timestamps forward.
 
 #### How it works
 ```mermaid
@@ -309,8 +426,31 @@ Its HLC values jump ahead, and other nodes that receive its messages adopt those
 #### Interview angle
 > "Hybrid logical clocks give timestamps that respect causality and stay near wall time, which is how CockroachDB orders MVCC versions and serves as-of-time reads without atomic clocks, given a bounded clock offset."
 
+#### Sources
+- [Hybrid clock](https://martinfowler.com/articles/patterns-of-distributed-systems/hybrid-clock.html) — Unmesh Joshi, martinfowler.com
+- [Living without atomic clocks](https://www.cockroachlabs.com/blog/living-without-atomic-clocks/) — Cockroach Labs
+- [Logical physical clocks and consistent snapshots in globally distributed databases](https://cse.buffalo.edu/tech-reports/2014-04.pdf) — Kulkarni et al.
+
 ### Google TrueTime — GPS + atomic clocks, returns [earliest, latest] uncertainty interval (~7ms)
 TrueTime is Google's time API: instead of a single timestamp, `TT.now()` returns an **interval [earliest, latest]** that is guaranteed to contain the true current time. GPS receivers and atomic clocks in each datacentre keep the interval narrow (ε ≈ 1–7 ms). Spanner uses it to give globally consistent timestamps. (Phase 3 covers the Spanner integration.)
+
+#### Intuition
+A clock honest enough to say "it is somewhere between 10:00:00.000 and 10:00:00.007" and to guarantee the true time is inside that range. Knowing the size of your error is worth more than a confident wrong answer.
+
+#### Must know
+- `TT.now()` returns an **interval [earliest, latest]** guaranteed to contain the true time.
+- GPS receivers and atomic clocks in every datacenter keep the interval small.
+- Because the uncertainty is **explicit and bounded**, a protocol can simply wait it out.
+- Spanner uses it to order transactions across the world with no central sequencer.
+- Without such clocks, use hybrid logical clocks or a central timestamp service.
+
+#### Numbers to quote
+- The uncertainty is typically a few milliseconds (1–7 ms in the Spanner paper).
+
+#### Common mistakes
+- Saying TrueTime gives perfectly accurate time.
+- Assuming an ordinary NTP setup can stand in for it.
+- Forgetting that correctness depends on the bound being honest.
 
 #### How it works
 ```mermaid
@@ -357,8 +497,30 @@ Commit wait relies on true time being inside the interval. If clocks were off by
 #### Interview angle
 > "TrueTime makes clock uncertainty explicit as a bounded interval, which lets Spanner order commits globally by waiting out the uncertainty. Without such clocks I'd use HLC or a timestamp oracle."
 
+#### Sources
+- [Spanner: TrueTime and external consistency](https://cloud.google.com/spanner/docs/true-time-external-consistency) — Google Cloud docs
+- [Spanner: Google's globally distributed database](https://research.google/pubs/spanner-googles-globally-distributed-database-2/) — Google Research
+
 ### Commit wait (Spanner) — wait out TrueTime uncertainty before returning commit timestamp
 Commit wait is Spanner's trick for external consistency: after picking a commit timestamp s (≥ TrueTime's latest bound), the leader **waits until TrueTime guarantees that s is in the past** (TT.now().earliest > s) before releasing locks and acknowledging. The wait (≈ 2ε, a few ms) ensures no later transaction anywhere can get a smaller timestamp.
+
+#### Intuition
+You stamp a letter "sent at 10:00:06", then hold it until you are certain every clock in the world has passed 10:00:06. Anyone who writes after receiving it is then guaranteed a later stamp.
+
+#### Must know
+- Spanner picks a commit timestamp at least as large as TrueTime's upper bound.
+- It then **waits until that timestamp is definitely in the past everywhere** before acknowledging.
+- So any transaction that starts after the acknowledgement gets a larger timestamp, anywhere in the world.
+- That gives **external consistency**: timestamp order matches real-time order.
+- The wait overlaps with replication, so part of its cost is hidden.
+
+#### Numbers to quote
+- The wait is about twice the clock uncertainty, a few milliseconds per write transaction.
+
+#### Common mistakes
+- Thinking read-only transactions pay the commit wait. They do not.
+- Forgetting locks are held during the wait, which hurts hot rows.
+- Describing it as a network round trip. It is a local wait on the clock.
 
 #### How it works
 ```mermaid
@@ -413,8 +575,27 @@ Use a centralised timestamp oracle (TiDB's PD TSO, Percolator), which costs a ro
 #### Interview angle
 > "Commit wait is Spanner's price for external consistency: a few milliseconds of waiting out clock uncertainty per write, overlapped with Paxos replication."
 
+#### Sources
+- [Spanner: TrueTime and external consistency](https://cloud.google.com/spanner/docs/true-time-external-consistency) — Google Cloud docs
+- [Spanner: Google's globally distributed database](https://research.google/pubs/spanner-googles-globally-distributed-database-2/) — Google Research
+
 ### Happens-before (→) — a→b means a causally precedes b; defines partial order of events
 Lamport's **happens-before** relation defines causality in a distributed system: a → b if (1) a and b are on the same process and a comes first, (2) a is sending a message and b is receiving it, or (3) transitively a → c → b. If neither a → b nor b → a, the events are **concurrent**: neither could have influenced the other.
+
+#### Intuition
+Sending a letter happens before reading it, and whatever you do after reading it comes after the sender wrote it. But what you had for breakfast and what the sender had for breakfast have no order at all. Neither could have affected the other.
+
+#### Must know
+- a → b when: both are on the same process and a is first, **or** a is the send and b the receive of one message, **or** a chain of such steps links them.
+- If neither a → b nor b → a, the events are **concurrent**.
+- Concurrent means "no information flowed between them", not "at the same clock time".
+- It is the basis of Lamport clocks, vector clocks and causal consistency.
+- In practice, preserve order **per entity**: key events by order id into one partition.
+
+#### Common mistakes
+- Treating "concurrent" as "simultaneous".
+- Forcing a global order when only per-entity order is needed.
+- Processing an effect before its cause because related events went to different partitions.
 
 #### How it works
 ```mermaid
@@ -464,8 +645,27 @@ Publish all events for the same order with the same key (order id) so they land 
 #### Interview angle
 > "I only preserve the ordering that causality needs, usually per entity, by keying events by order id into one partition with per-entity sequence numbers, instead of forcing an expensive global order."
 
+#### Sources
+- [Time, clocks, and the ordering of events in a distributed system](https://lamport.azurewebsites.net/pubs/time-clocks.pdf) — Leslie Lamport
+- [Happened-before](https://en.wikipedia.org/wiki/Happened-before) — Wikipedia
+
 ### Total order vs partial order — total: every pair comparable; partial: concurrent events possible
 A **total order** puts every pair of events in a definite sequence (a single timeline). A **partial order** only orders some pairs, while others are incomparable (concurrent). Causality (happens-before) is a partial order. Many systems impose a total order on top for simplicity, at the cost of coordination.
+
+#### Intuition
+A single queue at one counter is a total order: everyone knows exactly who is ahead of whom. Several queues at several counters is a partial order: you know the order inside each queue, but not between people in different queues.
+
+#### Must know
+- **Total order**: every pair of events has a definite order. One timeline.
+- **Partial order**: only some pairs are ordered. The rest are concurrent.
+- A total order needs a single sequencer or consensus, which costs coordination and caps throughput.
+- A Kafka **partition** is totally ordered. A **topic** with many partitions is only partially ordered.
+- Design rule: totally order **only what must be**, usually per key.
+
+#### Common mistakes
+- Assuming Kafka preserves order across a whole topic.
+- Demanding a global order for all events, which reduces the system to one sequencer.
+- Forgetting that replicas applying the same commands in different orders will diverge.
 
 #### How it works
 ```mermaid
@@ -522,8 +722,27 @@ Use the customer id as the message key, so all of that customer's events hash to
 #### Interview angle
 > "I scope total ordering to where it's needed, usually per account or entity via partition keys, so the system scales while each entity's history stays a single ordered log."
 
+#### Sources
+- [Atomic broadcast](https://en.wikipedia.org/wiki/Atomic_broadcast) — Wikipedia
+- [Main concepts and terminology](https://kafka.apache.org/documentation/#intro_concepts_and_terms) — Apache Kafka docs
+
 ### Monotonic clock — use for measuring elapsed time; wall clock for human-readable timestamps
 Operating systems expose two kinds of clocks. The **wall clock** (time of day, `System.currentTimeMillis()`, `Instant.now()`) can jump when NTP adjusts it or an admin changes it. The **monotonic clock** (`System.nanoTime()`, `CLOCK_MONOTONIC`, Go's monotonic reading in `time.Now()`) only moves forward at a steady rate, so it's the right tool for **measuring durations, timeouts and rate limits**.
+
+#### Intuition
+A stopwatch against a wall clock. The wall clock tells you the time of day, but someone can reset it. The stopwatch only counts forward, so it is the one to use for timing a race.
+
+#### Must know
+- The **wall clock** can jump when NTP corrects it. The **monotonic clock** only moves forward at a steady rate.
+- Use the monotonic clock for **durations, timeouts, backoff and rate limiting**.
+- Use the wall clock, in UTC, for stored timestamps and anything shown to people.
+- In Java: `System.nanoTime()` for elapsed time, `Instant.now()` for a timestamp.
+- Monotonic values mean nothing across machines or restarts.
+
+#### Common mistakes
+- Measuring latency with `System.currentTimeMillis()`, which can give a negative result.
+- Comparing `nanoTime()` values from two servers.
+- A timeout computed from wall time that fires early when the clock jumps.
 
 #### How it works
 ```mermaid
@@ -571,3 +790,8 @@ No. Monotonic clock values have an arbitrary origin (often boot time) per machin
 
 #### Interview angle
 > "Latencies, timeouts and backoff use the monotonic clock, stored timestamps are wall-clock UTC, and cross-machine ordering uses neither. It comes from logical clocks or a sequencer."
+
+#### Sources
+- [System.nanoTime](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/System.html#nanoTime%28%29) — Java SE 21 API
+- [clock_gettime(2)](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — Linux manual pages
+

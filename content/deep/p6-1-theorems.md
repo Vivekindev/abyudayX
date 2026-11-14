@@ -3,6 +3,21 @@
 ### CAP theorem — Consistency, Availability, Partition Tolerance: only 2 guaranteed when partition occurs
 The CAP theorem (Brewer, proved by Gilbert and Lynch) says that when a **network partition** splits a distributed system, it must choose between **Consistency** (every read sees the latest write, linearizability) and **Availability** (every request to a non-failed node gets a non-error response). Partitions happen in real networks, so the practical choice is **CP or AP during a partition**.
 
+#### Intuition
+Two bank branches whose phone line is cut. A customer asks one branch for their balance. The branch can refuse until the line is back (correct, but unhelpful), or answer from its own book (helpful, but possibly out of date). It cannot do both.
+
+#### Must know
+- When the network **partitions**, a distributed system must choose: **Consistency** (refuse rather than risk a stale answer) or **Availability** (always answer).
+- Partitions will happen, so "pick two of three" is misleading. The real choice is **CP or AP during a partition**.
+- C here means linearizability, not the C in ACID.
+- The choice is made **per feature**: payments and stock reservation are CP, feeds and catalogue reads are AP.
+- Many systems let you tune it per request.
+
+#### Common mistakes
+- Saying a distributed system is "CA".
+- Mixing up CAP consistency with ACID consistency.
+- Using CAP to explain everyday latency. It only describes behaviour during a partition.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -58,8 +73,31 @@ CP: payments, order placement, inventory reservation, coupon redemption limits, 
 #### Interview angle
 > "CAP only bites during partitions, so I choose per feature: inventory reservation and payments stay consistent and refuse when partitioned, while catalogue and feed reads stay available and may be briefly stale."
 
+#### Sources
+- [CAP twelve years later: how the "rules" have changed](https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed/) — Eric Brewer
+- [Please stop calling databases CP or AP](https://martin.kleppmann.com/2015/05/11/please-stop-calling-databases-cp-or-ap.html) — Martin Kleppmann
+- [CAP theorem](https://en.wikipedia.org/wiki/CAP_theorem) — Wikipedia
+
 ### CP systems — prioritize consistency over availability during partition (ZooKeeper, HBase, etcd)
 CP systems guarantee that every successful read returns the latest write, even if that means **refusing requests** when a partition prevents reaching a majority (quorum). They're built on consensus (Raft, Paxos, ZAB) or single-leader designs with strict failover.
+
+#### Intuition
+A committee that only decides when more than half its members are in the room. If the group is split, the smaller room waits and decides nothing. Decisions are never contradictory, but sometimes nothing happens.
+
+#### Must know
+- A CP system **refuses requests when it cannot reach a majority**, so it never returns stale or conflicting data.
+- Built on consensus (Raft, Paxos) with a **majority quorum**.
+- The majority side keeps working. The minority side stops.
+- Examples: etcd, ZooKeeper, Spanner, CockroachDB.
+- Use it for coordination, locks, money and inventory.
+
+#### Numbers to quote
+- 3 nodes tolerate 1 failure. 5 nodes tolerate 2. An even count adds no tolerance.
+
+#### Common mistakes
+- A 2-node or 4-node cluster "for extra safety".
+- Using a CP store for data that could happily be a little stale, and losing availability for nothing.
+- Forgetting the brief write pause while a new leader is elected.
 
 #### How it works
 ```mermaid
@@ -107,8 +145,27 @@ Five. A majority of 5 is 3, so the cluster keeps quorum with 2 nodes down. Three
 #### Interview angle
 > "Coordination, money and inventory go on CP systems with majority quorums, like etcd or a consensus database across three AZs. A minority partition refuses writes rather than diverging."
 
+#### Sources
+- [KV API guarantees](https://etcd.io/docs/v3.5/learning/api_guarantees/) — etcd docs
+- [ZooKeeper overview](https://zookeeper.apache.org/doc/current/zookeeperOver.html) — Apache ZooKeeper docs
+
 ### AP systems — prioritize availability over consistency during partition (Cassandra, DynamoDB, CouchDB)
 AP systems keep accepting reads and writes on **every reachable node** during a partition, even if replicas diverge. They reconcile later (last-write-wins, version vectors, CRDTs, read repair). They're built for always-on, globally distributed and write-heavy workloads.
+
+#### Intuition
+Two shop branches that keep selling when the phone line between them is down, each writing in its own ledger. When the line returns they compare ledgers and merge them.
+
+#### Must know
+- An AP system **keeps accepting reads and writes on every reachable node** during a partition.
+- Replicas diverge and are **reconciled afterwards** (last-write-wins, version vectors, CRDTs).
+- Examples: Cassandra, DynamoDB, Riak, CouchDB, DNS.
+- It works best with **immutable or mergeable data**: messages, events, counters.
+- It cannot enforce uniqueness or balance rules without extra coordination.
+
+#### Common mistakes
+- Storing balances or unique usernames in an AP store.
+- Assuming last-write-wins loses nothing.
+- Labelling a whole product AP or CP when it is tunable per query.
 
 #### How it works
 ```mermaid
@@ -158,8 +215,27 @@ It's tunable: by default reads are eventually consistent (AP-leaning), and you c
 #### Interview angle
 > "Immutable, high-volume data like messages and events fits AP stores such as Cassandra. Nothing conflicts, so replicas just converge. Anything with uniqueness or balance invariants goes to a CP store."
 
+#### Sources
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al., SOSP 2007
+- [DynamoDB read consistency](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html) — Amazon DynamoDB developer guide
+
 ### PACELC — when no Partition: tradeoff between Latency and Consistency (extends CAP)
 PACELC (Abadi) extends CAP: **if Partition** → choose **Availability or Consistency**, **Else** (normal operation) → choose **Latency or Consistency**. Even without failures, waiting for replicas to agree costs latency, so every replicated system makes this trade-off all the time.
+
+#### Intuition
+Even when all the phone lines work, checking with head office before answering every customer takes time. Answering from your own book is faster and slightly riskier. You make that choice on every question, not only when a line is cut.
+
+#### Must know
+- **If Partition**: choose Availability or Consistency. **Else**: choose **Latency or Consistency**.
+- Consistency costs a coordination round trip on **every** request, even on a good day.
+- Cassandra and DynamoDB default to PA/EL. Spanner and etcd are PC/EC.
+- Choose per operation: browsing reads from the nearest replica, checkout reads from the leader.
+- It is more useful than CAP day to day, because partitions are rare and latency is constant.
+
+#### Common mistakes
+- Stopping at CAP when asked about consistency trade-offs.
+- Making every read strongly consistent across regions and wondering why the product feels slow.
+- Reading from async replicas at a point where a decision is made.
 
 #### How it works
 ```mermaid
@@ -212,8 +288,27 @@ Cassandra is PA/EL by default: during partitions it stays available, and normall
 #### Interview angle
 > "Beyond CAP, I think in PACELC: even with no failures, consistency costs latency. So browsing reads come from the nearest replica while checkout and money reads go to the leader or a quorum."
 
+#### Sources
+- [Consistency tradeoffs in modern distributed database system design](https://www.cs.umd.edu/~abadi/papers/abadi-pacelc.pdf) — Daniel Abadi
+- [PACELC design principle](https://en.wikipedia.org/wiki/PACELC_design_principle) — Wikipedia
+
 ### BASE — Basically Available, Soft state, Eventually consistent (NoSQL philosophy)
 BASE is a design philosophy contrasted with ACID: **Basically Available** (the system responds even in degraded form), **Soft state** (state may change without input as replicas converge), **Eventually consistent** (replicas converge given no new writes). It underpins most large-scale NoSQL and event-driven architectures.
+
+#### Intuition
+A group trip where everyone books their own ticket and posts it in the chat. For a few minutes the shared plan is incomplete, but nobody is blocked waiting, and it all lines up shortly after.
+
+#### Must know
+- **Basically Available**: the system answers, possibly in a degraded way.
+- **Soft state**: data can change without new input, as replicas catch up.
+- **Eventually consistent**: replicas converge once writes stop.
+- The usual shape: **ACID inside one service, BASE between services**.
+- The application carries the cost: idempotency, pending states, reconciliation.
+
+#### Common mistakes
+- Treating BASE as "no guarantees".
+- Events with no outbox, so some are lost and the copies never converge.
+- A UI that hides the in-between state, so users think their action failed.
 
 #### How it works
 ```mermaid
@@ -264,8 +359,27 @@ It's a different point on the spectrum. Systems usually combine them: each servi
 #### Interview angle
 > "Each service is ACID inside its own database, while the system as a whole is BASE: events via an outbox, idempotent consumers, explicit pending states and reconciliation."
 
+#### Sources
+- [What's the difference between an ACID and a BASE database?](https://aws.amazon.com/compare/the-difference-between-acid-and-base-database/) — AWS
+- [Eventually consistent](https://www.allthingsdistributed.com/2008/12/eventually_consistent.html) — Werner Vogels
+
 ### Linearizability — strongest: operation appears atomic at a single point in time, most recent write always visible
 Linearizability (atomic consistency) means the system behaves as if there's **a single copy of the data** and every operation takes effect atomically at some instant between its start and end. Once a write completes, **every later read, from anyone, anywhere, sees it**. It's the C in CAP.
+
+#### Intuition
+A single whiteboard in a room where one person writes at a time. As soon as someone finishes writing, everyone who looks afterwards sees it. There is never a second, older whiteboard to look at.
+
+#### Must know
+- The system behaves as if there were **one copy of the data**.
+- Once a write completes, **every later read by anyone sees it**.
+- It is the C in CAP.
+- Needed for locks, leader election, uniqueness and balance checks.
+- It requires consensus or a single leader, which costs latency and availability in a minority partition.
+
+#### Common mistakes
+- Confusing it with serializability, which is about multi-object transactions.
+- Assuming quorum reads and writes (W + R > N) give it automatically.
+- Reading from an async follower and expecting linearizable results.
 
 #### How it works
 ```mermaid
@@ -316,8 +430,28 @@ With concurrent writes and last-write-wins resolution, sloppy quorums, or partia
 #### Interview angle
 > "I need linearizability only for locks, leader election, uniqueness and balances, so those go through etcd or a consensus database. Everything else uses cheaper models."
 
+#### Sources
+- [Linearizability](https://jepsen.io/consistency/models/linearizable) — Jepsen
+- [Linearizability](https://en.wikipedia.org/wiki/Linearizability) — Wikipedia
+- [KV API guarantees](https://etcd.io/docs/v3.5/learning/api_guarantees/) — etcd docs
+
 ### Sequential consistency — operations appear in program order but no global real-time guarantee
 Sequential consistency (Lamport) requires that all operations appear in **some single total order** that respects **each client's program order**, but that order doesn't have to match real time. Everyone sees the same order of events, but a write may become visible "later" than wall-clock time suggests.
+
+#### Intuition
+Everyone gets the same newspaper with stories in the same order, but some people's copies arrive an hour late. Nobody sees the stories in a different order. Some just see them later.
+
+#### Must know
+- All operations appear in **one agreed order** that respects **each client's own order**.
+- That order need **not match real time**, so a read can be stale.
+- Weaker than linearizability, and cheaper, because reads need no coordination.
+- ZooKeeper reads work this way: possibly behind, never out of order.
+- Call `sync()` before a ZooKeeper read that must be current.
+
+#### Common mistakes
+- Treating it as the same as linearizability.
+- Thinking stale reads are a violation. Only reordering is.
+- Spending long on it in an interview. Know the definition and the ZooKeeper example.
 
 #### How it works
 ```mermaid
@@ -370,8 +504,27 @@ Writes are linearizable through the leader (ZAB). Reads are served locally by th
 #### Interview angle
 > "Sequential consistency gives everyone the same order of updates without real-time freshness. ZooKeeper reads work like that, and I call sync() when a read must be current."
 
+#### Sources
+- [Sequential consistency](https://jepsen.io/consistency/models/sequential) — Jepsen
+- [ZooKeeper programmer's guide: consistency guarantees](https://zookeeper.apache.org/doc/current/zookeeperProgrammers.html) — Apache ZooKeeper docs
+
 ### Causal consistency — causally related operations ordered, concurrent operations may differ
 Causal consistency guarantees that operations that are **causally related** (one could have influenced the other) are seen by everyone **in that order**. Concurrent, unrelated operations may be seen in different orders by different clients. It's the strongest model that stays available during partitions.
+
+#### Intuition
+In a group chat you must never see the answer before the question. Two unrelated messages from different people can show up in either order and nobody minds.
+
+#### Must know
+- If one operation could have influenced another, **everyone sees them in that order**.
+- Unrelated, concurrent operations may appear in different orders to different clients.
+- It is the **strongest model that stays available during a partition**.
+- Implemented by tracking dependencies with vector clocks or version tokens.
+- It matches what users notice in chat, comments and feeds.
+
+#### Common mistakes
+- Demanding one global order for a chat product when order per conversation is enough.
+- Assuming eventual consistency gives this automatically.
+- Forgetting that concurrent writes to the same item still need conflict resolution.
 
 #### How it works
 ```mermaid
@@ -420,8 +573,27 @@ It preserves the orderings users actually perceive (cause before effect) without
 #### Interview angle
 > "For chat and comments, causal ordering is what users notice: a reply never shows before its parent. I get it with per-conversation ordering or causal sessions, without global coordination."
 
+#### Sources
+- [Causal consistency](https://jepsen.io/consistency/models/causal) — Jepsen
+- [Causal consistency and read and write concerns](https://www.mongodb.com/docs/manual/core/causal-consistency-read-write-concerns/) — MongoDB manual
+
 ### Read-your-writes — you always see your own writes (weaker than linearizability)
 Read-your-writes is a **session guarantee**: after a client writes, **that client's** later reads reflect the write. Other clients may still see older data. It's weaker than linearizability but removes the most visible anomaly in eventually consistent systems ("I saved my profile and it's gone"). (Phase 3 covers the replication-level mechanics.)
+
+#### Intuition
+You post a comment and refresh. Your comment must be there for you, even if a stranger on another continent does not see it for another second.
+
+#### Must know
+- A **session guarantee**: after I write, **my own** later reads include that write.
+- Other clients may still see older data.
+- Much cheaper than linearizability, and it removes the anomaly users complain about most.
+- Implement with a version token the client sends back, or by reading from the leader just after a write.
+- Also return the saved object in the write response.
+
+#### Common mistakes
+- Confusing it with linearizability, which constrains every client.
+- Tracking it in a cookie only, so it fails across devices.
+- Forgetting the cache, which can still serve the old value.
 
 #### How it works
 ```mermaid
@@ -467,8 +639,27 @@ After a write, capture the GTID (or binlog position) and store it with the user'
 #### Interview angle
 > "Users must see their own writes, so the write returns a version token and their reads only hit replicas that have caught up to it, otherwise the leader. Everyone else reads freely from replicas."
 
+#### Sources
+- [Read your writes](https://jepsen.io/consistency/models/read-your-writes) — Jepsen
+- [Eventually consistent](https://www.allthingsdistributed.com/2008/12/eventually_consistent.html) — Werner Vogels
+
 ### Monotonic reads — reads never go backwards in time (you never see older data after seeing newer)
 Monotonic reads is a session guarantee: once a client has read a value at some version, **its later reads never return an older version**. Without it, refreshing a page can make new data disappear and reappear as requests bounce between replicas with different lag.
+
+#### Intuition
+A like count that reads 1,204, then 1,198, then 1,210 as you refresh. No number was ever wrong, but going backwards looks broken. Monotonic reads means your view only moves forward.
+
+#### Must know
+- A **session guarantee**: once I have seen a version, I **never later see an older one**.
+- It breaks when consecutive requests reach replicas with different lag.
+- Fix with sticky routing per user, or with a minimum-version token.
+- It is independent of read-your-writes. Either can hold without the other.
+- The frontend can help by ignoring responses older than what it already shows.
+
+#### Common mistakes
+- Round-robin across replicas for a page users refresh.
+- Assuming eventual consistency implies it.
+- No fallback when the pinned replica fails.
 
 #### How it works
 ```mermaid
@@ -517,8 +708,27 @@ Attach a version or timestamp to responses and keep the highest seen. Drop respo
 #### Interview angle
 > "To stop data flickering backwards on refresh, I pin each session to a replica, or carry a min-version token so only caught-up replicas answer."
 
+#### Sources
+- [Monotonic reads](https://jepsen.io/consistency/models/monotonic-reads) — Jepsen
+- [Eventually consistent](https://www.allthingsdistributed.com/2008/12/eventually_consistent.html) — Werner Vogels
+
 ### Eventual consistency — given no new writes, all replicas converge to same value eventually
 Eventual consistency guarantees only that **if writes stop, all replicas will eventually hold the same value**. It says nothing about how long that takes or what reads return in the meantime. It's the default in many large-scale systems (DNS, CDNs, Cassandra at low consistency levels, async replicas, search indexes, caches).
+
+#### Intuition
+News spreading through a village. Tell one person and within a while everyone knows. Ask someone in the meantime and they may not have heard yet.
+
+#### Must know
+- The only promise: **if writes stop, all replicas end up with the same value**.
+- It gives **no bound** on how long that takes or what a read returns meanwhile.
+- The default in DNS, CDNs, async replicas, caches and search indexes.
+- Fine for browsing, search, feeds and counts. **Not for a decision about money.**
+- Measure the lag and set a target for it, so "eventual" becomes a known number.
+
+#### Common mistakes
+- Making a decision (charging a price, checking stock) on an eventually consistent copy.
+- Not measuring replication or pipeline lag at all.
+- Assuming convergence is certain when events can be lost.
 
 #### How it works
 ```mermaid
@@ -565,8 +775,27 @@ Measure it: replication lag (seconds behind, LSN difference), CDC and connector 
 #### Interview angle
 > "Search, caches and feeds are eventually consistent with measured lag SLOs, but any decision involving money re-reads the source of truth."
 
+#### Sources
+- [Eventually consistent](https://www.allthingsdistributed.com/2008/12/eventually_consistent.html) — Werner Vogels
+- [Eventual consistency](https://en.wikipedia.org/wiki/Eventual_consistency) — Wikipedia
+
 ### Strong eventual consistency — concurrent updates resolve deterministically without coordination (CRDTs)
 Strong eventual consistency (SEC) adds a guarantee to eventual consistency: **any two replicas that have received the same set of updates are in the same state immediately**, regardless of order, with no coordination and no rollback. It's achieved with **CRDTs**, data types whose merge is commutative, associative and idempotent.
+
+#### Intuition
+Two people each tick boxes on their own copy of a checklist. When the copies are combined, a box is ticked if either person ticked it. The result is the same whoever merges first and however many times they merge.
+
+#### Must know
+- Any two replicas that have received **the same set of updates are in the same state**, in any order, with no coordination.
+- Achieved with **CRDTs**: data types whose merge is commutative, associative and idempotent.
+- Examples: counters (G-Counter, PN-Counter), sets (OR-Set), collaborative text.
+- Works offline and through partitions.
+- It cannot enforce a global rule such as balance ≥ 0.
+
+#### Common mistakes
+- Treating it as plain eventual consistency. The extra promise is deterministic convergence.
+- Using a naive set union, so removed items come back.
+- Proposing CRDTs for inventory or money.
 
 #### How it works
 ```mermaid
@@ -617,3 +846,8 @@ A PN-Counter (or G-Counter for likes only): each region increments its own slot.
 
 #### Interview angle
 > "For multi-region counters, carts and collaborative editing I use CRDTs: merges are commutative and idempotent, so replicas converge with no coordination. Invariants like balances still go through a single authority."
+
+#### Sources
+- [Conflict-free replicated data type](https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type) — Wikipedia
+- [About CRDTs](https://crdt.tech/) — crdt.tech
+

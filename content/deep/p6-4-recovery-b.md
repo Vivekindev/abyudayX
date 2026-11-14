@@ -3,6 +3,21 @@
 ### Exactly-once semantics — hardest: Kafka transactions + idempotent producer + consumer isolation
 "Exactly-once" means each message's **effect** happens exactly once, even with retries and failures. True exactly-once *delivery* over an unreliable network is impossible, so systems achieve **exactly-once processing** via idempotence plus atomic commits: Kafka's idempotent producer, transactions and read-committed consumers within Kafka, or at-least-once delivery plus idempotent side effects everywhere else.
 
+#### Intuition
+You cannot guarantee that a letter is delivered exactly once, because you never know whether the reply got lost. What you can guarantee is that opening the same letter twice changes nothing the second time.
+
+#### Must know
+- Exactly-once **delivery** is impossible over an unreliable network. Systems provide exactly-once **effects**.
+- The recipe: **at-least-once delivery + idempotent processing + an atomic commit of output and progress**.
+- Inside Kafka: idempotent producer, transactions, and consumers reading only committed data.
+- A Kafka transaction writes the output messages and the consumer offset **atomically**.
+- The guarantee **stops at Kafka's boundary**. An external database needs idempotent upserts, or the offset stored in the same transaction as the result.
+
+#### Common mistakes
+- Promising exactly-once delivery.
+- Enabling Kafka exactly-once and assuming the write to Postgres is covered too.
+- Consumers left on the default isolation level, which reads aborted messages.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -58,8 +73,30 @@ Within one DB transaction, apply the effect (upsert keyed by a natural or event 
 #### Interview angle
 > "Exactly-once means exactly-once effects. Inside Kafka I use idempotent producers, transactions and read_committed. At external sinks I use idempotent upserts or store offsets in the same DB transaction."
 
+#### Sources
+- [Message delivery semantics](https://kafka.apache.org/documentation/#semantics) — Apache Kafka docs
+- [Exactly-once semantics are possible: here's how Kafka does it](https://www.confluent.io/blog/exactly-once-semantics-are-possible-heres-how-apache-kafka-does-it/) — Confluent
+
 ### Idempotency key pattern — include unique key in request; server deduplicates and returns same result
 The idempotency key pattern makes any mutating request safe to retry: the client attaches a **unique key per logical operation**, and the server records the key with the outcome. Repeats return the stored outcome instead of re-executing. It's the universal fix for duplicate side effects in HTTP APIs, message consumers and inter-service calls. (Phase 1 covers HTTP API usage in detail.)
+
+#### Intuition
+A cheque number. If the same cheque is presented twice, the bank sees the number has already been paid and does not pay again.
+
+#### Must know
+- The client attaches **one unique key per logical operation** and reuses it on every retry.
+- The server stores the key with the outcome. A repeat **returns the stored outcome** and does not run again.
+- Enforce it with a **unique constraint**, not a check followed by an insert.
+- Handle the in-between cases: same key still in progress, and same key with a different payload.
+- Derive keys for downstream calls, so the whole chain is safe to retry.
+
+#### Numbers to quote
+- Keys are typically kept for 24 hours to 7 days, long enough to cover every retry.
+
+#### Common mistakes
+- Generating a new key on each retry.
+- Check-then-insert, which lets two concurrent retries both pass.
+- The server generating the key, so a retried request looks new.
 
 #### How it works
 ```mermaid
@@ -110,8 +147,27 @@ The unique insert marks the key IN_PROGRESS. The second request sees that state 
 #### Interview angle
 > "Every mutating operation, API or message, carries a stable idempotency key enforced by a unique constraint, with derived keys for downstream calls. Retries are safe end to end."
 
+#### Sources
+- [Idempotent requests](https://docs.stripe.com/api/idempotent_requests) — Stripe API docs
+- [Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/) — Amazon Builders' Library
+
 ### Distributed locks — Redis Redlock (quorum on N instances), Zookeeper ephemeral node, etcd lease
 A distributed lock gives one process at a time exclusive rights to a resource across many machines. Implementations: **Redis** (`SET NX PX`, or Redlock across N instances), **ZooKeeper** (ephemeral sequential znodes), **etcd** (leases + revisions), and **databases** (row locks, advisory locks). For correctness, every lock must be combined with **fencing** or idempotent operations. (Phase 3 covers Redlock's mechanics.)
+
+#### Intuition
+A "talking stick" passed round a meeting so that only one person speaks at a time. It works while everyone can see who holds it. If someone dozes off holding it and a second stick appears, two people talk at once.
+
+#### Must know
+- A distributed lock gives **one process at a time** the right to do something, across machines.
+- First ask what it is for. **Efficiency** (avoid duplicate work): a Redis `SET NX PX` is fine.
+- **Correctness** (a double run does damage): use etcd or ZooKeeper **with a fencing token** that the resource checks.
+- If the data is in one database, a row lock or a conditional update is simpler and safer.
+- Often the best design has no lock: give each key a single owner, or make the operation idempotent.
+
+#### Common mistakes
+- A Redis lock alone guarding a payment.
+- A lock with no TTL or lease, so a crashed holder blocks everyone.
+- One global lock that every request must take.
 
 #### How it works
 ```mermaid
@@ -164,8 +220,27 @@ Its safety assumes bounded network delay, process pauses and clock drift. A clie
 #### Interview angle
 > "For efficiency locks I'd use a Redis SET NX with a TTL. For correctness I'd use etcd leases whose revision is a fencing token the resource checks, and often avoid locks entirely by partitioning ownership by key."
 
+#### Sources
+- [How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html) — Martin Kleppmann
+- [Distributed locks with Redis](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/) — Redis docs
+
 ### Distributed transactions — 2PC (coordinator blocks on failure), Saga (compensating transactions)
 A distributed transaction spans multiple databases or services that must all commit or all abort. The two main approaches: **Two-Phase Commit (2PC)**, which gives atomic all-or-nothing but blocks on coordinator failure and couples availability, and **Sagas**, a sequence of local transactions with compensations, which are eventually consistent but scalable and resilient. Modern microservices overwhelmingly choose sagas.
+
+#### Intuition
+Booking a flight, a hotel and a car from three companies. Either you get all three to hold your booking until you say "confirm all" (and they wait on you), or you book one after another and cancel the earlier ones if a later one fails.
+
+#### Must know
+- One business operation spans several databases or services that must all succeed or all be undone.
+- **2PC**: atomic, but participants hold locks and block if the coordinator fails.
+- **Saga**: a chain of local transactions with compensating actions. Eventually consistent.
+- Microservices **default to sagas**. 2PC belongs inside one database or a distributed SQL engine.
+- Both need idempotent steps and durable state.
+
+#### Common mistakes
+- Proposing 2PC across independent services or external companies.
+- A saga with no compensation for a step.
+- Forgetting that a saga exposes intermediate states to other requests.
 
 #### How it works
 ```mermaid
@@ -227,8 +302,27 @@ Intermediate states are visible to other transactions: an order may appear "rese
 #### Interview angle
 > "Across microservices I'd run a saga with an outbox, idempotent steps and compensations. 2PC only appears inside a distributed SQL database where participants are consensus groups."
 
+#### Sources
+- [Saga pattern](https://microservices.io/patterns/data/saga.html) — microservices.io
+- [Saga distributed transactions pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/saga) — Azure Architecture Center
+
 ### Two-phase commit — Phase 1: prepare (all vote), Phase 2: commit (if all yes) / abort (if any no)
 Two-Phase Commit is the classic atomic commitment protocol. In **phase 1 (prepare)** the coordinator asks every participant to make the transaction durable but uncommitted and vote yes or no. In **phase 2**, if all voted yes, the coordinator logs COMMIT and tells everyone to commit. If anyone voted no (or timed out), it tells everyone to abort.
+
+#### Intuition
+A wedding. The officiant asks each person "do you?" and only when both have said "I do" declares them married. If either says no, there is no marriage. After saying "I do", neither can change their mind while waiting for the declaration.
+
+#### Must know
+- **Phase 1 (prepare)**: the coordinator asks every participant to make the change durable and vote yes or no.
+- **Phase 2**: all yes → commit everywhere. Any no or timeout → abort everywhere.
+- A **yes vote is a promise**. The participant must hold its locks until it learns the outcome.
+- The coordinator's logged decision is the point of no return.
+- Costs: two round trips, locks held throughout, and every participant must support it.
+
+#### Common mistakes
+- Thinking a participant can time out and abort on its own after voting yes.
+- Confusing two-phase commit with two-phase locking.
+- Using it on a hot path and wondering where the throughput went.
 
 #### How it works
 ```mermaid
@@ -286,8 +380,28 @@ By voting YES it promises it can commit whatever the coordinator decides. If it 
 #### Interview angle
 > "2PC is prepare and vote, then a logged commit decision. YES votes hold locks until the outcome arrives, which is why I keep it inside databases that do it over consensus and use outboxes and sagas between services."
 
+#### Sources
+- [Two-phase commit protocol](https://en.wikipedia.org/wiki/Two-phase_commit_protocol) — Wikipedia
+- [Two-phase commit](https://martinfowler.com/articles/patterns-of-distributed-systems/two-phase-commit.html) — Unmesh Joshi, martinfowler.com
+- [PREPARE TRANSACTION](https://www.postgresql.org/docs/current/sql-prepare-transaction.html) — PostgreSQL docs
+
 ### Two-phase commit blocking problem — if coordinator crashes after prepare, cohorts wait forever
 2PC is a **blocking protocol**: if the coordinator crashes after participants voted YES but before they learn the decision, those participants are **in doubt**. They can't commit (maybe someone voted no) and can't abort (maybe the coordinator decided commit), so they hold locks and wait until the coordinator recovers. One failure stalls everything touching those rows.
+
+#### Intuition
+Both people have said "I do" and the officiant faints before pronouncing anything. Nobody knows whether they are married. Neither can walk away, and the hall stays booked until the officiant wakes up.
+
+#### Must know
+- If the coordinator crashes **after the yes votes but before announcing the decision**, participants are **in doubt**.
+- They cannot commit (someone may have voted no) and cannot abort (the decision may have been commit).
+- They **hold their locks** until the coordinator recovers, which blocks everything touching those rows.
+- Fix 1: make the coordinator fault-tolerant by replicating its decision with consensus. Spanner and CockroachDB do this.
+- Fix 2: avoid 2PC between services and use a saga.
+
+#### Common mistakes
+- Suggesting a timeout-and-abort to escape the wait. It breaks atomicity.
+- Offering three-phase commit as the practical answer. It is rarely used.
+- An operator manually committing in-doubt transactions by guesswork.
 
 #### How it works
 ```mermaid
@@ -343,8 +457,27 @@ Every participant (and the coordinator's transaction record) is a consensus-repl
 #### Interview angle
 > "2PC blocks when the coordinator dies after prepare. That's why I'd only accept it where participants and the coordinator are consensus-replicated, like distributed SQL, and use sagas everywhere else."
 
+#### Sources
+- [Two-phase commit protocol: disadvantages](https://en.wikipedia.org/wiki/Two-phase_commit_protocol) — Wikipedia
+- [Spanner: Google's globally distributed database](https://research.google/pubs/spanner-googles-globally-distributed-database-2/) — Google Research
+
 ### Saga pattern — sequence of local transactions with compensating transactions on failure
 A saga breaks a business transaction spanning several services into a **sequence of local transactions**, each committed in its own service's database and triggering the next step. If a step fails, the saga runs **compensating transactions** to semantically undo the completed steps. The result is eventual consistency without distributed locks.
+
+#### Intuition
+Planning a trip one booking at a time. If the hotel falls through after the flight is booked, you do not "un-happen" the flight. You cancel it and take the refund. Each cancellation is its own action.
+
+#### Must know
+- A business transaction becomes a **sequence of local transactions**, each committed in its own service.
+- If a step fails, **compensating transactions** undo the completed steps in business terms (refund, release, cancel).
+- Step types: **compensatable** → **pivot** (the go / no-go step) → **retryable** (must eventually succeed).
+- Every step and every compensation must be **idempotent**.
+- There is **no isolation**: other requests can see the intermediate state, so expose a PENDING status.
+
+#### Common mistakes
+- An irreversible step (sending an email, shipping) placed before the pivot.
+- A compensation that can fail permanently, with no retry.
+- No timeout, so a saga waits forever for a reply that was lost.
 
 #### How it works
 ```mermaid
@@ -403,8 +536,27 @@ It semantically undoes the effect (refund, release, cancel) rather than deleting
 #### Interview angle
 > "Cross-service workflows are sagas: local transactions with outbox events, idempotent steps keyed by order id, compensations for everything before the pivot, and timeouts so nothing gets stuck."
 
+#### Sources
+- [Saga pattern](https://microservices.io/patterns/data/saga.html) — microservices.io
+- [Saga distributed transactions pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/saga) — Azure Architecture Center
+
 ### Saga choreography — services react to events published by previous service (loose coupling)
 In a choreographed saga there's **no central coordinator**: each service listens for domain events and decides what to do next, publishing its own events. The workflow emerges from these reactions. It's loosely coupled and simple for short flows, but hard to see, change and debug as it grows.
+
+#### Intuition
+A relay race with no coach on the track. Each runner starts when they see the baton arrive. It runs smoothly while the route is short, but if a baton is dropped, nobody has the overall picture of where the race stopped.
+
+#### Must know
+- **No central coordinator.** Each service reacts to events and publishes its own.
+- Loosely coupled, and adding a step is just adding a subscriber.
+- Good for **short, stable flows** of two to four steps.
+- The workflow is spread across services, so it is hard to see, change and debug.
+- Add a correlation id and a status view, so "where is this order stuck?" has an answer.
+
+#### Common mistakes
+- Using it for a long flow with branches and timeouts.
+- Services reacting to each other's events in a loop.
+- No way to see the overall state of one order.
 
 #### How it works
 ```mermaid
@@ -456,8 +608,27 @@ Propagate a correlation id (order id, trace id) in all events, use distributed t
 #### Interview angle
 > "Short event-driven flows use choreography with correlation ids and a status projection. Once a flow branches or needs timeouts, I move it to an orchestrator so the workflow lives in one place."
 
+#### Sources
+- [Saga pattern: choreography-based saga](https://microservices.io/patterns/data/saga.html) — microservices.io
+- [Choreography pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/choreography) — Azure Architecture Center
+
 ### Saga orchestration — central saga orchestrator explicitly calls each service (easier to monitor)
 In an orchestrated saga a **central orchestrator** (a service or workflow engine) holds the saga's state machine and **explicitly commands** each participant ("reserve stock", "charge payment"), waits for replies, and triggers compensations on failure. Workflow logic lives in one place, so it's easy to understand, monitor and change.
+
+#### Intuition
+A conductor in front of the orchestra. The conductor knows the whole score, cues each section in turn, and knows exactly where to restart if someone misses an entry.
+
+#### Must know
+- A **central orchestrator** holds the workflow's state machine and tells each service what to do.
+- The logic lives in one place, so it is easy to read, monitor and change.
+- It handles retries, timeouts and compensations explicitly.
+- Its state must be **durable**. Use a workflow engine (Temporal, AWS Step Functions, Camunda) or a saga table plus an outbox.
+- Best for **long, branching flows with waits**, such as loans and refunds.
+
+#### Common mistakes
+- Keeping the orchestrator's state in memory.
+- Moving all business rules into the orchestrator, which turns it into a new monolith.
+- Participants that are not idempotent, so a retried command runs twice.
 
 #### How it works
 ```mermaid
@@ -524,8 +695,31 @@ Orchestration: the flow has many steps, a human approval wait, timeouts and comp
 #### Interview angle
 > "Long, branching workflows with timeouts, like disbursements and refunds, run on an orchestrator such as Temporal or Step Functions: durable state, retries, timers and full per-instance history, while participants stay idempotent and own their business rules."
 
+#### Sources
+- [Saga pattern: orchestration-based saga](https://microservices.io/patterns/data/saga.html) — microservices.io
+- [What is a Temporal workflow?](https://docs.temporal.io/workflows) — Temporal docs
+- [What is Step Functions?](https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html) — AWS Step Functions developer guide
+
 ### Exponential backoff + jitter — prevent retry storms: wait = min(cap, base × 2^attempt) + rand(0, base)
 When a call fails transiently, retrying immediately (or at fixed intervals) from many clients creates **synchronised retry storms** that overwhelm a recovering service. **Exponential backoff** spaces retries out (doubling the wait each attempt, up to a cap), and **jitter** randomises the waits so clients don't retry in lockstep.
+
+#### Intuition
+A busy phone line. If everyone who got the engaged tone redials after exactly ten seconds, they all collide again. If each person waits a bit longer every time, and a different random amount, the calls spread out and get through.
+
+#### Must know
+- **Backoff**: double the wait after each failed attempt, up to a cap.
+- **Jitter**: randomise the wait, so clients that failed together do not retry together.
+- Full jitter: `sleep = random(0, min(cap, base × 2^attempt))`.
+- Retry only **transient** errors, and only **idempotent** operations.
+- Cap the attempts, retry at **one layer** only, and pair it with a circuit breaker.
+
+#### Numbers to quote
+- Three layers that each retry 3 times can turn one request into 27.
+
+#### Common mistakes
+- Fixed-interval retries, which arrive in synchronised waves.
+- Retrying a 400-class validation error that will never succeed.
+- Retrying a non-idempotent call with no idempotency key.
 
 #### How it works
 ```mermaid
@@ -588,3 +782,8 @@ Retries multiply: 3 × 3 × 3 = up to 27 attempts per original request against a
 
 #### Interview angle
 > "Retries use exponential backoff with full jitter, only for transient errors on idempotent operations, capped within the deadline, at one layer, behind a circuit breaker, so recoveries aren't knocked over by synchronised retries."
+
+#### Sources
+- [Exponential backoff and jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) — AWS Architecture Blog
+- [Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/) — Amazon Builders' Library
+
