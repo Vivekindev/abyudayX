@@ -3,6 +3,24 @@
 ### B+ tree — all data in leaf nodes linked in sorted order; O(log N) search + efficient range scans; used in all RDBMS
 A B+ tree is a balanced, high-fan-out search tree where **internal nodes hold only routing keys** and **all records (or pointers) live in leaves**, which are **linked in sorted order**. Point lookups take O(log_B N) page reads (3–4 for billions of rows), and range scans walk the leaf chain sequentially. (Phase 2 covers query-level usage.)
 
+#### Intuition
+A phone directory with a guide at the top of each section. The guides only point you to the right page. The real entries are all on the bottom pages, in order, and each page tells you where the next one is.
+
+#### Must know
+- A balanced tree with a very high fan-out, so it is only **3–4 levels deep** even for billions of rows.
+- **Internal nodes hold only routing keys. All rows live in the leaves.**
+- Leaves are **linked in sorted order**, so a range scan walks along them.
+- A full page **splits** on insert.
+- Random keys cause splits all over the tree. Sequential keys append at the right edge.
+
+#### Numbers to quote
+- With roughly 400 keys per node, 4 levels cover billions of rows. A lookup costs 1–2 disk reads because the upper levels stay cached.
+
+#### Common mistakes
+- Random UUIDs as the primary key of a large table.
+- Describing a B-tree and a B+ tree as the same thing.
+- Forgetting that deletes leave half-empty pages (bloat).
+
 #### How it works
 ```mermaid
 flowchart TD
@@ -53,8 +71,28 @@ Inserting into a full leaf requires splitting it into two half-full pages and in
 #### Interview angle
 > "B+ trees keep data in sorted, linked leaves under a three-to-four-level tree, so point lookups take one or two I/Os and ranges are sequential. I choose sequential keys to avoid split storms."
 
+#### Sources
+- [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) — Wikipedia
+- [The search tree (B-tree) makes the index fast](https://use-the-index-luke.com/sql/anatomy/the-tree) — Use The Index, Luke
+- [B-tree indexes](https://www.postgresql.org/docs/current/btree.html) — PostgreSQL docs
+
 ### LSM tree — MemTable → immutable SSTable → leveled compaction; write-optimized; used in Cassandra, RocksDB, LevelDB
 A Log-Structured Merge tree buffers writes in an in-memory sorted **memtable** (plus a WAL for durability), flushes it as an immutable sorted file (**SSTable**), and merges files in the background via **compaction**. Writes are sequential and fast. Reads may consult several files, helped by bloom filters and indexes. (Phase 3 covers the trade-offs.)
+
+#### Intuition
+A busy office that never files papers one by one. New papers go on a desk tray. When the tray is full it is sorted and boxed, and later the boxes are merged into bigger tidy boxes in the back room.
+
+#### Must know
+- Writes go to an in-memory sorted **memtable** and a write-ahead log.
+- A full memtable is flushed to disk as an immutable sorted file, an **SSTable**.
+- **Compaction** merges files in the background and drops old versions.
+- **Writes are sequential and fast.** Reads may have to check several files.
+- A delete is a marker (tombstone), removed later by compaction.
+
+#### Common mistakes
+- Calling it faster at everything. Reads and range scans cost more than in a B+ tree.
+- Ignoring compaction, which causes write stalls when it falls behind.
+- Heavy deletes that leave many tombstones.
 
 #### How it works
 ```mermaid
@@ -101,8 +139,27 @@ When flushes or compactions can't keep up with incoming writes (too many L0 file
 #### Interview angle
 > "LSM engines turn writes into WAL appends plus memtable inserts, flushed as immutable SSTables and merged by compaction. I tune compaction to avoid write stalls and rely on bloom filters for reads."
 
+#### Sources
+- [The log-structured merge-tree (LSM-tree)](https://www.cs.umb.edu/~poneil/lsmtree.pdf) — O'Neil, Cheng, Gawlick and O'Neil
+- [RocksDB overview](https://github.com/facebook/rocksdb/wiki/RocksDB-Overview) — RocksDB wiki
+
 ### LSM read path — check bloom filter (each level) → check SSTable index → read data block; amortized O(log^2 N)
 Reading a key in an LSM tree means checking newest data first: the **memtable**, then **immutable memtables**, then SSTables **level by level** (L0 files newest first, then one candidate file per deeper level). Per file, a **bloom filter** rules out absence, an **index** locates the block, and the **block cache** avoids disk reads. The first version found (value or tombstone) wins.
+
+#### Intuition
+Looking for a letter: check today's tray first, then the newest box, then older boxes. Each box has a label saying what is definitely not inside, so most boxes are skipped without being opened.
+
+#### Must know
+- Read order: **memtable, then SSTables from newest to oldest**. The first version found wins.
+- For each file, a **bloom filter** says "definitely not here" and skips it.
+- An index then points to the right block, often served from the block cache.
+- A typical point read costs **about one disk read**.
+- **Range scans cannot use bloom filters** and must merge every level.
+
+#### Common mistakes
+- Too many level-0 files after a write burst, which makes reads slow.
+- A block cache so small that index and filter blocks get evicted.
+- Expecting range scans to be as cheap as in a B+ tree.
 
 #### How it works
 ```mermaid
@@ -152,8 +209,27 @@ A range scan must open iterators on the memtable and on every level (and every o
 #### Interview angle
 > "An LSM point read checks the memtable, then one fence-pointer-selected file per level behind bloom filters, usually costing one block read. Its health depends on L0 file count, compaction backlog and pinned filter blocks."
 
+#### Sources
+- [RocksDB Bloom filter](https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter) — RocksDB wiki
+- [Leveled compaction](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction) — RocksDB wiki
+
 ### Skip list — probabilistic balanced structure; O(log N) average search/insert; used in Redis sorted sets
 A skip list is a sorted linked list with **express lanes**: each node is promoted to higher levels with probability p (e.g. 1/2 or 1/4), so upper levels skip over many nodes. Search starts at the top level and drops down, giving **O(log N) expected** search, insert and delete, with simpler code and easier concurrency than balanced trees.
+
+#### Intuition
+A railway with express and local lines. You ride the express past many stations, switch to a slower line as you get close, and finish on the local line that stops everywhere.
+
+#### Must know
+- A sorted linked list with extra **express lanes** on top.
+- Each node is promoted to a higher lane **at random**.
+- Search, insert and delete are **O(log N) on average**.
+- It is simpler than a balanced tree and easier to make concurrent.
+- Used in **Redis sorted sets** and in LSM memtables.
+
+#### Common mistakes
+- Calling the O(log N) a guarantee. It is an expected value.
+- Using it for on-disk data, where a B-tree has better locality.
+- Forgetting that Redis pairs it with a hash map for lookup by member.
 
 #### How it works
 ```mermaid
@@ -204,8 +280,27 @@ Memtables need fast concurrent inserts and sorted iteration (for flushing to sor
 #### Interview angle
 > "Skip lists give O(log N) ordered operations with simple, concurrency-friendly code, which is why they back Redis sorted sets, with rank via span counters, and LSM memtables."
 
+#### Sources
+- [Skip list](https://en.wikipedia.org/wiki/Skip_list) — Wikipedia
+- [Redis sorted sets](https://redis.io/docs/latest/develop/data-types/sorted-sets/) — Redis docs
+
 ### Trie (prefix tree) — O(m) lookup by prefix where m = key length; used in autocomplete, IP routing
 A trie stores strings character by character along tree paths, so all keys sharing a prefix share a path. Lookup, insert and prefix search take **O(m)** for key length m, independent of how many keys exist, which makes tries natural for **autocomplete**, spell checking, IP longest-prefix matching and dictionaries.
+
+#### Intuition
+A dictionary laid out as branching paths: follow "c", then "a", then "t". Every word that starts with "ca" lies down the same first two steps.
+
+#### Must know
+- Keys are stored **character by character** along tree paths.
+- Keys with a common prefix **share a path**.
+- Lookup and prefix search take **O(key length)**, whatever the number of keys.
+- For autocomplete, each node stores its **precomputed top-K completions**.
+- It is memory-heavy, so real systems compress it.
+
+#### Common mistakes
+- Walking the whole subtree on every autocomplete request.
+- A node per character with full pointer arrays, which wastes memory.
+- Building suggestions from raw query logs with no filtering.
 
 #### How it works
 ```mermaid
@@ -253,8 +348,27 @@ Routers store prefixes (like 10.0.0.0/8, 10.1.0.0/16) in a binary or compressed 
 #### Interview angle
 > "Autocomplete is a trie whose nodes store precomputed top-K completions, built offline from weighted query logs and served from memory and the CDN, so lookups are O(prefix length)."
 
+#### Sources
+- [Trie](https://en.wikipedia.org/wiki/Trie) — Wikipedia
+- [Suggesters: completion suggester](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/search-suggesters) — Elasticsearch docs
+
 ### Compressed trie (Patricia/Radix tree) — merge single-child nodes; O(m) space instead of O(m²)
 A radix tree (compressed trie, Patricia trie) **merges chains of single-child nodes into one edge labelled with a string**. Lookups are still proportional to key length, but the number of nodes drops to O(number of keys), dramatically reducing memory and pointer chasing compared with a plain trie.
+
+#### Intuition
+Road directions that say "follow this road for 5 km" in place of listing every house you pass. Long stretches with no junction are collapsed into one step.
+
+#### Must know
+- A trie where each **chain of single-child nodes is merged into one edge** labelled with a string.
+- The number of nodes drops to about the **number of keys**.
+- Lookup is still proportional to key length.
+- Used in HTTP routers, IP routing tables and Redis internals.
+- Insert and delete are more complex, because edges split and merge.
+
+#### Common mistakes
+- A plain trie for long keys with unique tails, which explodes in memory.
+- A router that checks every route pattern in order.
+- No rule for static segments versus parameters (`/users/new` against `/users/:id`).
 
 #### How it works
 ```mermaid
@@ -310,8 +424,30 @@ A plain trie creates a node per character, and long keys with unique suffixes cr
 #### Interview angle
 > "Radix trees compress single-child chains, so prefix matching stays O(key length) with node count near the key count. That's why gateways and HTTP routers use them for thousands of routes."
 
+#### Sources
+- [Radix tree](https://en.wikipedia.org/wiki/Radix_tree) — Wikipedia
+- [httprouter](https://github.com/julienschmidt/httprouter) — Julien Schmidt, GitHub
+
 ### Inverted index — term → postings list (docID, frequency, position offsets); foundation of all search engines
 An inverted index maps each **term** to a **postings list**: the documents containing it, often with term frequency and positions. Answering "documents containing *red* AND *shoes*" means intersecting two sorted postings lists instead of scanning every document. It's the core structure of Lucene, Elasticsearch, OpenSearch, Solr and Postgres full-text search (GIN).
+
+#### Intuition
+The index at the back of a book. You look up a word and get the page numbers where it appears. You do not read every page to find it.
+
+#### Must know
+- It maps each **term to the list of documents** containing it (the postings list).
+- A query for two words **intersects two sorted lists**.
+- Text is analysed first: tokenised, lowercased, stemmed.
+- Stored positions make phrase queries possible.
+- Lucene writes immutable segments, so new documents are searchable after a short refresh.
+
+#### Numbers to quote
+- Elasticsearch refreshes about once per second by default, so search is near real time.
+
+#### Common mistakes
+- `LIKE '%word%'` on a large table in place of a search index.
+- Different analysers at index time and query time, so obvious matches are missed.
+- Expecting a document to be searchable the instant it is written.
 
 #### How it works
 ```mermaid
@@ -364,8 +500,27 @@ Immutable segments allow lock-free concurrent reads, aggressive compression, fil
 #### Interview angle
 > "Search runs on inverted indexes: analyzed terms map to compressed postings intersected with skip pointers and scored with BM25, in immutable Lucene segments that refresh roughly every second."
 
+#### Sources
+- [Elasticsearch from the bottom up](https://www.elastic.co/blog/found-elasticsearch-from-the-bottom-up) — Elastic blog
+- [Inverted index](https://en.wikipedia.org/wiki/Inverted_index) — Wikipedia
+
 ### Term dictionary — sorted list of all terms; binary search or trie for lookup; stored in SSTable-like format
 The term dictionary maps every indexed **term to the location of its postings list** (plus statistics like document frequency). It must be compact and fast to search: Lucene stores terms sorted in blocks and indexes them with an in-memory **FST** (finite state transducer, a compressed trie-like automaton), enabling prefix, fuzzy and range term lookups.
+
+#### Intuition
+The alphabetical list of headwords in the book's index. Before you can read the page numbers for a word, you have to find the word itself, and a sorted list makes that quick.
+
+#### Must know
+- It maps every indexed **term to the location of its postings list**.
+- Terms are kept **sorted**, with a compact in-memory index on top.
+- Lucene's index is an **FST**, a compressed trie-like structure.
+- Sorted terms make **prefix queries fast**.
+- A **leading wildcard** (`*shoe`) cannot use the sort order.
+
+#### Common mistakes
+- Leading-wildcard queries on a big index.
+- Indexing ids as analysed text, which bloats the dictionary.
+- Unlimited fuzzy matching over a huge dictionary.
 
 #### How it works
 ```mermaid
@@ -410,8 +565,27 @@ A finite state transducer is a minimal automaton that shares both prefixes and s
 #### Interview angle
 > "The term dictionary keeps sorted term blocks indexed by an FST, so exact, prefix and fuzzy lookups are cheap. I map ids as keyword fields and avoid leading wildcards to keep it small and fast."
 
+#### Sources
+- [Lucene index file formats: term dictionary](https://lucene.apache.org/core/10_0_0/core/org/apache/lucene/codecs/lucene912/package-summary.html) — Apache Lucene docs
+- [Using finite state transducers in Lucene](https://blog.mikemccandless.com/2010/12/using-finite-state-transducers-in.html) — Mike McCandless
+
 ### Merkle tree — hash tree: leaf = hash(data), parent = hash(children); detect inconsistencies between replicas
 A Merkle tree hashes data blocks into leaves and builds parents by hashing their children, up to a single **root hash** that summarises everything. Comparing two roots tells you instantly whether datasets differ. Descending only into mismatched subtrees finds **exactly which blocks differ** in O(log n) comparisons. It also enables **inclusion proofs** (prove one item is in the set with log n hashes).
+
+#### Intuition
+A fingerprint of fingerprints. Each chapter of two copies of a book gets a fingerprint, and those are combined into one for the whole book. If the book fingerprints match, the copies are identical. If not, you compare halves to find the chapter that differs.
+
+#### Must know
+- Leaves are hashes of data blocks. Each parent is the hash of its children.
+- The single **root hash summarises everything**.
+- Equal roots mean identical data.
+- If roots differ, descend only into mismatching branches to find the differing blocks.
+- An **inclusion proof** shows an item is in the set using about log n hashes.
+
+#### Common mistakes
+- Leaves that each cover too much data, so one small difference forces a large transfer.
+- Rebuilding the whole tree on every change.
+- Thinking it is only for blockchains. Git, Cassandra and certificate logs use it.
 
 #### How it works
 ```mermaid
@@ -459,8 +633,30 @@ To prove an item is part of a dataset with a known root hash, you provide the it
 #### Interview angle
 > "Merkle trees summarise a dataset in one root: replicas compare roots and descend into mismatched subtrees to sync only the differences, and logs give log-n inclusion proofs."
 
+#### Sources
+- [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree) — Wikipedia
+- [How CT works](https://certificate.transparency.dev/howctworks/) — Certificate Transparency
+
 ### Merkle tree in Cassandra — compare replicas without transferring all data; send tree hashes instead
 During **anti-entropy repair**, each Cassandra replica builds a **Merkle tree for a token range** (validation compaction), the coordinator collects trees from all replicas, compares them, and replicas **stream only the sub-ranges whose hashes differ**. This keeps replicas convergent without shipping terabytes. (Phase 3 covers repair operations.)
+
+#### Intuition
+Two branch offices check their ledgers by reading out a checksum per section over the phone. Only the sections whose checksums differ get couriered across.
+
+#### Must know
+- During **repair**, each replica builds a Merkle tree for a token range.
+- The trees are compared, and **only mismatching sub-ranges are streamed**.
+- Building a tree reads all the data in the range, which is I/O heavy.
+- Coarse leaves cause **overstreaming**: more data is sent than actually differs.
+- Repair smaller sub-ranges, and finish every cycle within `gc_grace_seconds`.
+
+#### Numbers to quote
+- `gc_grace_seconds` defaults to 10 days.
+
+#### Common mistakes
+- Full-range repairs on large nodes.
+- Skipping repairs, so deleted data comes back.
+- Unthrottled repairs during peak traffic.
 
 #### How it works
 ```mermaid
@@ -514,8 +710,27 @@ To hash the data in a range, each replica must read every partition in that rang
 #### Interview angle
 > "Cassandra repair compares per-range Merkle trees and streams only mismatched sub-ranges. I run throttled subrange repairs via Reaper so leaves stay fine and every cycle finishes inside gc_grace_seconds."
 
+#### Sources
+- [Repair](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/repair.html) — Apache Cassandra docs
+- [Cassandra Reaper](http://cassandra-reaper.io/) — Reaper project
+
 ### Segment tree — range query (sum, min, max) in O(log N) with O(N) space; used in real-time analytics
 A segment tree is a binary tree over an array where each node stores an **aggregate (sum, min, max, count) of a segment**. Any range query and any point update take **O(log N)**, versus O(N) per query with a plain array or O(N) per update with prefix sums. With **lazy propagation**, range updates are O(log N) too.
+
+#### Intuition
+A tournament bracket of subtotals. Each match-up stores the total of its two halves, so any stretch of the array can be answered by adding a handful of ready-made subtotals.
+
+#### Must know
+- A binary tree in which each node stores an **aggregate of a segment** of the array.
+- **Range query and point update are both O(log N).**
+- It works for sum, min, max or any associative operation.
+- **Lazy propagation** makes range updates O(log N) as well.
+- Mainly an in-memory structure. Databases use pre-aggregated rollups.
+
+#### Common mistakes
+- Using prefix sums when values change often, which costs O(N) per update.
+- Using a segment tree when only sums are needed and a Fenwick tree would do.
+- A full array over a huge sparse range.
 
 #### How it works
 ```mermaid
@@ -564,8 +779,27 @@ A technique to apply range updates (e.g. add 5 to all elements in [l, r]) in O(l
 #### Interview angle
 > "For in-memory range aggregates that change constantly, like per-second volume with arbitrary window queries, a segment tree gives O(log N) updates and queries, with lazy propagation for range updates."
 
+#### Sources
+- [Segment tree](https://cp-algorithms.com/data_structures/segment_tree.html) — cp-algorithms
+- [Segment tree](https://en.wikipedia.org/wiki/Segment_tree) — Wikipedia
+
 ### Fenwick tree (Binary Indexed Tree) — range sum in O(log N) with simpler implementation than segment tree
 A Fenwick tree (Binary Indexed Tree) stores partial sums in an array so that **prefix sums and point updates are O(log N)**, using a few lines of bit manipulation (`i & -i`). Range sums come from two prefix sums. It's smaller (N + 1 entries) and simpler than a segment tree, but limited to invertible operations like sums and counts.
+
+#### Intuition
+A set of running subtotals of clever sizes: some cover 1 item, some 2, some 4, some 8. Any total from the start can be made by adding just a few of them.
+
+#### Must know
+- It gives **prefix sums and point updates in O(log N)**.
+- A range sum is the difference of two prefix sums.
+- The whole thing is one array and a few lines using `i & -i`.
+- **Only for operations with an inverse**, such as sums and counts.
+- Useful for ranks: "how many scores are below X?"
+
+#### Common mistakes
+- Trying to answer range min or max with it.
+- Off-by-one errors from its 1-based indexing.
+- An array over a huge sparse range with no coordinate compression.
 
 #### How it works
 ```java
@@ -617,10 +851,33 @@ Fenwick: simpler code, N + 1 memory, very fast, but limited to invertible associ
 #### Interview angle
 > "For prefix sums and rank counts under constant updates, a Fenwick tree does it in O(log N) with a dozen lines and an N-sized array. I'd use a segment tree only for min, max or range updates."
 
+#### Sources
+- [Fenwick tree](https://cp-algorithms.com/data_structures/fenwick.html) — cp-algorithms
+- [Fenwick tree](https://en.wikipedia.org/wiki/Fenwick_tree) — Wikipedia
+
+
 ## Unique ID generation
 
 ### UUID v4 — 128-bit random; globally unique with 2^122 possibilities; not sortable, no ordering
 UUID v4 is a 128-bit identifier with **122 random bits**: generated anywhere with no coordination, with practically zero collision probability. It's great for distributed id generation and unguessable identifiers, but its **randomness hurts database index locality** and it carries no time ordering.
+
+#### Intuition
+Raffle tickets printed with numbers so long that two printers working separately will never produce the same one. The tickets come out in no order at all.
+
+#### Must know
+- A 128-bit id with **122 random bits**, generated anywhere with no coordination.
+- Collisions are practically impossible.
+- It is **unguessable**, which suits public tokens.
+- **Random values scatter inserts across a B-tree**, which hurts large tables.
+- It carries no time order. Store it as 16 bytes, not as text.
+
+#### Numbers to quote
+- About 2.7 × 10^18 ids are needed for a 50% chance of one collision.
+
+#### Common mistakes
+- UUIDv4 as the primary key of a very large table.
+- Storing it as a 36-character string.
+- Worrying about the collision maths while using a weak random source.
 
 #### How it works
 ```mermaid
@@ -664,8 +921,30 @@ Practically no: with 122 random bits you'd need about 2.7 quintillion ids for a 
 #### Interview angle
 > "UUIDv4 is perfect for coordination-free, unguessable ids like public tokens, but as a primary key it scatters B-tree inserts, so new tables use time-ordered UUIDv7 stored as 16 bytes."
 
+#### Sources
+- [Universally unique identifiers (RFC 9562)](https://www.rfc-editor.org/rfc/rfc9562) — IETF
+- [Universally unique identifier](https://en.wikipedia.org/wiki/Universally_unique_identifier) — Wikipedia
+
 ### UUID v7 (new standard) — 48-bit Unix timestamp ms + 74-bit random; sortable, monotone within ms
 UUIDv7 (RFC 9562, 2024) puts a **48-bit Unix millisecond timestamp first**, followed by random bits (with optional counters for monotonicity). It keeps UUID's format and coordination-free generation while being **time-ordered**, so new ids append to the end of B-tree indexes, and ids sort by creation time.
+
+#### Intuition
+A raffle ticket that starts with the date and time and ends with a random number. Tickets printed later always sort later, and two printers still never clash.
+
+#### Must know
+- A standard UUID that **starts with a 48-bit millisecond timestamp**, followed by random bits.
+- Ids **sort by creation time**.
+- New rows append at the **right edge of the B-tree**, so inserts stay fast.
+- Still generated anywhere with no coordination.
+- It **reveals the creation time**, so keep public ids random.
+
+#### Numbers to quote
+- Standardised in RFC 9562 (2024). PostgreSQL 18 has a built-in `uuidv7()`.
+
+#### Common mistakes
+- Relying on it for strict ordering across servers. Clocks differ.
+- Exposing it where creation time should stay private.
+- Storing it as text.
 
 #### How it works
 ```mermaid
@@ -711,8 +990,27 @@ No. Ordering is by each generator's wall clock, so clock skew between machines (
 #### Interview angle
 > "New tables use UUIDv7 primary keys: coordination-free, time-ordered for append-friendly B-trees, stored as native uuid. Public identifiers stay random, because v7 leaks creation time."
 
+#### Sources
+- [Universally unique identifiers (RFC 9562)](https://www.rfc-editor.org/rfc/rfc9562) — IETF
+- [UUID functions](https://www.postgresql.org/docs/current/functions-uuid.html) — PostgreSQL docs
+
 ### ULID — 48-bit timestamp + 80-bit random; lexicographically sortable; URL-safe base32 encoding
 A ULID (Universally Unique Lexicographically Sortable Identifier) is 128 bits: a **48-bit millisecond timestamp** plus **80 random bits**, encoded as a **26-character Crockford base32 string** (`01HF9ZK3W2Q6Y5T8B4N7R2M0PX`). It sorts lexicographically by time, is URL-safe and case-insensitive, and predates UUIDv7 with similar goals.
+
+#### Intuition
+The same idea as UUIDv7, written as a short tidy string. Sort the strings alphabetically and you have them in the order they were created.
+
+#### Must know
+- 128 bits: a **48-bit millisecond timestamp plus 80 random bits**.
+- Written as a **26-character base32 string** that is URL-safe.
+- The strings **sort by creation time**.
+- Handy as a string key: S3 object keys, DynamoDB sort keys, URLs.
+- It is not an official UUID version. **UUIDv7 is the standard equivalent.**
+
+#### Common mistakes
+- Mixing binary and text storage forms in one system.
+- Choosing it over UUIDv7 where a native UUID type exists.
+- Forgetting that it also reveals creation time.
 
 #### How it works
 ```mermaid
@@ -756,8 +1054,30 @@ Stores like S3, DynamoDB sort keys, Cassandra clustering keys and Bigtable order
 #### Interview angle
 > "Where ids are strings in key-value stores, like S3 keys or DynamoDB sort keys, ULIDs give chronological ordering for free. For UUID-typed columns I'd pick the standard UUIDv7."
 
+#### Sources
+- [ULID specification](https://github.com/ulid/spec) — ULID, GitHub
+- [Universally unique identifiers (RFC 9562)](https://www.rfc-editor.org/rfc/rfc9562) — IETF
+
 ### Twitter Snowflake ID — 64-bit: 1 sign bit + 41 timestamp (ms, 69yr range) + 10 machine ID + 12 sequence (4096 IDs/ms)
 Snowflake generates **64-bit, roughly time-ordered, unique ids** without coordination per id: **41 bits of milliseconds since a custom epoch** (~69 years), **10 bits of machine or worker id** (1,024 generators) and a **12-bit per-millisecond sequence** (4,096 ids per ms per worker, ~4M/s per worker). The ids fit in a `BIGINT` and sort by time.
+
+#### Intuition
+A ticket number made of three parts: the time it was printed, which machine printed it, and a counter for tickets printed in the same instant. No two machines can ever print the same number.
+
+#### Must know
+- A **64-bit id** built from **timestamp + machine id + sequence**.
+- It fits in a `BIGINT` and **sorts roughly by time**.
+- Generated locally, with no network call per id.
+- Each generator needs a **unique machine id**.
+- It depends on the clock, and it must be sent to JavaScript as a string.
+
+#### Numbers to quote
+- 41 bits of milliseconds (about 69 years), 10 bits of machine id (1,024 machines), 12 bits of sequence (4,096 ids per millisecond per machine).
+
+#### Common mistakes
+- Two instances sharing a machine id, which produces duplicates.
+- No handling of the clock moving backwards.
+- Sending the id as a JSON number, which JavaScript rounds above 2^53.
 
 #### How it works
 ```mermaid
@@ -816,8 +1136,27 @@ JavaScript numbers are IEEE-754 doubles with 53 bits of integer precision. 64-bi
 #### Interview angle
 > "For compact, time-sortable ids I'd use Snowflake: 41-bit milliseconds, 10-bit leased worker id and 12-bit sequence, generated locally, with clock-regression handling and string serialisation for JavaScript clients."
 
+#### Sources
+- [Snowflake ID](https://en.wikipedia.org/wiki/Snowflake_ID) — Wikipedia
+- [API reference: snowflakes](https://discord.com/developers/docs/reference#snowflakes) — Discord developer docs
+
 ### Snowflake clock skew problem — if system clock goes back, ID generation pauses or errors
 Snowflake ids embed wall-clock time, so if a generator's **clock moves backwards** (an NTP step correction, VM migration, manual change, leap-second handling), new ids could have **smaller timestamps than previous ones**, so ordering breaks and **duplicates** become possible (the same timestamp and sequence again). Generators must detect regressions and handle them safely.
+
+#### Intuition
+A date stamp whose dial is accidentally wound back an hour. Everything stamped next looks older than what came before, and may repeat a stamp that was already used.
+
+#### Must know
+- Snowflake ids contain wall-clock time.
+- If the **clock moves backwards**, new ids can repeat or sort before older ones.
+- The generator must **remember the last timestamp** it used and compare.
+- Small step back: **wait** until the clock catches up. Large step back: **refuse and alert**.
+- Configure time sync to slew (adjust gradually), not step.
+
+#### Common mistakes
+- No check for a backwards clock at all.
+- Restarting a generator with no memory of the last timestamp it used.
+- Letting NTP step the clock back on a production host.
 
 #### How it works
 ```mermaid
@@ -868,8 +1207,31 @@ Take a wall-clock reading at startup as an anchor and compute "current time" as 
 #### Interview angle
 > "Snowflake generators must never move backwards in time: they track the last timestamp, wait out tiny regressions, fail and alert on big ones, and run on slewed, monotonic-anchored clocks."
 
+#### Sources
+- [Snowflake ID](https://en.wikipedia.org/wiki/Snowflake_ID) — Wikipedia
+- [Frequently asked questions](https://chrony-project.org/faq.html) — chrony project
+- [Leap smear](https://developers.google.com/time/smear) — Google Public NTP
+
 ### Instagram shard ID — 41-bit epoch ms + 13-bit shard ID + 10-bit sequence; generated in PostgreSQL
 Instagram generated 64-bit ids **inside PostgreSQL** on each logical shard: **41 bits of milliseconds since a custom epoch**, **13 bits of logical shard id** (8,192 shards) and **10 bits of a per-shard sequence** (1,024 ids per ms per shard). Ids are time-sortable **and encode which shard owns the row**, so there's no separate id service.
+
+#### Intuition
+A parcel tracking number that includes the depot code. Anyone holding the number knows which depot has the parcel, with no lookup needed.
+
+#### Must know
+- A 64-bit id made of **timestamp + logical shard id + sequence**.
+- It is generated **inside PostgreSQL** by a function, so there is no separate id service.
+- **The id itself says which shard holds the row.**
+- Ids sort by creation time.
+- Thousands of **logical shards** map onto fewer physical databases, so shards can move with no id change.
+
+#### Numbers to quote
+- 41 bits of milliseconds, 13 bits of shard (8,192 logical shards), 10 bits of sequence (1,024 ids per millisecond per shard).
+
+#### Common mistakes
+- Too few shard bits for future growth.
+- Tying ids to physical servers and not to logical shards.
+- Forgetting that the database clock now matters.
 
 #### How it works
 ```mermaid
@@ -930,8 +1292,30 @@ It decouples data placement from hardware: you start with thousands of logical s
 #### Interview angle
 > "Instagram-style ids encode the logical shard: 41-bit time, 13-bit shard and 10-bit sequence, generated in Postgres. Any service can route by id, and logical shards move between servers without id changes."
 
+#### Sources
+- [Sharding and IDs at Instagram](https://medium.com/instagram-engineering/sharding-ids-at-instagram-1cf5a71e5a5c) — Instagram engineering
+- [Snowflake ID](https://en.wikipedia.org/wiki/Snowflake_ID) — Wikipedia
+
 ### NanoID — URL-safe alphabet, configurable length, cryptographically random, similar collision prob to UUID
 NanoID generates **compact, URL-safe random string ids** (default 21 characters from `A-Za-z0-9_-`, ~126 random bits, comparable to UUIDv4's 122) using a cryptographically secure random generator. The length and alphabet are configurable, which suits short public identifiers like share links, invite codes and slugs.
+
+#### Intuition
+A short random code like the one on a gift card. It is easy to put in a link, impossible to guess, and you choose how long it is depending on how many you will issue.
+
+#### Must know
+- A **short, URL-safe random string** id from a secure random source.
+- **Length and alphabet are configurable.**
+- Good for public ids: share links, invite codes, slugs.
+- It is random, so it is **not sortable** and makes a poor primary key.
+- For short codes, add a **unique constraint and retry** on collision.
+
+#### Numbers to quote
+- The default 21 characters give about 126 random bits, similar to UUIDv4.
+
+#### Common mistakes
+- Codes too short for the expected volume.
+- Using it as the clustered primary key.
+- Look-alike characters (0/O, l/1) in codes people must type.
 
 #### How it works
 ```mermaid
@@ -975,8 +1359,30 @@ They're enumerable (attackers or competitors iterate ids to scrape data or probe
 #### Interview angle
 > "Public-facing ids like share links are NanoID-style random strings sized for collision safety, with a unique constraint and retry, while internal primary keys stay time-ordered."
 
+#### Sources
+- [Nano ID](https://github.com/ai/nanoid) — Andrey Sitnik, GitHub
+- [Nano ID collision calculator](https://zelark.github.io/nano-id-cc/) — Zelark
+
 ### Ticket server (Flickr-style) — centralized DB auto-increment; simple but single point of failure
 A ticket server hands out ids from a **central database auto-increment** (Flickr's approach used MySQL `REPLACE INTO` on a single-row table to get `LAST_INSERT_ID()`). It gives compact, strictly increasing 64-bit ids with trivial logic, but it's a **central dependency**: availability and throughput are bounded by the ticket servers.
+
+#### Intuition
+A single ticket dispenser at a deli counter. Everyone gets the next number in order, which is simple, but if the dispenser jams nobody can queue. Handing each till a roll of 1,000 tickets fixes most of that.
+
+#### Must know
+- A **central database auto-increment** hands out ids.
+- Ids are compact and strictly increasing.
+- It is a **central dependency** and a possible bottleneck.
+- Fix 1: two servers issuing odd and even numbers.
+- Fix 2: **block allocation**. Each service reserves a range and hands ids out from memory.
+
+#### Numbers to quote
+- Reserving blocks of 1,000 cuts the load on the id database by about 1,000×.
+
+#### Common mistakes
+- One database round trip per id.
+- A single ticket database with no failover.
+- Exposing dense sequential numbers publicly, which reveals volume.
 
 #### How it works
 ```mermaid
@@ -1028,8 +1434,27 @@ When you need compact ids that are nearly sequential (dense, human-friendly orde
 #### Interview angle
 > "For compact, near-sequential numbers like order numbers I'd use a segment-allocated ticket table, where each instance reserves 1,000 ids per DB write. For high-scale distributed ids I'd use Snowflake."
 
+#### Sources
+- [Ticket servers: distributed unique primary keys on the cheap](https://code.flickr.net/2010/02/08/ticket-servers-distributed-unique-primary-keys-on-the-cheap/) — Flickr engineering
+- [Leaf](https://github.com/Meituan-Dianping/Leaf) — Meituan-Dianping, GitHub
+
 ### Monotonic IDs — crucial for sort order in databases and for Kafka partition ordering; avoid UUID as PK
 Monotonic (or at least time-ordered) ids **increase over time**: auto-increment, sequences, Snowflake, UUIDv7, ULID. They keep B-tree inserts at the "right edge" (good locality, few page splits), make "newest first" queries cheap, enable cursor pagination by id, and give natural ordering for events. Random ids (UUIDv4) as primary keys scatter writes across the index.
+
+#### Intuition
+Numbered pages added to the back of a notebook. You always write on the last page, which is already open. Random ids are like inserting each new page at a random place in the notebook.
+
+#### Must know
+- Monotonic or time-ordered ids **increase over time**: sequences, Snowflake, UUIDv7, ULID.
+- New rows land on the **right edge of the index**, which stays in memory.
+- "Newest first" queries and cursor pagination by id become cheap.
+- Across many generators the order is only **approximate**.
+- For strict order per entity, use a **per-entity version number**.
+
+#### Common mistakes
+- Random UUIDv4 primary keys on big tables.
+- Treating distributed time-ordered ids as a strict global order.
+- Exposing time-ordered ids publicly, which reveals creation time and volume.
 
 #### How it works
 ```mermaid
@@ -1082,3 +1507,8 @@ Give each entity a monotonically increasing version or sequence number assigned 
 
 #### Interview angle
 > "Primary keys are time-ordered (UUIDv7, Snowflake or sequences) for right-edge inserts and cheap cursor pagination, and per-entity version numbers, not global ids, enforce event ordering."
+
+#### Sources
+- [Universally unique identifiers (RFC 9562)](https://www.rfc-editor.org/rfc/rfc9562) — IETF
+- [Clustered and secondary indexes](https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html) — MySQL reference manual
+

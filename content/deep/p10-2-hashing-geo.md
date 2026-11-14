@@ -3,6 +3,24 @@
 ### Consistent hashing — arrange nodes on ring; key maps to next clockwise node; only K/N keys remap on node change
 Consistent hashing maps both keys and nodes onto a circular hash space (the ring). A key belongs to the first node clockwise from its hash. When a node joins or leaves, only the keys in its arc move (about **K/N** of K keys across N nodes), instead of almost all keys as with `hash % N`. (Phase 3 covers its use in sharding.)
 
+#### Intuition
+Seats round a circular table. Each guest walks clockwise from where they arrive and takes the first chair they reach. Remove one chair and only the guests who used it have to move.
+
+#### Must know
+- Keys and nodes are both hashed onto a **ring**.
+- A key belongs to the **first node clockwise** from its position.
+- Adding or removing a node moves only about **1/N of the keys**.
+- With `hash(key) % N`, changing N moves almost every key.
+- Lookup is a binary search over sorted node positions.
+
+#### Numbers to quote
+- Going from 20 to 22 cache nodes moves about 9% of keys. With modulo hashing it would be about 91%.
+
+#### Common mistakes
+- One ring position per node, which gives very uneven load.
+- Clients with different views of the node list, so they map keys differently.
+- Expecting it to fix a hot key. A hot key still lands on one node.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -57,8 +75,30 @@ Store node (virtual node) positions in a sorted structure (array or TreeMap), ha
 #### Interview angle
 > "Cache and storage placement uses a consistent hash ring with virtual nodes, so adding a node remaps only about 1/N of keys instead of nearly all of them."
 
+#### Sources
+- [Consistent hashing](https://en.wikipedia.org/wiki/Consistent_hashing) — Wikipedia
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al.
+
 ### Virtual nodes (vnodes) — each physical node owns N virtual positions on ring; better load balance
 With virtual nodes, each physical node is placed on the ring at **many positions** (e.g. 100–256 tokens) instead of one. Random arcs average out, so each node owns roughly equal key ranges, and when a node fails its load spreads across **many** nodes rather than its single clockwise neighbour.
+
+#### Intuition
+Each person gets many small slices of a pizza scattered around it, not one big wedge. Everyone ends up with about the same amount, and if one person leaves, their slices are shared out among all the others.
+
+#### Must know
+- Each physical node is placed on the ring at **many positions**.
+- Random arc sizes average out, so every node owns a **similar share**.
+- When a node fails, its load spreads across **many** nodes, not one neighbour.
+- A bigger machine gets more virtual nodes.
+- Too many virtual nodes in a replicated database makes repair heavier.
+
+#### Numbers to quote
+- Caches typically use 100–200 virtual nodes per node. Cassandra's default dropped from 256 to 16 in version 4.0.
+
+#### Common mistakes
+- A single token per node.
+- Equal virtual-node counts for machines of unequal size.
+- Assuming more virtual nodes is always better.
 
 #### How it works
 ```mermaid
@@ -106,8 +146,30 @@ Each vnode creates a separate token range to replicate, repair and stream. Too m
 #### Interview angle
 > "I give each node 100 to 200 virtual nodes, weighted by capacity, so load stays within a few percent of even and a failed node's keys spread across the whole cluster."
 
+#### Sources
+- [Dynamo](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) — Apache Cassandra docs
+- [Dynamo: Amazon's highly available key-value store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — DeCandia et al.
+
 ### Consistent hashing math — with V vnodes per node, variance of load = O(1/V); common: V=150
 With random placement, the load (fraction of the ring) owned by a node with **one** token varies wildly: the largest share is around **O(log N / N)** instead of the ideal 1/N. With **V virtual nodes per node**, each node's share is a sum of V random arcs, so the **relative standard deviation falls roughly as 1/√V** and the variance as O(1/V). With V ≈ 100–200, nodes typically sit within ±5–10% of the mean.
+
+#### Intuition
+One dice roll can be far from average. The average of 150 rolls is very close to it. A node's share of the ring is the sum of many random pieces, so more pieces means a steadier share.
+
+#### Must know
+- With one token per node, shares are **very uneven**.
+- With V virtual nodes, the relative spread of load falls as about **1/√V**.
+- Ring metadata is N × V entries, and lookup is O(log(N·V)).
+- **Key popularity skew usually matters more** than placement variance.
+- Jump hash and Maglev give near-perfect balance with no ring.
+
+#### Numbers to quote
+- V = 100 gives about ±10%. V = 150 gives about ±8%. V = 400 gives about ±5%.
+
+#### Common mistakes
+- Trusting the theory without simulating real keys.
+- Blaming the ring for imbalance that comes from a few hot keys.
+- Quoting variance and standard deviation as the same thing. Variance falls as 1/V, deviation as 1/√V.
 
 #### How it works
 ```mermaid
@@ -159,8 +221,27 @@ Simulate: place nodes with the chosen vnode count, hash a large sample of real (
 #### Interview angle
 > "Load deviation shrinks as one over root V, so about 150 vnodes gives roughly ±8%. I validate with real key samples, because popularity skew usually matters more than placement variance."
 
+#### Sources
+- [Consistent hashing](https://en.wikipedia.org/wiki/Consistent_hashing) — Wikipedia
+- [Maglev: a fast and reliable software network load balancer](https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/) — Google Research
+
 ### Rendezvous hashing (HRW) — score = hash(key + node), assign to highest score; O(1) per lookup
 Rendezvous (Highest Random Weight) hashing assigns each key to the node with the **highest score `hash(key, node)`**. Every client computes the same choice independently with no ring structure. Removing a node moves only the keys that chose it, and those spread evenly across the remaining nodes. Lookup cost is **O(N)** per key, computing a score for each node (it's O(1) memory per node, and fast for modest N).
+
+#### Intuition
+Every node bids for each key with a number that depends only on that key and that node. The highest bid wins. If the winner leaves, the runner-up takes over, and nobody else's keys are affected.
+
+#### Must know
+- For each key, compute `hash(key, node)` for every node and **pick the highest score**.
+- There is no ring to maintain. Every client reaches the same answer independently.
+- Removing a node moves **only that node's keys**, spread evenly over the rest.
+- The **top-k scores** give a natural replica set.
+- Each lookup is **O(N)** in the number of nodes (the "O(1)" in the title refers to memory per node).
+
+#### Common mistakes
+- Calling the lookup O(1). It scores every node.
+- Using it unchanged with thousands of nodes.
+- Clients with different node lists.
 
 #### How it works
 ```mermaid
@@ -216,8 +297,27 @@ Compute the score for every node and take the top-k highest-scoring distinct nod
 #### Interview angle
 > "For tens of cache nodes I like rendezvous hashing: each key goes to the highest hash(key, node), there's no ring to maintain, top-k gives replicas, and only a removed node's keys move."
 
+#### Sources
+- [Rendezvous hashing](https://en.wikipedia.org/wiki/Rendezvous_hashing) — Wikipedia
+- [Load balancing: supported load balancers](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers) — Envoy docs
+
 ### Jump consistent hash — O(1) space, deterministic, minimal disruption; used in Guava
 Jump consistent hash (Lamping and Veach, Google, 2014) maps a key to one of **N buckets numbered 0..N−1** with a tiny loop: O(1) memory, ~O(ln N) time, near-perfect balance, and when N grows to N+1 only ~1/(N+1) of keys move. The catch: buckets are just numbers, so you can **only add or remove at the end** (not arbitrary nodes).
+
+#### Intuition
+A short calculation that tells each key which numbered box it lives in. Add one more box at the end and only the keys that belong in the new box move. No table or ring is stored at all.
+
+#### Must know
+- It maps a key to one of **N buckets numbered 0 to N−1** with a tiny loop.
+- **No memory**, near-perfect balance, about O(ln N) time.
+- Growing from N to N+1 moves about **1/(N+1) of keys**, all to the new bucket.
+- You can only add or remove **the last bucket**.
+- It suits **numbered shards**, each backed by a replicated group.
+
+#### Common mistakes
+- Using it for arbitrary node membership, where any node can leave.
+- Expecting per-node weights.
+- Letting a failed machine remove a bucket number. Replace the machine and keep the number.
 
 #### How it works
 ```java
@@ -273,8 +373,30 @@ Buckets are identified only by their index in 0..N−1. Removing bucket 5 of 10 
 #### Interview angle
 > "For numbered logical shards backed by replicated groups, jump consistent hash gives perfect balance with zero metadata, and growing from N to N+1 shards moves only 1/(N+1) of keys."
 
+#### Sources
+- [A fast, minimal memory, consistent hash algorithm](https://arxiv.org/abs/1406.2294) — Lamping and Veach
+- [Hashing.consistentHash](https://guava.dev/releases/snapshot/api/docs/com/google/common/hash/Hashing.html) — Guava API docs
+
 ### Geohash — encode (lat, lng) to base32 string; proximity = shared prefix; grid cells of varying size
 Geohash encodes a latitude/longitude into a short **base32 string** by recursively bisecting the world and interleaving latitude and longitude bits. Each character adds precision, and **points with a shared prefix are in the same cell**, so nearby searches become **prefix lookups**, which ordinary B-tree indexes and key-value stores support.
+
+#### Intuition
+A postal code for any point on Earth. Each extra character narrows it down to a smaller box, and places whose codes start the same way are in the same box.
+
+#### Must know
+- It turns a latitude and longitude into a short **base32 string**.
+- **Longer string = smaller cell.** A shared prefix means the same cell.
+- A "nearby" search becomes a **prefix lookup**, which ordinary indexes support.
+- Always search the cell **plus its 8 neighbours**, then filter by exact distance.
+- Redis GEO commands are built on geohash.
+
+#### Numbers to quote
+- 5 characters ≈ 5 km. 6 ≈ 1 km. 7 ≈ 150 m.
+
+#### Common mistakes
+- Searching only the user's own cell and missing points just across the edge.
+- A precision that does not match the search radius.
+- Assuming a list sorted by geohash is sorted by distance.
 
 #### How it works
 ```mermaid
@@ -322,8 +444,27 @@ Keep only the latest location per driver in an in-memory geo index: Redis `GEOAD
 #### Interview angle
 > "Nearby search uses geohash or Redis GEO at a precision matched to the radius, always querying the cell plus its eight neighbours and then filtering by haversine distance. Live driver locations stay in memory, sharded by city."
 
+#### Sources
+- [Geohash](https://en.wikipedia.org/wiki/Geohash) — Wikipedia
+- [Redis geospatial](https://redis.io/docs/latest/develop/data-types/geospatial/) — Redis docs
+
 ### Geohash edge cases — cells near the poles, cells on the prime meridian; requires neighbor search
 Geohash's simplicity hides edge cases: **prefix boundaries** (points metres apart can share no prefix when they straddle the equator, prime meridian or any major cell boundary), **distortion** (cells shrink in width toward the poles, so a "cell" isn't a fixed distance), and the **antimeridian** (±180° longitude wraps). Correct systems always do neighbour expansion and exact distance filtering.
+
+#### Intuition
+Two houses on opposite sides of a district boundary. They are neighbours across the street but have completely different postal codes. Matching by code alone would say they are far apart.
+
+#### Must know
+- Two points metres apart can **share no prefix** if they straddle a cell boundary.
+- The worst cases are the equator and the prime meridian.
+- Cells get **narrower towards the poles**, so a cell is not a fixed distance.
+- Longitude wraps at ±180°.
+- The rule: **neighbour cells plus an exact distance filter, always**.
+
+#### Common mistakes
+- Matching riders and drivers by shared prefix only.
+- One fixed precision for every latitude.
+- Hand-written neighbour logic that ignores the wrap at ±180°.
 
 #### How it works
 ```mermaid
@@ -375,8 +516,27 @@ Geohash cells are rectangles whose size and shape distort with latitude and whos
 #### Interview angle
 > "Geohash has edge cases where points metres apart share no prefix across boundaries, and cells shrink toward the poles, so I always do a nine-cell neighbour search plus exact distance, and I'd prefer H3 or S2 for global systems."
 
+#### Sources
+- [Geohash: limitations when used for deciding proximity](https://en.wikipedia.org/wiki/Geohash#Limitations_when_used_for_deciding_proximity) — Wikipedia
+- [GEOSEARCH](https://redis.io/docs/latest/commands/geosearch/) — Redis command reference
+
 ### Quadtree — recursively subdivide 2D space into 4 quadrants; density-adaptive; used in Uber, Twitter
 A quadtree recursively splits a 2D region into **four quadrants** whenever a node holds too many points. Dense areas (city centres) get deep, fine-grained subdivisions and sparse areas (oceans, deserts) stay coarse. That makes it **density-adaptive** for spatial indexing, nearest-neighbour and range queries.
+
+#### Intuition
+A map you keep folding into quarters, but only where it is crowded. The city centre ends up folded into tiny squares while the desert stays one big square.
+
+#### Must know
+- A region is **split into four quadrants** whenever it holds too many points.
+- It is **density-adaptive**: fine cells in dense areas, coarse cells in sparse ones.
+- Range and nearest-neighbour queries descend only into the quadrants that matter.
+- It usually lives **in memory**, with one tree per city or region.
+- A fixed grid is either too coarse in cities or too empty in rural areas.
+
+#### Common mistakes
+- One global tree behind a single lock.
+- Re-inserting a moving object on every update, even when it stays in the same leaf.
+- Using a tree where simple cell ids (S2, H3) would be easier to shard.
 
 #### How it works
 ```mermaid
@@ -425,8 +585,27 @@ Shard by city or region (one in-memory structure per shard on dedicated servers)
 #### Interview angle
 > "For density-varying data like restaurants I'd use a quadtree that subdivides where points are dense, sharded per city in memory. For partitioning across machines I prefer cell ids from S2 or H3."
 
+#### Sources
+- [Quadtree](https://en.wikipedia.org/wiki/Quadtree) — Wikipedia
+- [Bing Maps tile system (quadkeys)](https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system) — Microsoft Learn
+
 ### R-tree — spatial index for rectangles and polygons; used in PostGIS, MySQL Spatial, SQLite R*Tree
 An R-tree indexes **spatial objects with extent** (rectangles, polygons, lines, not just points) by grouping nearby objects under **minimum bounding rectangles (MBRs)** in a balanced tree, like a B-tree for 2D. Queries such as "which polygons intersect this area?" or "which delivery zone contains this point?" descend only into nodes whose MBRs overlap the query.
+
+#### Intuition
+Boxes inside boxes. Each shape is wrapped in the smallest rectangle that fits it, nearby rectangles are grouped into bigger ones, and a search only opens the boxes that overlap the area you care about.
+
+#### Must know
+- It indexes **shapes with size**: polygons, lines and rectangles, not only points.
+- Objects are grouped under **minimum bounding rectangles** in a balanced tree.
+- A query descends only into rectangles that overlap the search area.
+- Two steps: **the bounding box filters candidates, then an exact geometry test** confirms.
+- In PostgreSQL it is the GiST index used by PostGIS.
+
+#### Common mistakes
+- No spatial index, or a query written so the index cannot be used.
+- Mixing degrees and metres in distance queries.
+- Using geohash for irregular polygons such as delivery zones.
 
 #### How it works
 ```mermaid
@@ -477,8 +656,31 @@ When indexing objects with extent (polygons, routes, regions) or needing interse
 #### Interview angle
 > "Serviceability zones are polygons, so they live in PostGIS with a GiST R-tree index. The bounding boxes prune candidates, then an exact contains test assigns each order to its dark store in about a millisecond."
 
+#### Sources
+- [R-tree](https://en.wikipedia.org/wiki/R-tree) — Wikipedia
+- [Spatial indexing](https://postgis.net/workshops/postgis-intro/indexing.html) — PostGIS workshop
+- [The SQLite R*Tree module](https://www.sqlite.org/rtree.html) — SQLite docs
+
 ### Google S2 — spherical geometry using Hilbert curve; uniform cell sizes at each level; used by Uber, Foursquare
 Google's S2 library models the Earth as a **sphere** (projected onto a cube's 6 faces), divides each face hierarchically into cells (levels 0–30), and numbers cells along a **Hilbert curve**. Every cell has a **64-bit id**. Nearby cells usually have nearby ids (better locality than geohash's Z-order), and any region can be approximated by a small set of cells (**region coverings**).
+
+#### Intuition
+Wrap the globe in a cube, cut each face into ever smaller squares, and number the squares along one continuous line that never jumps. Squares with close numbers are close on the ground.
+
+#### Must know
+- It models the Earth as a **sphere**, projected onto the six faces of a cube.
+- Each face is divided hierarchically into cells, each with a **64-bit id**.
+- Cells are numbered along a **Hilbert curve**, so nearby cells have nearby ids.
+- A **region covering** turns a circle or polygon into a few id ranges.
+- Those ranges become range scans in any sorted key-value store.
+
+#### Numbers to quote
+- 31 levels (0–30). Level 12 is a few km². Level 30 is about 1 cm².
+
+#### Common mistakes
+- Skipping the exact distance filter after the cell lookup.
+- A covering so fine that it produces hundreds of ranges.
+- Assuming cells have exactly equal areas. They vary by about 2×.
 
 #### How it works
 ```mermaid
@@ -525,8 +727,30 @@ Index each driver by the S2 cell id at a fine level (e.g. 16) as part of a sorte
 #### Interview angle
 > "S2 maps the sphere onto Hilbert-ordered 64-bit cell ids, so a radius or polygon becomes a few id-range scans in any sorted store, followed by an exact distance filter."
 
+#### Sources
+- [S2 Geometry](https://s2geometry.io/) — S2 Geometry library
+- [S2 cells](https://s2geometry.io/devguide/s2cell_hierarchy) — S2 developer guide
+
 ### Uber H3 — hexagonal hierarchical grid; constant area per cell; better for analytics than quadtree
 H3 (open-sourced by Uber) indexes the Earth into **hexagonal cells** at 16 resolutions (res 0 ≈ 4.3M km² down to res 15 ≈ 1 m²). Hexagons have **one kind of neighbour** (all 6 neighbours are equidistant from the centre), which makes **k-ring neighbourhoods**, smoothing, movement modelling and **supply and demand analytics** much cleaner than with squares or rectangles.
+
+#### Intuition
+A honeycomb laid over the map. Every cell has six neighbours, all the same distance away, so "the area around me" means the same thing in every direction.
+
+#### Must know
+- It divides the Earth into **hexagons** at 16 resolutions, each with a 64-bit id.
+- **All six neighbours are equidistant**, unlike squares, which have edge and corner neighbours.
+- That makes ring searches, smoothing and supply-demand analytics clean.
+- Cells at one resolution have similar areas.
+- Parent hexagons contain their children only **approximately**.
+
+#### Numbers to quote
+- Resolution 8 ≈ 0.74 km² (dispatch, heatmaps). Resolution 7 ≈ 5.2 km².
+
+#### Common mistakes
+- Expecting exact roll-ups from fine to coarse resolutions.
+- Choosing H3 when you need exact containment. That is S2's strength.
+- A resolution too coarse or too fine for the use case.
 
 #### How it works
 ```mermaid
@@ -577,3 +801,8 @@ H3 for analytics and operations on uniform neighbourhoods: surge, heatmaps, dema
 
 #### Interview angle
 > "For surge and demand analytics I'd tag events with H3 res-8 hexagons and smooth over k-rings, since all six neighbours are equidistant. S2 is my choice for exact containment and id-range indexing."
+
+#### Sources
+- [H3 documentation](https://h3geo.org/docs/) — H3
+- [H3: Uber's hexagonal hierarchical spatial index](https://www.uber.com/blog/h3/) — Uber engineering
+
