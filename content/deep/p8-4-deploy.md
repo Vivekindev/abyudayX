@@ -3,6 +3,21 @@
 ### Blue-green deployment — two identical environments; instant cutover by switching load balancer target
 Blue-green deployment keeps **two identical production environments**. "Blue" serves live traffic while "green" gets the new version. After testing green, you **switch traffic** at the load balancer or DNS in one step, and roll back instantly by switching back.
 
+#### Intuition
+A theatre with two identical stages. The show runs on one while the crew sets up the next show on the other. When it is ready, the spotlight swings across. If something is wrong, it swings straight back.
+
+#### Must know
+- Two identical production environments: **blue is live, green gets the new version**.
+- Test and warm green, then **switch all traffic in one step** at the load balancer.
+- **Rollback is the same switch in reverse**, and takes seconds.
+- Both versions share the database, so schema changes must work with both (expand-contract).
+- It costs double capacity during the release.
+
+#### Common mistakes
+- A destructive migration in the same release, which makes rollback impossible.
+- Switching to a cold green environment with empty caches.
+- No connection draining, so in-flight requests are dropped at the switch.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -53,8 +68,30 @@ Blue-green when you want instant, simple rollback and can afford duplicate capac
 #### Interview angle
 > "Blue-green gives instant rollback: deploy green, smoke-test it, warm it, flip the listener, and flip back on errors. Schema changes are always expand-contract so both versions work against the same database."
 
+#### Sources
+- [Blue green deployment](https://martinfowler.com/bliki/BlueGreenDeployment.html) — Martin Fowler
+- [Blue/green deployments on AWS](https://docs.aws.amazon.com/whitepapers/latest/blue-green-deployments/welcome.html) — AWS whitepaper
+
 ### Canary release — route 1–5% of traffic to new version, monitor error rate, gradually increase
 A canary release sends a **small percentage of real traffic** (1–5%) to the new version, compares its health metrics with the stable version, and **gradually increases** the share (5 → 25 → 50 → 100%) if it's healthy, or **aborts automatically** if not. Bad releases then affect only a small slice of users.
+
+#### Intuition
+Miners carried a canary underground because it reacted to bad air first. Here a small group of users gets the new version first. If they are fine, everyone follows. If not, only a few were affected.
+
+#### Must know
+- Send a **small share of real traffic** to the new version first.
+- **Compare canary against stable** on error rate, latency and business metrics such as checkout success.
+- Healthy: step up gradually. Unhealthy: **abort automatically** and route back.
+- Keep each user on one version (sticky by user id).
+- Both versions run together, so data and messages must be compatible.
+
+#### Numbers to quote
+- Typical steps: 1–5% → 25% → 50% → 100%, with 10–15 minutes of analysis at each step.
+
+#### Common mistakes
+- Judging health on infrastructure metrics only, with no business metric.
+- Too little traffic or too short a wait to detect anything.
+- Comparing against a fixed threshold and not the stable baseline.
 
 #### How it works
 ```mermaid
@@ -116,8 +153,28 @@ If each request is randomly routed, a user may bounce between versions, which ca
 #### Interview angle
 > "Releases go out as canaries: 5% sticky by user, automated analysis against the stable baseline on errors, latency and checkout success, stepping up only when healthy and aborting automatically otherwise."
 
+#### Sources
+- [Canary release](https://martinfowler.com/bliki/CanaryRelease.html) — Danilo Sato, martinfowler.com
+- [Canarying releases](https://sre.google/workbook/canarying-releases/) — Google SRE workbook
+- [Canary deployment strategy](https://argo-rollouts.readthedocs.io/en/stable/features/canary/) — Argo Rollouts docs
+
 ### Feature flags — decouple code deploy from feature release; enable per user/segment
 Feature flags (toggles) wrap new functionality in runtime conditions, so code can be **deployed dark** and **released separately**: to internal users, a percentage of customers, specific segments, or everyone, and turned off instantly without a redeploy. They enable trunk-based development, gradual rollouts, kill switches and experiments.
+
+#### Intuition
+A light switch wired in before the room is finished. The wiring ships with the building, but the light comes on only when someone flips the switch, and it can be turned off again at once.
+
+#### Must know
+- New code is wrapped in a runtime condition, so **deploying and releasing become separate steps**.
+- Release by rule: employees first, then a percentage, then everyone.
+- A **kill switch** turns a feature off in seconds with no deploy.
+- Evaluate flags **locally from cached rules**, with a safe default if the flag service is down.
+- Release flags are temporary. Give each an owner and an expiry, then delete it.
+
+#### Common mistakes
+- Never removing old flags, so dead code paths pile up.
+- A network call to the flag service on every check.
+- No safe default, so a flag service outage becomes your outage.
 
 #### How it works
 ```mermaid
@@ -165,8 +222,27 @@ Technical debt (stale flags and dead code paths), testing complexity (combinatio
 #### Interview angle
 > "New features ship dark behind flags, roll out employees then 1% then 100% with metrics, keep kill switches for risky dependencies, and every release flag has an owner and an expiry so it gets deleted."
 
+#### Sources
+- [Feature toggles (aka feature flags)](https://martinfowler.com/articles/feature-toggles.html) — Pete Hodgson, martinfowler.com
+- [Introduction to OpenFeature](https://openfeature.dev/docs/reference/intro) — OpenFeature docs
+
 ### A/B testing — route users to variants statistically, measure conversion/engagement
 A/B testing randomly assigns users to **variants** (A = control, B = treatment), keeps assignment **stable per user**, and measures a predefined **success metric** (conversion, engagement, revenue) to decide statistically whether B is better. It's how product changes are validated with real behaviour rather than opinions.
+
+#### Intuition
+A shop tries two window displays on alternate customers and counts who walks in. The numbers decide which display stays, not the manager's opinion.
+
+#### Must know
+- Users are **randomly assigned** to control (A) or treatment (B), and stay in the same group.
+- Assignment is deterministic: `hash(userId + experimentId) mod 100`.
+- Decide the **primary metric, guardrail metrics and sample size before starting**.
+- **Do not stop early** because the result looks good. Run full weekly cycles.
+- Check for **sample ratio mismatch**: a split that differs from the plan means a bug.
+
+#### Common mistakes
+- Peeking at results and stopping at the first significant reading.
+- Assignment that is not sticky, so users see both variants.
+- Calling a gradual rollout an experiment when there is no random control group.
 
 #### How it works
 ```mermaid
@@ -214,8 +290,28 @@ When the observed split of users between variants differs significantly from the
 #### Interview angle
 > "Experiments use deterministic hash assignment, a primary metric plus guardrails defined up front, pre-computed sample sizes and SRM checks. No peeking: we ship only on significant results over full weekly cycles."
 
+#### Sources
+- [A/B testing](https://en.wikipedia.org/wiki/A/B_testing) — Wikipedia
+- [Diagnosing sample ratio mismatch in A/B testing](https://www.microsoft.com/en-us/research/group/experimentation-platform-exp/articles/diagnosing-sample-ratio-mismatch-in-a-b-testing/) — Microsoft Research
+- [Trustworthy online controlled experiments](https://experimentguide.com/) — Kohavi, Tang and Xu
+
 ### Rolling deployment — incrementally replace pods/instances with new version (Kubernetes default)
 A rolling deployment replaces instances of the old version with the new one **a few at a time**, keeping the service available throughout. It's the default strategy for Kubernetes Deployments and most autoscaling groups: no extra environment is needed, but old and new versions run side by side during the rollout. (Phase 5 covers Kubernetes specifics.)
+
+#### Intuition
+Changing the tyres on a moving lorry convoy one vehicle at a time. The convoy never stops, but for a while some lorries have old tyres and some have new ones.
+
+#### Must know
+- Old instances are replaced by new ones **a few at a time**, so the service stays up.
+- It is the **Kubernetes default** and needs no second environment.
+- `maxSurge` and `maxUnavailable` set the pace. **Readiness probes** gate each step.
+- **Old and new versions run side by side**, so changes must be backward compatible.
+- Rollback is another rolling update, which is slower than a blue-green switch.
+
+#### Common mistakes
+- A weak readiness probe that lets a broken version roll out fully.
+- No graceful shutdown, so requests are dropped as pods terminate.
+- `maxUnavailable` above zero at peak traffic, which cuts capacity.
 
 #### How it works
 ```mermaid
@@ -264,8 +360,27 @@ Accurate readiness probes (traffic only when truly ready), `maxUnavailable: 0` w
 #### Interview angle
 > "Day-to-day deploys are rolling updates with maxUnavailable 0, real readiness probes and graceful shutdown. Risky changes use Argo Rollouts canaries on top for metric-gated promotion."
 
+#### Sources
+- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) — Kubernetes docs
+- [Performing a rolling update](https://kubernetes.io/docs/tutorials/kubernetes-basics/update/update-intro/) — Kubernetes docs
+
 ### Immutable infrastructure — never patch running instances; replace with new image from scratch
 Immutable infrastructure means servers and containers are **never modified after deployment**: no SSH patching, no in-place config edits. To change anything (code, OS patches, config), you **build a new image** and **replace** the running instances. Every instance is a known, reproducible artifact.
+
+#### Intuition
+Disposable coffee cups against one mug you keep patching with glue. You never repair a cup. You take a fresh identical one, so every cup is known to be the same.
+
+#### Must know
+- Running servers and containers are **never modified**. No SSH patching, no in-place config edits.
+- Any change means **build a new image and replace the instances**.
+- It removes configuration drift: every instance is identical and reproducible.
+- **Rollback is redeploying the previous image.**
+- State must live outside the instance, in a database or object storage.
+
+#### Common mistakes
+- A "quick fix" over SSH that the next deploy silently removes.
+- Data kept on the instance's own disk.
+- A slow build pipeline, which makes urgent patches slow.
 
 #### How it works
 ```mermaid
@@ -312,8 +427,27 @@ Servers modified by hand diverge from each other and from what's in code, so beh
 #### Interview angle
 > "Everything is immutable: CI builds a versioned, scanned, signed image per commit, and changes or patches go out as replacements. Rollback means redeploying the previous image, and nobody SSHes in to fix things."
 
+#### Sources
+- [Immutable server](https://martinfowler.com/bliki/ImmutableServer.html) — Kief Morris, martinfowler.com
+- [Phoenix server](https://martinfowler.com/bliki/PhoenixServer.html) — Martin Fowler
+
 ### GitOps — Git as source of truth for desired state; ArgoCD/Flux reconciles cluster to match
 GitOps makes a **Git repository the single source of truth** for the desired state of infrastructure and applications (Kubernetes manifests, Helm values). An in-cluster agent (**Argo CD**, **Flux**) continuously **pulls** that state and **reconciles** the cluster to match it, so every change is a reviewed commit and drift is corrected automatically.
+
+#### Intuition
+A thermostat. You write the temperature you want, and it keeps checking the room and correcting it. Open a window and it brings the room back. Git holds the wanted setting, and an agent keeps the cluster matching it.
+
+#### Must know
+- A **Git repository is the single source of truth** for what should be running.
+- An agent in the cluster (Argo CD, Flux) **pulls** that state and **reconciles continuously**.
+- Deploy = merge a pull request. Rollback = `git revert`. Audit trail = Git history.
+- Manual changes to the cluster are detected as drift and reverted.
+- CI never holds cluster credentials. Secrets need separate handling.
+
+#### Common mistakes
+- Plain-text secrets committed to the repository.
+- An emergency `kubectl` change that the agent quietly reverts.
+- Sync with no drift alerts, so nobody notices a failing reconcile.
 
 #### How it works
 ```mermaid
@@ -360,8 +494,31 @@ Revert the commit that changed the desired state (e.g. the image tag bump) in Gi
 #### Interview angle
 > "Clusters are reconciled by Argo CD from Git: a deploy is a reviewed PR, rollback is git revert, self-heal removes drift, and secrets come from External Secrets instead of being committed."
 
+#### Sources
+- [OpenGitOps principles](https://opengitops.dev/) — OpenGitOps (CNCF)
+- [Argo CD: overview](https://argo-cd.readthedocs.io/en/stable/) — Argo CD docs
+- [Flux core concepts](https://fluxcd.io/flux/concepts/) — Flux docs
+
 ### CI/CD pipeline — source → build → unit test → integration test → security scan → artifact → staging → production
 A CI/CD pipeline automates the path from commit to production: **continuous integration** (build, test and scan every change) and **continuous delivery/deployment** (promote the same artifact through environments with automated checks, gates and progressive rollout). Fast, reliable pipelines are what make frequent, safe releases possible.
+
+#### Intuition
+A car assembly line with inspection stations. Every car passes the same checks in the same order, a fault stops it at that station, and the car that passed inspection is the exact car that is delivered.
+
+#### Must know
+- **CI**: every change is built, tested and scanned automatically.
+- **CD**: the resulting artifact is promoted through environments with automated checks.
+- **Build once, promote the same artifact** (same image digest) everywhere.
+- Keep pull-request feedback fast, and work on trunk with short-lived branches.
+- Measure with the **DORA metrics**: deploy frequency, lead time, change failure rate, time to restore.
+
+#### Numbers to quote
+- Aim for pull-request checks under about 10 minutes.
+
+#### Common mistakes
+- Rebuilding the artifact for each environment, so production runs something untested.
+- Flaky tests that everyone learns to rerun and ignore.
+- So many manual gates that the pipeline is slower than the old process.
 
 #### How it works
 ```mermaid
@@ -416,8 +573,28 @@ Run fast checks on every PR (secrets scanning, dependency or SCA scanning with s
 #### Interview angle
 > "Pipelines build once per commit, run tests, contracts and security scans in under ten minutes, produce a signed image with an SBOM, and promote that same digest through staging into a canaried production deploy. We track DORA metrics."
 
+#### Sources
+- [Continuous integration](https://martinfowler.com/articles/continuousIntegration.html) — Martin Fowler
+- [Deployment pipeline](https://martinfowler.com/bliki/DeploymentPipeline.html) — Martin Fowler
+- [DORA's software delivery metrics: the four keys](https://dora.dev/guides/dora-metrics/) — DORA
+
 ### Expand-contract (parallel change) — add new field, backfill, then remove old field across two deploys
 Expand-contract (parallel change) makes **breaking changes in non-breaking steps**: first **expand** (add the new thing alongside the old), then **migrate** (move readers and writers over, backfill data), then **contract** (remove the old thing). It applies to database schemas, APIs, events and configs, so each deploy stays compatible with the version running next to it. (Phase 2 covers the database details.)
+
+#### Intuition
+Building a new bridge beside the old one. Traffic keeps using the old bridge until the new one is open and everyone has moved over. Only then is the old bridge taken down.
+
+#### Must know
+- A breaking change done as **three non-breaking steps**.
+- **Expand**: add the new column, field or endpoint beside the old one.
+- **Migrate**: write to both, backfill old data, then switch readers.
+- **Contract**: remove the old one once nothing uses it.
+- **Start dual-writing before the backfill**, or rows changed in between are missed.
+
+#### Common mistakes
+- Renaming or dropping a column in a single release.
+- Never doing the contract step, so the old field stays forever.
+- Backfilling first and dual-writing second.
 
 #### How it works
 ```mermaid
@@ -468,8 +645,30 @@ If you backfill first, rows modified between the backfill and the start of dual-
 #### Interview angle
 > "Any breaking change ships as expand, migrate, contract: additive first, dual-write and backfill, switch reads behind a flag, then remove the old shape only once consumers have moved."
 
+#### Sources
+- [Parallel change](https://martinfowler.com/bliki/ParallelChange.html) — Danilo Sato, martinfowler.com
+- [Evolutionary database design](https://martinfowler.com/articles/evodb.html) — Pramod Sadalage and Martin Fowler
+
 ### Database migration strategy in zero-downtime deploy — never use ALTER that locks table on production
 Zero-downtime deploys require database migrations that **never block traffic** and stay **compatible with both the old and new application versions**. That means: avoid long table locks, run migrations **separately from (and before) code that depends on them**, apply expand-contract, and use online tools for heavy changes.
+
+#### Intuition
+Roadworks on a busy road done one lane at a time, at night, with a time limit. The road never closes, and if the work overruns, the crew packs up and tries again.
+
+#### Must know
+- A migration must **never hold a long lock** on a busy table.
+- Every schema state must work with **both the old and the new application version**.
+- Run migrations as a **separate step before the deploy**, not on application startup.
+- Use online-safe DDL: `CREATE INDEX CONCURRENTLY`, `NOT VALID` then `VALIDATE CONSTRAINT`, batched backfills.
+- Set a **`lock_timeout`** so a blocked migration fails fast and does not queue traffic behind it.
+
+#### Numbers to quote
+- PostgreSQL 11+: adding a column with a constant default is instant. A type change usually rewrites the whole table.
+
+#### Common mistakes
+- A plain `CREATE INDEX` or a column type change on a large production table.
+- Every pod running migrations at startup and racing each other.
+- One huge backfill `UPDATE`, which causes long locks and replica lag.
 
 #### How it works
 ```mermaid
@@ -525,3 +724,9 @@ Many pods starting simultaneously race to migrate (needing locks, risking partia
 
 #### Interview angle
 > "Migrations are linted in CI and run as a pre-deploy job with lock_timeout, using only online-safe DDL (concurrent indexes, NOT VALID then VALIDATE, batched backfills), so every schema state works with the old and new app version."
+
+#### Sources
+- [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html) — PostgreSQL docs
+- [CREATE INDEX: building indexes concurrently](https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY) — PostgreSQL docs
+- [gh-ost: GitHub's online schema migration for MySQL](https://github.com/github/gh-ost) — GitHub
+

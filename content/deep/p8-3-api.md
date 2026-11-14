@@ -3,6 +3,21 @@
 ### API gateway — single entry point: routing, auth enforcement, rate limiting, SSL termination, request aggregation
 An API gateway is the **single front door** for external clients: it terminates TLS, authenticates requests, applies rate limits and quotas, routes to the right microservice, and optionally transforms or aggregates responses. It keeps clients simple and centralises cross-cutting edge concerns. (Phase 1 covers gateway mechanics in depth.)
 
+#### Intuition
+The reception desk of an office building. Every visitor comes through it. It checks identity, turns away anyone who visits too often, and directs each person to the right department. It does not do the departments' work.
+
+#### Must know
+- The **single entry point** for external clients.
+- It handles cross-cutting edge concerns: TLS termination, token validation, rate limiting, routing, logging.
+- Keep it **thin**. No business logic.
+- It is on every request path, so it must be highly available.
+- Services must not be reachable around it.
+
+#### Common mistakes
+- Business logic or client-specific data shaping in the gateway. That belongs in services or a BFF.
+- One gateway instance as a single point of failure.
+- Fine-grained authorisation at the gateway, which needs domain data it does not have.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -51,8 +66,27 @@ Run multiple stateless instances across AZs behind a load balancer (or use a man
 #### Interview angle
 > "One thin, highly available gateway handles TLS, JWT validation, per-client rate limits and routing, with no business logic. Each team owns its routes declaratively."
 
+#### Sources
+- [API gateway pattern](https://microservices.io/patterns/apigateway.html) — microservices.io
+- [Using API gateways in microservices](https://learn.microsoft.com/en-us/azure/architecture/microservices/design/gateway) — Azure Architecture Center
+
 ### Backend for Frontend (BFF) — separate API layer per client type (iOS, Android, web, third-party)
 A Backend for Frontend is an API layer **dedicated to one type of client** (mobile app, web app, partner API), owned by the team building that client. It aggregates and shapes data from many microservices into exactly what that client's screens need, without bloating a single general-purpose API.
+
+#### Intuition
+A personal shopper for each kind of customer. The mobile shopper brings back a small bag with exactly what the phone screen needs. The web shopper brings a larger bag. Neither customer walks round seven shops themselves.
+
+#### Must know
+- An API layer **dedicated to one type of client**, owned by that client's team.
+- It **aggregates** several services and **shapes** the response for that client's screens.
+- Mobile gets compact payloads, web gets what it needs, and the two no longer block each other.
+- It calls downstream services in parallel, with timeouts and fallbacks.
+- No domain logic. It composes and shapes only.
+
+#### Common mistakes
+- One BFF for every tiny client variation.
+- Business rules duplicated across BFFs.
+- Sequential downstream calls that add up to a slow screen.
 
 #### How it works
 ```mermaid
@@ -103,8 +137,27 @@ Both solve client-specific data needs. GraphQL gives clients a flexible query la
 #### Interview angle
 > "Each client type gets a BFF owned by its team, which aggregates services in parallel into screen-shaped responses with fallbacks, while domain logic stays in the services."
 
+#### Sources
+- [Backends for frontends pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/backends-for-frontends) — Azure Architecture Center
+- [Backends for frontends](https://samnewman.io/patterns/architectural/bff/) — Sam Newman
+
 ### API composition — gateway aggregates multiple downstream service calls into one response
 API composition implements queries that need data from several services by having a **composer** (an API gateway, BFF or dedicated service) **call each service and merge the results** into one response. It's the simplest way to query across microservices without sharing databases.
+
+#### Intuition
+A waiter who collects your starter from one kitchen, your main from another and your drink from the bar, and brings it all on one tray. You place a single order.
+
+#### Must know
+- A **composer** (a BFF or gateway) calls several services and **merges the results** into one response.
+- It is the simplest way to query across services without sharing a database.
+- Call independent services **in parallel**, each with a timeout and a fallback.
+- Allow **partial responses** when a non-critical part fails.
+- For filtering, sorting or joining across services, use an event-fed read model.
+
+#### Common mistakes
+- Sequential calls, so latency is the sum and not the slowest.
+- One call per list item (N+1 between services) when a batch endpoint would do.
+- Failing the whole response because an optional part timed out.
 
 #### How it works
 ```mermaid
@@ -160,8 +213,27 @@ Call dependencies in parallel with strict timeouts and circuit breakers. Return 
 #### Interview angle
 > "For detail pages the BFF composes services in parallel with timeouts and partial fallbacks. Cross-service filtering or sorting goes to an event-fed read model instead."
 
+#### Sources
+- [API composition](https://microservices.io/patterns/data/api-composition.html) — microservices.io
+- [Gateway aggregation pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/gateway-aggregation) — Azure Architecture Center
+
 ### Pagination — offset-based (simple, inconsistent with concurrent mutations) vs cursor-based (consistent, scales)
 Pagination splits large result sets into pages. **Offset pagination** (`?page=50&size=20` → `OFFSET 980 LIMIT 20`) is simple but gets slower with depth and skips or duplicates items when data changes. **Cursor (keyset) pagination** (`?after=<cursor>&limit=20` → `WHERE (created_at, id) < (…) LIMIT 20`) stays fast at any depth and is stable under inserts.
+
+#### Intuition
+Offset is "turn to page 500": you still have to flip through 499 pages to get there, and if someone inserts a page while you read, you see a repeat. A cursor is a bookmark: you continue from exactly where you stopped.
+
+#### Must know
+- **Offset** (`OFFSET 10000 LIMIT 20`): simple, but slow on deep pages and unstable when rows are added.
+- **Cursor / keyset** (`WHERE (created_at, id) < (…) LIMIT 20`): the same speed at any depth, and stable.
+- The cursor needs a **unique, sortable key** and a matching index. Add the id as a tie-breaker.
+- Return an **opaque** cursor token, not raw column values.
+- Fetch limit + 1 to know whether there is a next page.
+
+#### Common mistakes
+- Offset pagination on a large, frequently changing table.
+- A cursor on a non-unique column, which skips rows with equal values.
+- Running `COUNT(*)` on a huge table to show the total number of pages.
 
 #### How it works
 ```mermaid
@@ -220,8 +292,27 @@ Sort by `(score DESC, id DESC)` with a composite index, and encode both the last
 #### Interview angle
 > "List APIs use opaque keyset cursors on (sort key, id) with a matching index: constant-time pages that stay stable while new rows arrive. Offsets are only for small admin tables."
 
+#### Sources
+- [Paging through results](https://use-the-index-luke.com/sql/partial-results/fetch-next-page) — Use The Index, Luke
+- [Pagination](https://docs.stripe.com/api/pagination) — Stripe API docs
+
 ### Filtering, sorting, field selection (sparse fieldsets) in REST API design
 Good list APIs let clients **narrow results (filter)**, **order them (sort)** and **choose which fields to receive (sparse fieldsets)** through consistent query parameters, while the server keeps queries safe and efficient (allow-listed fields, indexed combinations, limits).
+
+#### Intuition
+Ordering in a restaurant: "only vegetarian dishes, cheapest first, and just the name and price please". The menu has rules about what you may ask for, and the kitchen does not cook things that are not on it.
+
+#### Must know
+- **Filter** with query parameters: `?status=SHIPPED&createdAfter=…`.
+- **Sort** with `?sort=-createdAt` (a minus sign for descending).
+- **Sparse fieldsets**: `?fields=id,total,status` returns only those fields.
+- **Allow-list** the filterable and sortable fields, and map them to columns. Never build SQL from raw parameters.
+- Cap the page size, and send free-text search to a search engine.
+
+#### Common mistakes
+- Passing a sort or filter parameter straight into SQL.
+- Allowing filters on columns with no index.
+- Each service inventing its own parameter conventions.
 
 #### How it works
 ```mermaid
@@ -275,8 +366,27 @@ Smaller payloads (less bandwidth, faster parsing, lower battery use), less serve
 #### Interview angle
 > "List endpoints support allow-listed filters, sort=-createdAt style ordering and sparse fieldsets, mapped to parameterised queries on indexed combinations, while free-form search goes to Elasticsearch."
 
+#### Sources
+- [RESTful web API design](https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design) — Azure Architecture Center
+- [JSON:API: fetching data](https://jsonapi.org/format/#fetching) — JSON:API specification
+
 ### GraphQL federation — compose multiple subgraph schemas into unified API (Apollo Federation)
 GraphQL federation lets **each team own a subgraph** (its part of the schema, served by its own service) while clients see **one unified supergraph** through a **router/gateway** that plans queries across subgraphs. Entities can be extended across subgraphs via keys, e.g. the reviews subgraph adds `Product.reviews`.
+
+#### Intuition
+A shopping mall directory. Each shop keeps its own stock list, but shoppers see one combined directory. A concierge works out which shops to visit for your list and brings everything back together.
+
+#### Must know
+- Each team owns a **subgraph**: its part of the schema, served by its own service.
+- A **router** composes them into one **supergraph** and plans each query across subgraphs.
+- One subgraph can add fields to a type owned by another, linked by a key.
+- **Composition checks in CI** catch a breaking schema change before deploy.
+- It solves the bottleneck of one team owning a single GraphQL server.
+
+#### Common mistakes
+- Deploying a subgraph change with no composition check.
+- Queries that hop across many subgraphs, producing N+1 fetches.
+- No limit on query cost or depth.
 
 #### How it works
 ```mermaid
@@ -328,8 +438,27 @@ It builds a query plan: it fetches the base entity (e.g. Product id and name) fr
 #### Interview angle
 > "With many domain teams I'd federate GraphQL: each team owns a subgraph, a router plans queries across them, and registry composition checks in CI stop breaking changes."
 
+#### Sources
+- [Introduction to Apollo Federation](https://www.apollographql.com/docs/graphos/schema-design/federated-schemas/federation) — Apollo docs
+- [GraphQL federation](https://graphql.org/learn/federation/) — graphql.org
+
 ### Rate limiting at gateway — token bucket per API key/user, per endpoint; return 429 with Retry-After header
 Rate limiting at the gateway protects services from overload and abuse, and enforces fair use and commercial quotas. Each client (API key, user, IP) gets a budget per time window, usually implemented as a **token bucket** in a shared store. Excess requests get **429 Too Many Requests** with `Retry-After` and rate-limit headers.
+
+#### Intuition
+A turnstile that hands out a fixed number of entry tokens per minute. A short rush is fine while tokens last. After that you wait for the next refill, and a sign tells you how long.
+
+#### Must know
+- Each client gets a request budget per time window, enforced at the gateway.
+- **Token bucket**: tokens refill at a steady rate up to a burst size. Each request spends one.
+- Counters live in a shared store such as Redis and are updated atomically.
+- Over the limit: **429 Too Many Requests** with a `Retry-After` header.
+- Layer the limits: per IP, per API key, per endpoint and globally.
+
+#### Common mistakes
+- Limiting per IP only, which many clients behind one NAT will share.
+- No `Retry-After`, so clients retry at once.
+- No decision on what happens when the limiter's store is down.
 
 #### How it works
 ```mermaid
@@ -388,8 +517,28 @@ It depends on the endpoint. For general APIs, fail open (allow traffic, maybe wi
 #### Interview angle
 > "The gateway enforces Redis token buckets per API key and endpoint, returns 429 with Retry-After, has tighter limits on expensive routes like OTP, and falls back to local limits if Redis is unavailable."
 
+#### Sources
+- [Rate limiting pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/rate-limiting-pattern) — Azure Architecture Center
+- [Scaling your API with rate limiters](https://stripe.com/blog/rate-limiters) — Stripe engineering
+- [429 Too Many Requests](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429) — MDN
+
 ### OAuth 2.0 authorization code + PKCE — for SPA and mobile (prevents authorization code interception)
 The **authorization code flow with PKCE** is the standard way for apps acting on behalf of a user (SPAs, mobile, server web apps) to get tokens: the user logs in at the authorization server, the app receives a short-lived **code**, and exchanges it for tokens. **PKCE** (Proof Key for Code Exchange) binds the code to the app instance with a one-time secret, so an intercepted code is useless.
+
+#### Intuition
+A cloakroom ticket torn in half. You keep one half and hand over the other. Later, the coat is released only to whoever shows the matching half. Someone who steals the ticket number alone gets nothing.
+
+#### Must know
+- The standard flow for an app acting **on behalf of a user**: web, single-page and mobile apps.
+- The user logs in at the authorisation server. The app receives a short-lived **code** and exchanges it for tokens.
+- **PKCE**: the app sends a hash of a random secret first, then proves it holds the secret when exchanging the code.
+- An intercepted code is useless without that secret.
+- Use short-lived access tokens with rotating refresh tokens. For a single-page app, keep tokens server-side in a BFF.
+
+#### Common mistakes
+- The implicit flow, which is obsolete.
+- Tokens stored in the browser's localStorage.
+- Loose redirect URI matching, or an embedded WebView on mobile.
 
 #### How it works
 ```mermaid
@@ -443,8 +592,28 @@ Preferably with a backend-for-frontend: the BFF performs the authorization code 
 #### Interview angle
 > "User-facing apps use authorization code with PKCE via the system browser, short access tokens and rotating refresh tokens. For SPAs I keep tokens in a BFF behind an HttpOnly cookie."
 
+#### Sources
+- [Proof Key for Code Exchange by OAuth public clients (RFC 7636)](https://www.rfc-editor.org/rfc/rfc7636) — IETF
+- [Authorization code flow with PKCE](https://auth0.com/docs/get-started/authentication-and-authorization-flow/authorization-code-flow-with-pkce) — Auth0 docs
+- [OAuth 2.0 security best current practice (RFC 9700)](https://www.rfc-editor.org/rfc/rfc9700) — IETF
+
 ### OAuth 2.0 client credentials — for server-to-server, no user involved
 The **client credentials grant** is for **machine-to-machine** access: a service authenticates as itself (client id + secret, private key JWT, or mTLS) to the authorization server and gets an access token with **scopes** for the APIs it may call. No user is involved.
+
+#### Intuition
+A delivery company's van with its own gate pass. No person is being identified. The company itself is recognised and allowed into certain bays only.
+
+#### Must know
+- For **machine-to-machine** access. **No user is involved.**
+- The service authenticates as itself and receives an access token with **scopes**.
+- **Cache the token** until it is close to expiry. Do not request one per call.
+- Prefer a signed key assertion or mTLS over a shared client secret.
+- Give each client the narrowest scopes and a specific audience.
+
+#### Common mistakes
+- Using it where a user's identity and consent are required.
+- A client secret committed to a repository.
+- Requesting a new token on every API call.
 
 #### How it works
 ```mermaid
@@ -495,8 +664,27 @@ Short lifetimes, narrow scopes and a specific audience, and sender-constrained t
 #### Interview angle
 > "Partner backends use client credentials with private_key_jwt or mTLS-bound tokens, narrow scopes and short cached tokens. Internal service-to-service calls rely on mesh mTLS identities."
 
+#### Sources
+- [The OAuth 2.0 authorization framework: client credentials grant (RFC 6749)](https://www.rfc-editor.org/rfc/rfc6749#section-4.4) — IETF
+- [Client credentials flow](https://auth0.com/docs/get-started/authentication-and-authorization-flow/client-credentials-flow) — Auth0 docs
+
 ### OpenID Connect (OIDC) — authentication layer on top of OAuth 2.0: ID token (JWT) carries user identity
 OAuth 2.0 is about **authorization** (granting access to APIs). **OpenID Connect** adds **authentication** on top: alongside access tokens, the authorization server (the OpenID Provider) issues an **ID token**, a signed JWT stating **who the user is** and how they authenticated, plus a standard `/userinfo` endpoint and discovery metadata.
+
+#### Intuition
+OAuth is a valet key: it lets someone drive your car, but says nothing about who they are. OIDC adds an ID card to the handover, so the app also learns who the user is.
+
+#### Must know
+- OAuth 2.0 is about **authorisation**. OIDC adds **authentication** on top.
+- It issues an **ID token**: a signed JWT saying who the user is and how they logged in.
+- The **ID token is for the client app. The access token is for APIs.** Never send an ID token to an API.
+- Validate signature, issuer, audience, expiry and nonce.
+- Identify a user by **(issuer, subject)**, not by email.
+
+#### Common mistakes
+- An API that accepts ID tokens.
+- Linking accounts by an unverified email address.
+- Caching signing keys forever, so logins break when the provider rotates them.
 
 #### How it works
 ```mermaid
@@ -547,8 +735,27 @@ By the pair (issuer `iss`, subject `sub`): `sub` is stable and unique only withi
 #### Interview angle
 > "Login uses OIDC: the app validates the ID token (signature, iss, aud, nonce), keys users by (iss, sub) and creates its own session, while APIs accept only access tokens with the right audience."
 
+#### Sources
+- [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html) — OpenID Foundation
+- [How OpenID Connect works](https://openid.net/developers/how-connect-works/) — OpenID Foundation
+
 ### JWT structure — header (alg, typ) + payload (sub, iss, aud, exp, iat) + signature (HMAC-SHA256 or RS256)
 A JSON Web Token has three base64url-encoded parts separated by dots: a **header** (algorithm, type, key id), a **payload** (claims) and a **signature** over the first two. The signature proves integrity and origin. The payload is **readable by anyone**: JWTs are signed, not encrypted (unless you use JWE). (Phase 5 covers stateless auth usage.)
+
+#### Intuition
+A postcard with a wax seal. Anyone handling it can read the message. The seal only proves who sent it and that nobody has altered it.
+
+#### Must know
+- Three base64url parts separated by dots: **header.payload.signature**.
+- Header: algorithm and key id. Payload: the claims. Signature: covers both.
+- It is **signed, not encrypted**. Anyone can read the payload, so keep secrets and personal data out.
+- Standard claims: `iss` issuer, `sub` subject, `aud` audience, `exp` expiry, `iat` issued at, `jti` id.
+- Prefer asymmetric signing (RS256 / ES256). With HS256, anyone who can verify can also forge.
+
+#### Common mistakes
+- Putting personal or sensitive data in the payload.
+- Trusting the token's own `alg` header, or accepting `alg: none`.
+- Calling base64 "encryption".
 
 #### How it works
 ```mermaid
@@ -612,8 +819,30 @@ If a server trusts the token's `alg` header, an attacker can switch an RS256 tok
 #### Interview angle
 > "JWTs are signed but readable, so claims stay minimal (iss, sub, aud, exp, scope, jti) with no PII, signed with ES256 or RS256, published via JWKS with a kid, and the algorithm pinned on the server."
 
+#### Sources
+- [JSON Web Token (RFC 7519)](https://www.rfc-editor.org/rfc/rfc7519) — IETF
+- [Introduction to JSON Web Tokens](https://www.jwt.io/introduction) — jwt.io
+
 ### JWT validation — verify signature, check exp, iss, aud claims; short expiry + refresh token rotation
 Validating a JWT correctly is security-critical: **verify the signature** with the right key and algorithm, then check **expiry and time claims**, **issuer**, **audience** and required **scopes**. Pair short-lived access tokens with **rotating refresh tokens** (and reuse detection) so stolen tokens have limited value.
+
+#### Intuition
+Checking a concert ticket properly: is the hologram real, is it for tonight, is it for this venue, and does it cover this section? Skipping any one of those lets the wrong person in.
+
+#### Must know
+- Verify the **signature** with the issuer's key and a pinned algorithm.
+- Check **`exp`** (with a small clock leeway), **`iss`** and **`aud`**.
+- Then check the **scope or role** the endpoint requires.
+- Fetch keys from the issuer's JWKS by key id, and refresh when an unknown id appears.
+- Keep access tokens short-lived. **Rotate refresh tokens** and treat reuse of an old one as theft.
+
+#### Numbers to quote
+- Access token lifetime 5–15 minutes. Clock leeway 30–60 seconds.
+
+#### Common mistakes
+- Skipping the audience check, so a token for another API is accepted.
+- No clock leeway, so small skew causes random 401s.
+- A long-lived refresh token that never rotates.
 
 #### How it works
 ```mermaid
@@ -671,8 +900,28 @@ With rotation, every refresh returns a new refresh token and invalidates the pre
 #### Interview angle
 > "APIs validate JWTs fully: pinned algorithm via JWKS, exp with leeway, issuer, audience and scopes. Access tokens live 10 minutes, and refresh tokens rotate with reuse detection."
 
+#### Sources
+- [JSON Web Token best current practices (RFC 8725)](https://www.rfc-editor.org/rfc/rfc8725) — IETF
+- [OAuth 2.0 resource server JWT](https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/jwt.html) — Spring Security docs
+- [Refresh token rotation](https://auth0.com/docs/secure/tokens/refresh-tokens/refresh-token-rotation) — Auth0 docs
+
 ### API contract testing — Pact (consumer-driven contracts): consumer defines expectations, provider verifies
 Contract testing checks that a provider's API (or message format) still satisfies what its consumers actually use, **without full end-to-end environments**. In **consumer-driven contract testing** (Pact), each consumer records its expectations as a contract, and the provider's CI **verifies** it against those contracts before deploying.
+
+#### Intuition
+A tenant writes down exactly which fittings they rely on: the kitchen tap and the bedroom socket. Before any renovation, the landlord checks that list. Everything not on it can change freely.
+
+#### Must know
+- It checks that a provider's API **still satisfies what its consumers actually use**.
+- No full end-to-end environment is needed.
+- **Consumer-driven**: each consumer records its expectations as a contract, and the provider verifies against them in CI.
+- A contract lists only the fields the consumer uses, so the provider may change the rest.
+- A deploy gate (`can-i-deploy`) blocks a release that would break a consumer in production.
+
+#### Common mistakes
+- Contracts that assert exact values instead of types and shapes.
+- Relying on a slow, flaky end-to-end suite to catch interface breaks.
+- Treating contract tests as business-flow tests. They cover the interface only.
 
 #### How it works
 ```mermaid
@@ -725,8 +974,27 @@ Use contract tests for every service interface (fast, deterministic, run on ever
 #### Interview angle
 > "Interfaces between services are protected by Pact consumer-driven contracts with a can-i-deploy gate, so providers know before deploying exactly which consumer fields they'd break. End-to-end tests are just a thin smoke layer."
 
+#### Sources
+- [Pact documentation: introduction](https://docs.pact.io/) — Pact docs
+- [Consumer-driven contracts: a service evolution pattern](https://martinfowler.com/articles/consumerDrivenContracts.html) — Ian Robinson, martinfowler.com
+
 ### OpenAPI / Swagger specification — machine-readable API contract, enables code generation
 OpenAPI (formerly Swagger) is the standard **machine-readable description of HTTP APIs**: paths, methods, parameters, request and response schemas, auth schemes, errors and examples, in YAML or JSON. It powers documentation, client and server code generation, validation, mocking, linting and gateway configuration.
+
+#### Intuition
+An architect's blueprint for an API. Builders, inspectors and suppliers all work from the same drawing, and tools can check a building against it automatically.
+
+#### Must know
+- The standard **machine-readable description of an HTTP API**: paths, parameters, schemas, auth and errors.
+- One file drives documentation, client and server code generation, mock servers, validation and linting.
+- **Design-first**: write and review the spec before coding. **Code-first**: generate it from annotations.
+- Run lint rules and a **breaking-change diff** in CI.
+- Keep it in sync with the code, or it becomes misleading.
+
+#### Common mistakes
+- A spec that drifted from the real behaviour long ago.
+- No automated check for breaking changes on a published version.
+- Using "Swagger" and "OpenAPI" as two different standards. Swagger is the older name and a set of tools.
 
 #### How it works
 ```mermaid
@@ -796,3 +1064,8 @@ Compare the new OpenAPI spec with the last released version in CI using a diff t
 
 #### Interview angle
 > "Public APIs are design-first OpenAPI specs: Spectral style rules and oasdiff breaking-change checks in CI, generated SDKs, and mock servers so frontend work starts before the backend."
+
+#### Sources
+- [OpenAPI Specification](https://spec.openapis.org/oas/latest.html) — OpenAPI Initiative
+- [What is OpenAPI?](https://learn.openapis.org/introduction.html) — OpenAPI Initiative
+

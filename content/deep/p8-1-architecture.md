@@ -3,6 +3,21 @@
 ### Monolith — single deployable unit; simple to start, becomes bottleneck as team grows
 A monolith is an application built and deployed as **one unit**: one codebase, one build artifact, one process (scaled by running copies), usually one database. It's the fastest way to build a product early on, and many successful companies run well-structured monoliths at large scale.
 
+#### Intuition
+A single shop where one team does everything under one roof. It is the quickest way to open for business. The strain comes later, when a hundred people are trying to work behind the same counter.
+
+#### Must know
+- One codebase, one build, one deployable unit, usually one database.
+- **Simple to build, test and debug**, with ordinary ACID transactions across features.
+- The pain comes from **team size and coupling**, not from being a monolith.
+- Symptoms: release queues, slow builds, a bug in one area taking down another.
+- Modularise first. Extract a service only where it clearly pays.
+
+#### Common mistakes
+- Calling the monolith an anti-pattern. For a small team it is usually the right start.
+- Starting a new product with dozens of microservices.
+- Blaming the architecture for problems caused by tangled code.
+
 #### How it works
 ```mermaid
 flowchart LR
@@ -50,8 +65,27 @@ Deploy contention (teams waiting on each other, long release trains), parts of t
 #### Interview angle
 > "I'd start with a modular monolith for speed and simple transactions, and extract services only where team autonomy, scaling or isolation clearly justifies the distributed-systems cost."
 
+#### Sources
+- [Monolith first](https://martinfowler.com/bliki/MonolithFirst.html) — Martin Fowler
+- [Monolithic architecture](https://microservices.io/patterns/monolithic.html) — microservices.io
+
 ### Modular monolith — well-structured monolith with clear module boundaries; intermediate step
 A modular monolith is a single deployable application **internally divided into well-defined modules** (bounded contexts), each with its own public API, private internals and ideally its own schema. You get most of the design benefits of microservices (boundaries, ownership) without the distributed-systems costs, and a clean path to extract services later.
+
+#### Intuition
+One building with properly walled departments, each with its own door and its own filing cabinets. Staff use the front door of another department and do not reach over the wall. It is still one building to maintain.
+
+#### Must know
+- A **single deployable** split internally into **modules with strict boundaries**.
+- Each module has a public API, private internals and ideally its own schema.
+- Modules talk through those APIs or through in-process events.
+- **Boundaries must be enforced by tests** (ArchUnit, Spring Modulith), or they erode.
+- It keeps simple transactions and operations, and makes later extraction mechanical.
+
+#### Common mistakes
+- Modules that query each other's tables directly.
+- Boundaries that exist only as folder names.
+- Skipping this step and going straight from a tangled monolith to microservices.
 
 #### How it works
 ```mermaid
@@ -101,8 +135,27 @@ Package structure with only API packages public, architecture tests (ArchUnit ru
 #### Interview angle
 > "My default is a modular monolith: bounded-context modules with private internals, a schema each, events between them and boundaries enforced in CI, so extracting a service later is mechanical."
 
+#### Sources
+- [Spring Modulith reference](https://docs.spring.io/spring-modulith/reference/) — Spring docs
+- [Deconstructing the monolith](https://shopify.engineering/deconstructing-monolith-designing-software-maximizes-developer-productivity) — Shopify engineering
+
 ### Microservices — small, independently deployable services; each owns its data and API
 Microservices structure a system as **independently deployable services**, each owning a business capability, its **own data store**, and an API (sync or async). Teams can build, deploy and scale their services autonomously. The cost is turning in-process calls into a distributed system.
+
+#### Intuition
+A food court. Each stall has its own kitchen, staff and menu, and can change its recipes or opening hours without asking the others. The court as a whole needs shared services: seating, cleaning, payment.
+
+#### Must know
+- **Independently deployable services**, each built around one business capability.
+- Each service **owns its data**. No other service touches its tables.
+- Services communicate through APIs or events.
+- They need a platform underneath: CI/CD, containers, tracing, resilience defaults.
+- The failure mode is the **distributed monolith**: separate deploys that still have to move together.
+
+#### Common mistakes
+- Splitting by technical layer (a "database service") and not by business capability.
+- Services that share a database.
+- Too many tiny services with long synchronous call chains.
 
 #### How it works
 ```mermaid
@@ -150,8 +203,27 @@ Use domain-driven design: identify bounded contexts (areas with their own langua
 #### Interview angle
 > "Microservices pay off when boundaries follow bounded contexts, each service owns its data and deploys independently, and there's a real platform underneath: CI/CD, tracing, a mesh and resilience defaults."
 
+#### Sources
+- [Microservices](https://martinfowler.com/articles/microservices.html) — James Lewis and Martin Fowler
+- [Microservice architecture](https://microservices.io/patterns/microservices.html) — microservices.io
+
 ### Microservices trade-offs — independent scaling, independent deploy, team autonomy vs network latency, distributed transactions, operational complexity
 Microservices are a **trade**: you buy organisational scalability (team autonomy, independent deploys) and technical flexibility (independent scaling, technology choice, fault isolation), and you pay with distributed-systems complexity (network failures and latency, eventual consistency, distributed transactions, operational overhead).
+
+#### Intuition
+Moving from one big house to several small flats. Everyone gets their own space and schedule. In exchange you now pay several rents, and a family dinner needs phone calls and travel.
+
+#### Must know
+- **You gain**: independent deploys, per-service scaling, fault isolation, team autonomy.
+- **You pay**: network latency and partial failure, no cross-service ACID, heavy operations, harder testing.
+- An in-process call takes nanoseconds. A network call takes milliseconds and can fail.
+- The decision is about **organisation** as much as technology (Conway's law).
+- It is worth it with many teams and stable domain boundaries.
+
+#### Common mistakes
+- Listing only the benefits.
+- Underestimating data consistency: sagas, outboxes and reconciliation become necessary.
+- Adopting microservices to fix problems that are really about code quality.
 
 #### How it works
 ```mermaid
@@ -213,8 +285,27 @@ Systems tend to mirror the communication structure of the organisation that buil
 #### Interview angle
 > "Microservices buy team autonomy and independent scaling at the price of network failures, sagas and a heavy platform. I recommend them when there are many teams and stable domain boundaries."
 
+#### Sources
+- [Microservice premium](https://martinfowler.com/bliki/MicroservicePremium.html) — Martin Fowler
+- [Conway's law](https://martinfowler.com/bliki/ConwaysLaw.html) — Martin Fowler
+
 ### Domain-Driven Design (DDD) — model software around business domain
 Domain-Driven Design (Eric Evans) is an approach to building complex software by **modelling the business domain explicitly** in code, in close collaboration with domain experts. **Strategic DDD** splits the domain into bounded contexts and maps their relationships. **Tactical DDD** gives building blocks (entities, value objects, aggregates, domain events, repositories) for rich models inside each context.
+
+#### Intuition
+Before designing a hospital's software, you sit with doctors and nurses, learn how they talk about their work, and shape the software around that, not around database tables.
+
+#### Must know
+- Model the **business domain** explicitly in code, working with domain experts.
+- **Strategic DDD**: split the domain into bounded contexts and map how they relate.
+- **Tactical DDD**: entities, value objects, aggregates, domain events, repositories.
+- Invest most in the **core domain**. Keep generic parts simple, or buy them.
+- Bounded contexts are the natural boundaries for services and teams.
+
+#### Common mistakes
+- Full DDD ceremony on a simple CRUD application.
+- An anemic model: entities with only getters and setters, and all rules in service classes.
+- One giant shared model for the whole company.
 
 #### How it works
 ```mermaid
@@ -269,8 +360,27 @@ Entities are just data holders (getters and setters), and all business rules liv
 #### Interview angle
 > "I use strategic DDD to find bounded contexts, which become service and team boundaries, and tactical DDD (aggregates, value objects, domain events) inside the core domain where the business rules are complex."
 
+#### Sources
+- [Domain-driven design](https://martinfowler.com/bliki/DomainDrivenDesign.html) — Martin Fowler
+- [Using domain analysis to model microservices](https://learn.microsoft.com/en-us/azure/architecture/microservices/model/domain-analysis) — Azure Architecture Center
+
 ### Bounded context — explicit boundary within which a domain model applies (defines service boundary)
 A bounded context is an explicit boundary inside which a particular **domain model and its language are consistent**. The same word can mean different things in different contexts ("Product" in catalogue vs inventory vs pricing), and that's fine as long as each context keeps its own model and translation happens at the boundaries.
+
+#### Intuition
+The word "account" in a bank. To the lending team it is a loan. To the app team it is a login. Each team is right inside its own department. Trouble starts only when one definition is forced on everyone.
+
+#### Must know
+- A boundary inside which **one model and one vocabulary are consistent**.
+- The same word can mean different things in different contexts, and that is fine.
+- Contexts **share identifiers and events, not models or tables**.
+- Translation happens at the boundary.
+- Usually one service and one team per context.
+
+#### Common mistakes
+- One 140-column shared `products` table used by five teams.
+- Drawing boundaries around entities and not around behaviour.
+- Services that constantly call each other, which shows the boundary is in the wrong place.
 
 #### How it works
 ```mermaid
@@ -323,8 +433,27 @@ Event storming with domain experts (map domain events, commands and actors on a 
 #### Interview angle
 > "I find bounded contexts through event storming and shifts in language. Each context gets its own model and data, and contexts share only identifiers and published events."
 
+#### Sources
+- [Bounded context](https://martinfowler.com/bliki/BoundedContext.html) — Martin Fowler
+- [Decompose by subdomain](https://microservices.io/patterns/decomposition/decompose-by-subdomain.html) — microservices.io
+
 ### Aggregate root — consistency boundary: all changes go through root entity
 An aggregate is a cluster of domain objects treated as **one unit for data changes**, with a single entry point, the **aggregate root**. All invariants inside the aggregate are enforced by the root within **one transaction**. Other aggregates are referenced **by id**, and consistency across aggregates is eventual.
+
+#### Intuition
+An order form with its line items. You never edit a line item on its own slip of paper. Every change goes through the order form, which checks that the whole form still makes sense.
+
+#### Must know
+- An aggregate is a cluster of objects changed **as one unit**. The **root** is the only way in.
+- The root enforces the rules for everything inside it, within **one transaction**.
+- Keep aggregates **small**.
+- Refer to other aggregates **by id**, not by object reference.
+- Rules across aggregates are handled with domain events and eventual consistency.
+
+#### Common mistakes
+- A huge aggregate, such as a Customer holding every order.
+- Code that modifies a child entity directly, bypassing the root.
+- One transaction updating several aggregates.
 
 #### How it works
 ```mermaid
@@ -393,8 +522,27 @@ An aggregate is the unit of transactional consistency, so it always lives inside
 #### Interview angle
 > "Aggregates are my transaction boundaries: small, changed only through the root, referencing others by id, with optimistic versioning. Rules across aggregates go through domain events."
 
+#### Sources
+- [DDD aggregate](https://martinfowler.com/bliki/DDD_Aggregate.html) — Martin Fowler
+- [Using tactical DDD to design microservices](https://learn.microsoft.com/en-us/azure/architecture/microservices/model/tactical-domain-driven-design) — Azure Architecture Center
+
 ### Domain events — things that happened in the domain; trigger side effects in other bounded contexts
 A domain event records **something meaningful that happened** in the business, in past tense and in domain language: `OrderPlaced`, `PaymentCaptured`, `LoanApproved`, `SeatReserved`. Raised by aggregates when state changes, domain events let other parts of the system (other aggregates, other bounded contexts) **react without tight coupling**.
+
+#### Intuition
+An announcement over the tannoy: "Flight 204 has landed." The announcer does not know or care who is listening. Baggage handlers, taxi drivers and waiting families each react in their own way.
+
+#### Must know
+- A record of **something meaningful that happened**, named in the past tense: `OrderPlaced`, `PaymentCaptured`.
+- Other parts of the system react **without the producer knowing about them**.
+- An event is a fact and cannot be rejected. A command is a request and can be.
+- Separate internal domain events from public, versioned **integration events**.
+- Publish through an outbox so the event and the state change cannot disagree.
+
+#### Common mistakes
+- A generic `OrderUpdated` event carrying the whole row, which hides what happened.
+- Events so thin that every consumer has to call back for details.
+- Exposing internal events as the public contract.
 
 #### How it works
 ```mermaid
@@ -451,8 +599,27 @@ It hides why something changed: consumers must diff payloads to infer business m
 #### Interview angle
 > "Aggregates raise past-tense business events like OrderPlaced or PaymentCaptured, which go out as versioned integration events via the outbox, so other contexts react without the producer knowing about them."
 
+#### Sources
+- [Domain event](https://martinfowler.com/eaaDev/DomainEvent.html) — Martin Fowler
+- [Domain event](https://microservices.io/patterns/data/domain-event.html) — microservices.io
+
 ### Ubiquitous language — shared vocabulary between engineers and domain experts within bounded context
 Ubiquitous language is the **shared, precise vocabulary** that engineers and domain experts use within a bounded context: in conversations, documents, tests and **the code itself**. When the business says "authorise a payment" and the code says `payment.authorize()`, misunderstandings drop and the model stays aligned with reality.
+
+#### Intuition
+A surgical team that uses exactly the same word for each instrument. Nobody says "the pointy thing". When the surgeon asks for a tool, there is one name and one meaning.
+
+#### Must know
+- One **precise shared vocabulary** used by engineers and domain experts.
+- The same words appear in conversations, documents, tests and **the code itself**.
+- It applies **within one bounded context**, not across the whole company.
+- When the language changes, rename the code.
+- A word that keeps causing confusion often marks two separate contexts.
+
+#### Common mistakes
+- Code full of technical names such as `status = 7` or `processData2`.
+- Engineers using one word for two business concepts, for example "refund" for both a void and a refund.
+- Trying to force a single company-wide definition.
 
 #### How it works
 ```mermaid
@@ -497,8 +664,27 @@ A term's meaning is consistent within one bounded context, not across the whole 
 #### Interview angle
 > "I agree the vocabulary with domain experts, like authorise, capture, void and refund, and use those exact words in APIs, events and code, so a support ticket, a log line and a class name all mean the same thing."
 
+#### Sources
+- [Ubiquitous language](https://martinfowler.com/bliki/UbiquitousLanguage.html) — Martin Fowler
+- [Domain-driven design](https://en.wikipedia.org/wiki/Domain-driven_design) — Wikipedia
+
 ### Strangler fig pattern — incrementally migrate monolith: route traffic to new service, deprecate old endpoint
 The strangler fig pattern migrates a legacy system **incrementally**: put a routing facade in front, build new functionality (or re-implement existing pieces) in new services, and **route specific paths or features to them one at a time**, until the old system is "strangled" and can be retired. No big-bang rewrite.
+
+#### Intuition
+Renovating a house one room at a time while the family still lives in it. Each finished room is put to use immediately, and the old rooms are closed one by one. Nobody moves out for a year waiting for a rebuilt house.
+
+#### Must know
+- Migrate a legacy system **piece by piece**, never in one big-bang rewrite.
+- Put a **routing facade** (a gateway) in front of the old system.
+- Build one capability in a new service, then route that path to it.
+- Verify with shadow traffic and a canary before the full switch, and keep the route back as rollback.
+- Delete the legacy code for each slice once it is fully migrated.
+
+#### Common mistakes
+- A full rewrite that delivers nothing for two years.
+- New services reading the legacy tables directly.
+- A migration that stalls at 70% because the hard parts were left to the end.
 
 #### How it works
 ```mermaid
@@ -550,8 +736,27 @@ A rewrite delivers no value until it's done (often years), the old system keeps 
 #### Interview angle
 > "I'd migrate with a strangler fig: a gateway facade, slice-by-slice extraction with CDC-fed data and an anti-corruption layer, shadow traffic and canaries, deleting legacy code as each slice reaches 100%."
 
+#### Sources
+- [Strangler fig](https://martinfowler.com/bliki/StranglerFigApplication.html) — Martin Fowler
+- [Strangler fig pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/strangler-fig) — Azure Architecture Center
+
 ### Anti-corruption layer — translation layer between old and new domain models
 An anti-corruption layer (ACL) is a **translation boundary** that protects a new or clean bounded context from the model of another system (legacy, third-party, or a different context). It converts external data and concepts into your own domain model, so the external system's quirks don't **leak into and corrupt** your design.
+
+#### Intuition
+An interpreter at a meeting. Your team speaks its own language and never has to learn the other side's odd phrases. If the other side changes language, only the interpreter needs retraining.
+
+#### Must know
+- A **translation boundary** between your clean model and an external or legacy one.
+- It converts their codes, units and data shapes into your domain's terms.
+- Their quirks do not leak into your code.
+- If the external system changes or is replaced, only this layer changes.
+- It only translates. Business logic stays in the domain.
+
+#### Common mistakes
+- Legacy field names and status codes spread through the new codebase.
+- Business rules creeping into the translation layer.
+- Untested mappings for units, time zones and enums.
 
 #### How it works
 ```mermaid
@@ -612,8 +817,27 @@ Often inside the consuming service as adapter and translator classes (simplest, 
 #### Interview angle
 > "New services talk to legacy or vendor systems only through an anti-corruption layer that maps their codes, units and DTOs into our domain model, so their quirks never leak in and replacing them later only touches the ACL."
 
+#### Sources
+- [Anti-corruption layer pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer) — Azure Architecture Center
+- [Anti-corruption layer](https://microservices.io/patterns/refactoring/anti-corruption-layer.html) — microservices.io
+
 ### Shared kernel — small, carefully managed shared domain model between two contexts
 A shared kernel is a **small subset of the domain model (code, schema or library) that two bounded contexts agree to share** and change only together. It reduces duplication for truly common concepts, at the cost of coupling the two teams around that shared piece.
+
+#### Intuition
+Two neighbours sharing one garden fence. It makes sense to share it, but neither can repaint or move it without asking the other. So you keep what is shared to the fence, and not the whole garden.
+
+#### Must know
+- A **small part of the model that two contexts agree to share** and change only together.
+- Good candidates: stable value objects such as Money, currency codes and country codes.
+- Bad candidates: entities whose behaviour differs per context, such as Customer or Order.
+- It couples the two teams' releases for that piece.
+- Keep it tiny. Prefer a published contract over shared code between independent teams.
+
+#### Common mistakes
+- A "common" library that grows until every service depends on it.
+- Business logic hidden in shared code.
+- Sharing an entity because two teams happen to use the same word for it.
 
 #### How it works
 ```mermaid
@@ -664,8 +888,27 @@ A shared kernel is code or model that two contexts share and co-own, which is a 
 #### Interview angle
 > "I only share a tiny kernel of stable value objects, like Money and currency codes, jointly owned and versioned. Everything else is integrated through published contracts, not shared code."
 
+#### Sources
+- [Domain-driven design: context mapping](https://en.wikipedia.org/wiki/Domain-driven_design) — Wikipedia
+- [Bounded context](https://martinfowler.com/bliki/BoundedContext.html) — Martin Fowler
+
 ### Database per service — each service owns its DB; prevents tight coupling through shared schema
 In a microservice architecture each service **owns its data**: its own database (or at least schema), accessible **only** through the service's API or events. No other service reads or writes its tables directly. That's what makes services independently deployable and lets each choose the right storage technology.
+
+#### Intuition
+Each department keeps its own filing cabinet and holds the only key. If another department needs something, it asks at the front desk or reads the bulletins the department publishes. It does not open the cabinet.
+
+#### Must know
+- Each service **owns its data**. It is reachable only through the service's API or events.
+- This is what makes services independently deployable.
+- Queries across services use an event-fed local copy or API composition.
+- Transactions across services use sagas. Reporting goes to a warehouse fed by CDC.
+- A schema per service on a shared server is acceptable if permissions enforce it.
+
+#### Common mistakes
+- One service joining another service's tables.
+- Assuming every service needs its own database server.
+- No plan for the queries and reports that used to be simple joins.
 
 #### How it works
 ```mermaid
@@ -721,8 +964,27 @@ Often yes, as a pragmatic step: each service has its own schema and credentials 
 #### Interview angle
 > "Each service owns its data with no cross-service table access. Other services keep event-fed copies of what they need, workflows run as sagas, and reporting goes through CDC into a warehouse."
 
+#### Sources
+- [Database per service](https://microservices.io/patterns/data/database-per-service.html) — microservices.io
+- [Data considerations for microservices](https://learn.microsoft.com/en-us/azure/architecture/microservices/design/data-considerations) — Azure Architecture Center
+
 ### Shared database antipattern — multiple services sharing one DB creates deployment and schema coupling
 When several services read and write the **same database tables**, they're coupled through the schema: any change requires coordinating all of them, a heavy query from one hurts all, and business rules get duplicated (and diverge) in multiple services. It turns "microservices" into a distributed monolith.
+
+#### Intuition
+Several households sharing one fridge with no labels. Nobody can reorganise it, things vanish, and one person's bad habits spoil everyone's food.
+
+#### Must know
+- Several services reading and writing **the same tables** are coupled through the schema.
+- No team can change "its" tables without coordinating with all the others.
+- Business rules get duplicated and drift apart when there are **several writers**.
+- One service's heavy query slows everyone down.
+- Fix: **one owning writer per table**, and others go through its API, events or read models.
+
+#### Common mistakes
+- Calling it microservices when all the services share one schema.
+- A second service writing directly into another's table "just this once".
+- Running reports on the shared production database.
 
 #### How it works
 ```mermaid
@@ -775,3 +1037,8 @@ Within a single service or a modular monolith, yes, since that's normal. Across 
 
 #### Interview angle
 > "Two services writing the same tables is a distributed monolith. I untangle it by giving each table one owning writer, replacing other access with events and read models, revoking grants, and moving analytics to a warehouse."
+
+#### Sources
+- [Shared database](https://microservices.io/patterns/data/shared-database.html) — microservices.io
+- [Database per service](https://microservices.io/patterns/data/database-per-service.html) — microservices.io
+

@@ -3,6 +3,21 @@
 ### Synchronous (REST, gRPC) — immediate response; temporal coupling: caller blocks, dependency failures cascade
 Synchronous communication means the caller **sends a request and waits** for the response (REST, gRPC, GraphQL). It's simple and natural for queries and for operations whose result the caller needs right now, but it creates **temporal coupling**: the callee must be up and fast at that moment, and failures or slowness propagate back up the chain.
 
+#### Intuition
+A phone call. You ask, you wait on the line, you get the answer. It is simple, but you are stuck while the other person is slow, and if they do not pick up you get nothing.
+
+#### Must know
+- The caller **sends a request and waits** for the response.
+- Right for queries and for anything whose result the user needs immediately.
+- It creates **temporal coupling**: the callee must be up and fast at that moment.
+- Latency adds up along a chain and availability multiplies down.
+- Every call needs a timeout, safe retries, a circuit breaker and a fallback. Run independent calls in parallel.
+
+#### Common mistakes
+- A long sequential chain of calls for one page.
+- No timeout, so one hung dependency blocks every thread.
+- Calling a non-essential service synchronously inside a critical path.
+
 #### How it works
 ```mermaid
 sequenceDiagram
@@ -55,8 +70,27 @@ A timeout is per call. A deadline is an absolute time budget for the whole reque
 #### Interview angle
 > "Synchronous calls are only for what the user is waiting on. Every call carries a timeout within a propagated deadline, independent calls run in parallel, and circuit breakers and fallbacks stop cascades."
 
+#### Sources
+- [Interservice communication in microservices](https://learn.microsoft.com/en-us/azure/architecture/microservices/design/interservice-communication) — Azure Architecture Center
+- [Remote procedure invocation](https://microservices.io/patterns/communication-style/rpi.html) — microservices.io
+
 ### Asynchronous (events, queues) — decoupled in time; harder to trace, but more resilient
 Asynchronous communication sends a message (event or command) via a broker and **doesn't wait** for processing. Producer and consumer are decoupled in time, availability and scaling, so the consumer can be down, slow or replaced without affecting the producer. The costs are eventual consistency and harder end-to-end visibility.
+
+#### Intuition
+Leaving a note on a colleague's desk. You carry on with your work, and they deal with it when they are back. If they are out for an hour, nothing breaks. You just do not get the answer on the spot.
+
+#### Must know
+- Send a message through a broker and **do not wait** for it to be processed.
+- Producer and consumer are **decoupled in time**: the consumer can be slow or down.
+- For long operations, return `202 Accepted` with a status resource, then poll or use a webhook.
+- It needs an outbox, idempotent consumers, a DLQ and trace ids in message headers.
+- The costs are eventual consistency and harder debugging.
+
+#### Common mistakes
+- Going async and forgetting to show the user a "pending" state.
+- No trace context in messages, so a flow cannot be followed end to end.
+- Assuming a message is processed once and in order.
 
 #### How it works
 ```mermaid
@@ -104,8 +138,27 @@ Immediate consistency and simple error handling: the caller no longer knows the 
 #### Interview angle
 > "Side effects and long-running work go async: 202 plus a status resource for users, outbox and inbox for reliability, DLQs, and trace context in message headers so flows stay debuggable."
 
+#### Sources
+- [Asynchronous request-reply pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/asynchronous-request-reply) — Azure Architecture Center
+- [Messaging](https://microservices.io/patterns/communication-style/messaging.html) — microservices.io
+
 ### Service discovery — how services find each other's network location dynamically
 In dynamic environments (containers, autoscaling, failover), service instances come and go with changing IPs. **Service discovery** lets callers find **healthy instances of a service by name** at runtime, instead of hard-coded addresses. It combines a **registry** of instances (with health), a **registration** mechanism and a **lookup** mechanism.
+
+#### Intuition
+A phone's contact list that updates itself. You ask for "Payments" by name and get whichever number is working now, even though numbers change all day as people come and go.
+
+#### Must know
+- Instances come and go with changing IPs, so callers find a service **by name at runtime**.
+- Three parts: a **registry** of healthy instances, **registration** and **lookup**.
+- In Kubernetes it is built in: a Service name resolves through DNS to ready pods.
+- Client-side discovery: the caller picks an instance. Server-side: a load balancer does.
+- Only **healthy, ready** instances should be discoverable.
+
+#### Common mistakes
+- Hard-coded IP addresses.
+- A JVM caching DNS forever, so it keeps calling instances that are gone.
+- An instance registered before it is ready for traffic.
 
 #### How it works
 ```mermaid
@@ -151,8 +204,27 @@ If the JVM caches DNS results for a long time (or forever with a security manage
 #### Interview angle
 > "Inside Kubernetes I rely on Services, EndpointSlices and CoreDNS, with readiness controlling who's discoverable. Outside it I'd use Cloud Map or Consul with health checks, plus clients that cache the last known instances."
 
+#### Sources
+- [Service discovery in a microservices architecture](https://www.f5.com/company/blog/nginx/service-discovery-in-a-microservices-architecture) — NGINX / F5
+- [DNS for services and pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) — Kubernetes docs
+
 ### Client-side discovery — service queries registry (Eureka), load balances itself
 With client-side discovery, the **calling service queries the registry** for available instances of the target service and **chooses one itself** using a client-side load-balancing algorithm. Netflix Eureka + Ribbon (now Spring Cloud LoadBalancer), gRPC's built-in resolvers and balancers, and Consul-aware clients follow this pattern.
+
+#### Intuition
+You look up a restaurant chain's branches yourself, pick the nearest one, and drive there. Nobody stands in the middle routing you.
+
+#### Must know
+- The **caller queries the registry** and **chooses an instance itself**.
+- No extra network hop, and it balances per request.
+- The discovery and balancing logic lives in **every client**, in every language.
+- Examples: Eureka with Spring Cloud LoadBalancer, gRPC's built-in balancing.
+- It is the usual fix for uneven gRPC load: a headless Service plus client-side balancing.
+
+#### Common mistakes
+- Several languages each with a different, inconsistent client library.
+- A stale cached instance list with no health ejection.
+- gRPC through a plain ClusterIP Service, expecting even load.
 
 #### How it works
 ```mermaid
@@ -207,8 +279,27 @@ Every language and framework needs a compatible, well-maintained discovery and l
 #### Interview angle
 > "For gRPC I'd use client-side balancing over a headless Service, or let the mesh sidecar do it, so each request, not each connection, is spread across pods."
 
+#### Sources
+- [Client-side service discovery](https://microservices.io/patterns/client-side-discovery.html) — microservices.io
+- [gRPC load balancing](https://grpc.io/blog/grpc-load-balancing/) — gRPC blog
+
 ### Server-side discovery — load balancer queries registry (AWS ALB + ECS, Kubernetes Service)
 With server-side discovery, clients call a **stable endpoint** (a load balancer, virtual IP or DNS name), and the **load balancer or router** knows the current healthy instances and forwards requests. Clients stay simple and language-agnostic, and the platform handles registration and health.
+
+#### Intuition
+You ring the chain's central number and an operator connects you to an open branch. You never need to know which branches exist.
+
+#### Must know
+- The client calls **one stable address**. A load balancer or router finds the healthy instances.
+- Clients stay simple and work in any language.
+- The platform handles registration, health checks and draining.
+- Examples: a Kubernetes Service, an AWS ALB with ECS target groups.
+- Costs: one extra hop, and the balancer becomes critical infrastructure.
+
+#### Common mistakes
+- Removing instances with no connection draining, which causes errors on every deploy.
+- An L4 balancer for gRPC, which balances connections and not requests.
+- A separate load balancer for every small service.
 
 #### How it works
 ```mermaid
@@ -220,7 +311,7 @@ flowchart LR
   LB --> P3["payments task C (new, registered after health check)"]
 ```
 
-Examples: an AWS ALB/NLB with ECS (tasks auto-registered in target groups), Kubernetes ClusterIP Services (kube-proxy), internal NGINX/Envoy gateways, AWS App Mesh / VPC Lattice.
+Examples: an AWS ALB/NLB with ECS (tasks auto-registered in target groups), Kubernetes ClusterIP Services (kube-proxy), internal NGINX/Envoy gateways, AWS VPC Lattice and ECS Service Connect (AWS App Mesh reached end of support in September 2026).
 
 #### Example
 A company runs services on ECS behind an internal ALB with path-based routing (`/payments/*` → the payments target group). ECS registers and deregisters tasks (with health checks and draining) automatically during deploys and scaling, and clients only know `https://internal-api.company.local/payments`. Any language works with no discovery library.
@@ -254,8 +345,27 @@ An ECS service is linked to an ALB target group. When tasks start and pass healt
 #### Interview angle
 > "In a polyglot platform I prefer server-side discovery (Kubernetes Services, ALB target groups, a mesh): clients just call a name, and the platform handles registration, health, draining and L7 balancing."
 
+#### Sources
+- [Server-side service discovery](https://microservices.io/patterns/server-side-discovery.html) — microservices.io
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) — Kubernetes docs
+
 ### Service registry — Consul (with health checks), Eureka, Kubernetes DNS (CoreDNS)
 A service registry is the **database of service instances**: names, addresses, ports, metadata and **health**. Instances are registered and deregistered as they start, stop or fail, and clients or load balancers query it for discovery. Choices range from Kubernetes' built-in mechanisms to Consul, Eureka, etcd or cloud registries.
+
+#### Intuition
+The staff directory at reception: who works here, at which desk, and whether they are in today. It is only useful if someone keeps it up to date.
+
+#### Must know
+- The **database of service instances**: name, address, port and **health**.
+- Instances register on start and are removed when they stop or fail health checks.
+- Kubernetes has one built in. Consul and Eureka serve VM or hybrid estates.
+- For discovery, a slightly stale list is usually better than no list, so availability often matters more than strict consistency.
+- Run it highly available, and let clients cache the last known instances.
+
+#### Common mistakes
+- A single registry node that takes everything down with it.
+- No health checks, so dead instances stay listed.
+- Adding Consul or Eureka when everything already runs on Kubernetes.
 
 #### How it works
 ```mermaid
@@ -308,8 +418,27 @@ Usually not: Kubernetes already provides a registry (EndpointSlices driven by re
 #### Interview angle
 > "Inside Kubernetes the platform is the registry. For hybrid VM-plus-Kubernetes estates I'd add Consul with agent health checks, and clients always cache instances so a registry blip doesn't break calls."
 
+#### Sources
+- [Service registry](https://microservices.io/patterns/service-registry.html) — microservices.io
+- [Consul service discovery](https://developer.hashicorp.com/consul/docs/use-case/service-discovery) — HashiCorp Consul docs
+
 ### Circuit breaker pattern — closed (normal) → open (fail fast after threshold) → half-open (test recovery)
 A circuit breaker wraps calls to a dependency and **stops calling it when it's failing**, failing fast (or using a fallback) instead of piling up timeouts. After a cool-down it lets a few trial requests through to test recovery. It prevents cascading failures and gives the struggling dependency room to recover.
+
+#### Intuition
+The fuse box at home. When a faulty appliance draws too much current, the fuse trips and cuts it off so the house does not burn. Later you flip it back on carefully to see whether the fault has gone.
+
+#### Must know
+- It wraps calls to a dependency and **stops calling when the dependency is failing**.
+- **Closed**: calls pass. **Open**: calls fail fast. **Half-open**: a few trial calls test recovery.
+- It prevents cascading failure and gives the dependency time to recover.
+- Count timeouts, 5xx responses and slow calls as failures. **Not 4xx** business errors.
+- It needs a **fallback** to be useful to users.
+
+#### Common mistakes
+- Counting 404 or 400 as failures, so bad input opens the breaker.
+- A window so small that the breaker flaps open and closed.
+- A breaker with no fallback, so users still see errors.
 
 #### How it works
 ```mermaid
@@ -359,8 +488,28 @@ Signals that the dependency is unhealthy: timeouts, connection errors, 5xx respo
 #### Interview angle
 > "Every remote dependency sits behind a Resilience4j circuit breaker that counts timeouts, 5xx and slow calls, with a fallback when it's open, so a failing service is cut off quickly instead of draining our threads."
 
+#### Sources
+- [Circuit breaker](https://martinfowler.com/bliki/CircuitBreaker.html) — Martin Fowler
+- [Circuit breaker pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) — Azure Architecture Center
+- [CircuitBreaker](https://resilience4j.readme.io/docs/circuitbreaker) — Resilience4j docs
+
 ### Hystrix (deprecated) / Resilience4j (Java) / Polly (.NET) — circuit breaker implementations
 Resilience libraries implement circuit breakers and related patterns (retry, timeout, bulkhead, rate limiter, fallback) so you don't hand-roll them. **Netflix Hystrix** pioneered this but is in maintenance mode (deprecated in 2018). **Resilience4j** is the modern lightweight Java choice. **Polly** is the standard for .NET. Service meshes provide similar features at the network layer.
+
+#### Intuition
+You do not build your own fuse box. You buy a tested one and wire it in. These libraries are the ready-made fuse boxes for remote calls.
+
+#### Must know
+- Libraries that implement circuit breaker, retry, timeout, bulkhead and rate limiter.
+- **Hystrix is in maintenance mode.** Do not choose it for new work.
+- **Resilience4j** is the Java standard. **Polly** is the .NET standard.
+- Compose them per dependency, with a business-aware fallback.
+- A service mesh offers the same at network level. Do not retry in both places.
+
+#### Common mistakes
+- Naming Hystrix as your current choice.
+- Retries in the library and in the mesh at once.
+- A Spring annotation that silently does nothing because the method was called from inside the same class.
 
 #### How it works
 ```mermaid
@@ -432,8 +581,30 @@ Commonly Retry(CircuitBreaker(call)): each attempt passes through the breaker, s
 #### Interview angle
 > "In Java I compose Resilience4j decorators per dependency (timeout, circuit breaker, bulkhead, retry with jittered backoff) with business-aware fallbacks and breaker metrics in Grafana. Hystrix is legacy."
 
+#### Sources
+- [Resilience4j: getting started](https://resilience4j.readme.io/docs/getting-started) — Resilience4j docs
+- [Hystrix](https://github.com/Netflix/Hystrix) — Netflix, GitHub
+
 ### Retry with exponential backoff + jitter — avoid thundering herd on retry storms
 Transient failures (a dropped connection, a brief 503, a leader election) often succeed on retry, but naive retries **multiply load exactly when a service is struggling**. Retrying with **exponentially increasing, randomised (jittered) delays**, only for **idempotent** operations and **transient** errors, with a **cap**, recovers from blips without causing retry storms. (Phase 6 covers the formulas in depth.)
+
+#### Intuition
+Knocking on a door. If nobody answers you wait a little, then longer, then longer still, and you do not knock in rhythm with the twenty other people waiting outside.
+
+#### Must know
+- Short-lived failures often succeed on a retry, but naive retries **multiply load on a struggling service**.
+- Wait longer after each attempt (**exponential backoff**) and randomise the wait (**jitter**).
+- Retry only **idempotent** calls and only **transient** errors: timeouts, 502, 503, 504, and 429 with `Retry-After`.
+- Cap the attempts and stay inside the caller's deadline.
+- Retry at **one layer** only, with a retry budget.
+
+#### Numbers to quote
+- Typical cap: 2–3 attempts. A common retry budget is about 10% extra requests.
+
+#### Common mistakes
+- Immediate retries with no delay.
+- Retrying a POST that has no idempotency key.
+- Retrying 400 or 404, which will never succeed.
 
 #### How it works
 ```mermaid
@@ -486,8 +657,27 @@ A cap on retries as a proportion of normal traffic (e.g. retries may add at most
 #### Interview angle
 > "Retries are a single layer: jittered exponential backoff, only for transient errors on idempotent calls, capped by the deadline and a retry budget, so they smooth over blips without amplifying outages."
 
+#### Sources
+- [Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/) — Amazon Builders' Library
+- [Retry pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/retry) — Azure Architecture Center
+
 ### Timeout — always set explicit timeouts; cascading timeouts cause full-stack slowdowns
 Every remote call needs an **explicit timeout**. Defaults are often infinite or very long (some HTTP clients default to no read timeout), and a single hung dependency then holds threads and connections forever, exhausting pools and cascading up the stack. Timeouts should fit the caller's **latency budget** and get shorter as you go deeper into the call chain.
+
+#### Intuition
+You do not hold the phone forever when put on hold. You decide in advance to wait two minutes and then hang up and do something else. Without that rule, one unanswered call swallows your afternoon.
+
+#### Must know
+- **Every remote call needs an explicit timeout.** Defaults are often infinite or far too long.
+- Without one, a hung dependency holds threads and connections until the pool is empty.
+- Set separate **connect** and **read / total** timeouts, plus a database statement timeout.
+- **Inner timeouts must be shorter than outer ones.**
+- Propagate a **deadline**, so downstream work stops once the caller has given up.
+
+#### Common mistakes
+- Relying on a client library's default timeout.
+- A downstream timeout longer than the upstream caller's.
+- A timeout set below normal p99 latency, which fails healthy requests.
 
 #### How it works
 ```mermaid
@@ -540,8 +730,27 @@ Calls to a hung dependency never return, so each holds a thread or connection in
 #### Interview angle
 > "Every remote call and DB statement has an explicit timeout derived from the request's latency budget. Inner timeouts are shorter than outer ones, and deadlines propagate so abandoned work is cancelled."
 
+#### Sources
+- [Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/) — Amazon Builders' Library
+- [Deadlines](https://grpc.io/docs/guides/deadlines/) — gRPC docs
+
 ### Bulkhead pattern — separate thread pools/connection pools per dependency; one slow dep can't exhaust all threads
 The bulkhead pattern (named after ship compartments) **isolates resources per dependency or workload**: separate thread pools, connection pools, semaphores or even service instances. If one dependency slows or fails, it can exhaust only its own compartment, and other features keep working.
+
+#### Intuition
+A ship's hull divided into watertight compartments. A hole floods one compartment and the ship stays afloat. Without the walls, one hole sinks everything.
+
+#### Must know
+- **Isolate resources per dependency or workload**, so one failure cannot use them all.
+- Forms: a concurrency limit (semaphore), a dedicated thread pool, a separate connection pool.
+- At infrastructure level: separate deployments for critical and non-critical traffic.
+- Extra calls are **rejected fast** when a compartment is full, and take a fallback.
+- Size each compartment as request rate × latency, plus headroom.
+
+#### Common mistakes
+- One shared thread pool for every outbound call.
+- Checkout sharing pods and pools with browse and search.
+- Compartments so small that they reject normal traffic.
 
 #### How it works
 ```mermaid
@@ -594,8 +803,27 @@ Separate deployments (and autoscaling) for critical flows (checkout, payments) v
 #### Interview angle
 > "Each downstream gets its own bulkhead sized by Little's law, and checkout runs on separate pods and pools from browsing, so a slow search backend can't take payments down."
 
+#### Sources
+- [Bulkhead pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead) — Azure Architecture Center
+- [Bulkhead](https://resilience4j.readme.io/docs/bulkhead) — Resilience4j docs
+
 ### Fallback — return cached/default response when dependency fails (graceful degradation)
 A fallback is the **alternative response** returned when a dependency fails, times out or its circuit is open: cached data, a default, a reduced feature, or a deferred action. It turns hard failures into **graceful degradation**, so users still get a useful (if reduced) experience.
+
+#### Intuition
+The lift is broken, so you take the stairs. It is slower and less pleasant, but you still reach your floor. The alternative is standing in the lobby all day.
+
+#### Must know
+- The **alternative response** used when a dependency fails, times out or its breaker is open.
+- Options: stale cache, a default, hiding the feature, a secondary provider, deferring the action.
+- It turns a hard failure into **graceful degradation**.
+- **Fail closed** for security and money: authentication, fraud and balance checks must refuse.
+- Test fallbacks with fault injection. They are rarely exercised and often broken.
+
+#### Common mistakes
+- A fail-open fallback on a fraud or authorisation check.
+- A fallback path that has never run in production.
+- Showing stale data on a screen where the user makes a decision, with no warning.
 
 #### How it works
 ```mermaid
@@ -649,8 +877,27 @@ When a wrong "allow" is costly or unsafe: authentication and authorisation check
 #### Interview angle
 > "Every non-critical dependency has a tested fallback (stale cache, popular items, a hidden widget, a secondary provider), while auth, fraud and balance checks fail closed."
 
+#### Sources
+- [Circuit breaker pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) — Azure Architecture Center
+- [Avoiding fallback in distributed systems](https://aws.amazon.com/builders-library/avoiding-fallback-in-distributed-systems/) — Amazon Builders' Library
+
 ### Idempotent APIs — safe to retry; critical for distributed systems where retries are unavoidable
 An idempotent API produces the **same result and side effects whether called once or many times** with the same input. Because timeouts, retries, redeliveries and duplicate clicks are unavoidable in distributed systems, idempotency is what makes them safe. (Phase 1 covers HTTP semantics and idempotency keys in depth.)
+
+#### Intuition
+A lift call button. Pressing it five times calls the lift once. Compare a vending machine button that dispenses a can on every press.
+
+#### Must know
+- Calling it **once or many times with the same input gives the same result and side effects**.
+- Timeouts and retries are unavoidable, so idempotency is what makes them safe.
+- Naturally idempotent: PUT, DELETE, setting a value, a state change that ignores repeats.
+- For creates and actions, use an **idempotency key** or a client-generated id.
+- Enforce with a unique constraint, and pass the key on to downstream calls.
+
+#### Common mistakes
+- A "balance += 100" endpoint with no operation id.
+- An idempotent API in front of a message consumer that is not.
+- Deduplicating with a read followed by an insert, which is a race.
 
 #### How it works
 ```mermaid
@@ -700,8 +947,27 @@ Messages are delivered at least once: consumers may receive the same event again
 #### Interview angle
 > "Every write API is idempotent: absolute updates, client-generated ids or Idempotency-Keys backed by unique constraints, with keys passed downstream, so any layer can retry safely."
 
+#### Sources
+- [Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/) — Amazon Builders' Library
+- [Idempotent requests](https://docs.stripe.com/api/idempotent_requests) — Stripe API docs
+
 ### Sidecar pattern — inject cross-cutting concerns (proxy, logging, mTLS) as sidecar container
 A sidecar is a **helper container deployed alongside the application container in the same pod**, sharing its network namespace and volumes. It handles cross-cutting concerns (proxying, mTLS, metrics, log shipping, config reloading, secrets) without changing application code, in any language.
+
+#### Intuition
+A motorbike sidecar. It is bolted to the bike and goes everywhere with it, carrying extra gear. The bike itself does not need rebuilding.
+
+#### Must know
+- A **helper container in the same pod** as the application, sharing its network and volumes.
+- It handles cross-cutting concerns: proxying, mTLS, metrics, secret renewal.
+- **No application code changes**, and it works for any language.
+- It can be upgraded separately from the app.
+- Costs: CPU and memory for every pod, an extra hop, and start-up ordering to get right.
+
+#### Common mistakes
+- The app making calls before the proxy sidecar is ready.
+- A Job that never finishes because the sidecar keeps running.
+- Ignoring the cost of a sidecar multiplied by thousands of pods.
 
 #### How it works
 ```mermaid
@@ -751,8 +1017,27 @@ A Job's pod completes only when all containers exit. A long-running sidecar (pro
 #### Interview angle
 > "Cross-cutting concerns like mTLS proxies and secret renewal run as sidecars so every language gets them without code changes. I watch the per-pod overhead and use native sidecars for correct startup and shutdown order."
 
+#### Sources
+- [Sidecar pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/sidecar) — Azure Architecture Center
+- [Sidecar containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/) — Kubernetes docs
+
 ### Ambassador pattern — outbound proxy that adds retry/timeout/circuit-breaker to legacy services
 The ambassador pattern is a specialised sidecar: a **local outbound proxy** that the application calls instead of the remote service. The ambassador handles connection management, retries, timeouts, circuit breaking, TLS, routing and monitoring, which is especially useful for legacy apps you can't modify or for complex external protocols.
+
+#### Intuition
+A personal assistant who makes all your outgoing calls. They know the right numbers, redial when a line is busy and handle the formalities. You just say who you want to reach.
+
+#### Must know
+- A **local outbound proxy** that the app calls in place of the remote service.
+- It adds TLS, retries, timeouts, circuit breaking and metrics to outgoing calls.
+- Ideal for a **legacy app you cannot modify**.
+- It is a sidecar specialised for the client side.
+- An API gateway is different: it sits in front of your services for **inbound** traffic.
+
+#### Common mistakes
+- Letting the ambassador retry calls that are not idempotent.
+- Hiding failures so well that nobody notices the dependency is unhealthy.
+- Confusing it with an API gateway.
 
 #### How it works
 ```mermaid
@@ -799,8 +1084,27 @@ An ambassador is a per-client (per-app instance) outbound proxy handling how tha
 #### Interview angle
 > "For legacy apps we can't touch, I put an Envoy ambassador in front of their outbound calls to add TLS 1.3, mTLS, timeouts, breakers and metrics with zero code changes."
 
+#### Sources
+- [Ambassador pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/ambassador) — Azure Architecture Center
+- [What is Envoy](https://www.envoyproxy.io/docs/envoy/latest/intro/what_is_envoy) — Envoy docs
+
 ### Health endpoints — /health (is process running?), /ready (can accept traffic?), /live (Kubernetes liveness)
 Health endpoints let orchestrators and load balancers decide whether to **restart** an instance (liveness), **send it traffic** (readiness), or **wait** during startup. Designing them carefully avoids both zombie instances and cascading restarts. (Phase 5 covers the probe mechanics.)
+
+#### Intuition
+Two different questions about a shop assistant. "Are they conscious?" If not, call for help. "Are they free to serve?" If not, send customers to someone else. Mixing the two questions causes trouble.
+
+#### Must know
+- **Liveness**: is the process stuck? Failing it **restarts** the container.
+- **Readiness**: can it take traffic now? Failing it **removes it from rotation** with no restart.
+- **Startup**: has it finished booting? It protects slow starters from being killed.
+- **Liveness must not check shared dependencies.** A database blip would restart every pod.
+- Deep dependency checks belong on dashboards and in regional failover decisions.
+
+#### Common mistakes
+- A liveness endpoint that queries the database.
+- Readiness reporting OK before caches and pools are warm.
+- No startup probe on a slow JVM service, so it is killed in a loop.
 
 #### How it works
 ```mermaid
@@ -851,3 +1155,9 @@ For apps with long or variable startup times (large JVM apps, cache warm-up). Li
 
 #### Interview angle
 > "Liveness only checks the process, readiness gates traffic once the app is warm, and a startup probe protects slow boots. Dependency health goes through breakers and deep checks, never liveness, so a DB failover can't trigger mass restarts."
+
+#### Sources
+- [Liveness, readiness, and startup probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) — Kubernetes docs
+- [Health endpoint monitoring pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/health-endpoint-monitoring) — Azure Architecture Center
+- [Implementing health checks](https://aws.amazon.com/builders-library/implementing-health-checks/) — Amazon Builders' Library
+
